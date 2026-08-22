@@ -44,6 +44,12 @@ export type FieldDef = {
   hint?: string
   /** Read-only, derived from the price bands or truck records — never typed. */
   computed?: boolean
+  /**
+   * Carries the product's unit (Litres, kg — whatever the batch's product
+   * says). Only true for volumes: truck, order and customer counts are
+   * numbers too, and suffixing those with "Litres" would be nonsense.
+   */
+  unit?: boolean
 }
 
 export type ReportDef = {
@@ -60,7 +66,7 @@ export type ReportDef = {
   color: string
   /** Grouped so a long form reads as sections rather than one wall. */
   sections: Array<{ label: string; fields: FieldDef[] }>
-  columns: Array<{ key: string; label: string; align?: 'right'; money?: boolean }>
+  columns: Array<{ key: string; label: string; align?: 'right'; money?: boolean; unit?: boolean }>
   pdfTitle: string
   filePrefix: string
   /** Compliance's paper form has no location/PFI line — everyone else's does. */
@@ -115,7 +121,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Sales',
         fields: [
           { key: 'fundsReceived', label: 'Funds received', type: 'money' },
-          { key: 'litresSold', label: 'Total litres sold', type: 'number' },
+          { key: 'litresSold', label: 'Total litres sold', type: 'number', unit: true },
           { key: 'truckCount', label: 'Trucks sold', type: 'number' },
           // Real columns. These used to be regexed out of the remarks text,
           // so editing your own note silently destroyed them.
@@ -138,7 +144,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
     ],
     columns: [
       { key: 'fundsReceived', label: 'Funds received', align: 'right', money: true },
-      { key: 'litresSold', label: 'Total ltrs sold', align: 'right' },
+      { key: 'litresSold', label: 'Total ltrs sold', align: 'right', unit: true },
       { key: 'commissionDue', label: 'Commission due', align: 'right', money: true },
       { key: 'amountPaid', label: 'Commission paid', align: 'right', money: true },
       { key: 'commissionOutstanding', label: 'Commission not paid', align: 'right', money: true },
@@ -160,8 +166,21 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Today',
         fields: [
           { key: 'orderCount', label: 'Number of orders', type: 'number', hint: 'Suggested from today’s orders.' },
-          { key: 'litresSold', label: 'Total litres ordered', type: 'number', hint: 'Suggested from today’s orders.' },
-          { key: 'avgPrice', label: 'Price for the day (₦)', type: 'money', hint: 'Weighted average of today’s order prices.' },
+        ],
+      },
+      {
+        // A day sells at several prices here just as it does on the sales
+        // manager's sheet — one weighted average could not show which
+        // volume went out at which price, so it is the same band table.
+        label: "Today's price(s)",
+        fields: [{ key: 'priceBands', label: "Today's price(s)", type: 'priceBands', full: true }],
+      },
+      {
+        label: 'Volume & value',
+        fields: [
+          { key: 'litresSold', label: 'Total litres ordered', type: 'number', computed: true, unit: true },
+          { key: 'totalSalesAmount', label: 'Total value today', type: 'money', computed: true },
+          { key: 'avgPrice', label: 'Average price for the day', type: 'money', computed: true },
         ],
       },
       {
@@ -172,7 +191,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
     ],
     columns: [
       { key: 'orderCount', label: 'Orders', align: 'right' },
-      { key: 'litresSold', label: 'Litres', align: 'right' },
+      { key: 'litresSold', label: 'Litres', align: 'right', unit: true },
     ],
     pdfTitle: 'IT compliance report',
     filePrefix: 'ComplianceReport',
@@ -189,7 +208,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Opening',
         fields: [
           {
-            key: 'openingStock', label: 'Product opening balance', type: 'number',
+            key: 'openingStock', label: 'Product opening balance', type: 'number', unit: true,
             hint: 'Suggested from this PFI’s remaining balance.',
           },
         ],
@@ -201,7 +220,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
       {
         label: 'Sales figures',
         fields: [
-          { key: 'litresSold', label: 'Litres sold today', type: 'number', computed: true },
+          { key: 'litresSold', label: 'Litres sold today', type: 'number', computed: true, unit: true },
           { key: 'totalSalesAmount', label: 'Total sales amount today', type: 'money', computed: true },
           { key: 'truckCount', label: 'No. of trucks sold', type: 'number' },
         ],
@@ -231,7 +250,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
       },
     ],
     columns: [
-      { key: 'litresSold', label: 'Qty sold', align: 'right' },
+      { key: 'litresSold', label: 'Qty sold', align: 'right', unit: true },
       { key: 'totalSalesAmount', label: 'Total', align: 'right', money: true },
     ],
     pdfTitle: 'Daily sales report',
@@ -249,7 +268,7 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Opening',
         fields: [
           {
-            key: 'openingStock', label: 'Product brought forward (opening) litres', type: 'number',
+            key: 'openingStock', label: 'Product brought forward (opening) litres', type: 'number', unit: true,
             hint: 'Suggested from this PFI’s remaining balance.',
           },
         ],
@@ -258,9 +277,9 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Today',
         fields: [
           { key: 'truckCount', label: 'No. of trucks loaded today', type: 'number' },
-          { key: 'receivedStock', label: 'Total ordered product today', type: 'number' },
+          { key: 'receivedStock', label: 'Total ordered product today', type: 'number', unit: true },
           {
-            key: 'litresSold', label: 'Litres loaded today', type: 'number',
+            key: 'litresSold', label: 'Litres loaded today', type: 'number', unit: true,
             hint: 'Suggested from today’s orders against this PFI.',
           },
         ],
@@ -269,15 +288,15 @@ export const REPORTS: Record<ReportType, ReportDef> = {
         label: 'Balances',
         fields: [
           { key: 'differentials', label: 'Differentials', type: 'money' },
-          { key: 'loadingLeftOver', label: 'Loading left over', type: 'number' },
-          { key: 'tankBalance', label: 'Tank balance', type: 'number', computed: true },
+          { key: 'loadingLeftOver', label: 'Loading left over', type: 'number', unit: true },
+          { key: 'tankBalance', label: 'Tank balance', type: 'number', computed: true, unit: true },
         ],
       },
       { label: 'Notes', fields: [REMARKS] },
     ],
     columns: [
-      { key: 'litresSold', label: 'Litres loaded', align: 'right' },
-      { key: 'tankBalance', label: 'Tank balance', align: 'right' },
+      { key: 'litresSold', label: 'Litres loaded', align: 'right', unit: true },
+      { key: 'tankBalance', label: 'Tank balance', align: 'right', unit: true },
     ],
     pdfTitle: "Daily product manager's report",
     filePrefix: 'ProductManagerReport',

@@ -21,7 +21,7 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { NativeSelect } from '#/components/ui/native-select'
 import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
-import { STATUS_TONE, allFields, type ReportDef, type FieldDef } from './-report-config'
+import { STATUS_TONE, allFields, REPORTS, type ReportDef, type FieldDef, type ReportType } from './-report-config'
 import {
   useDayOrders, useGateTruckCounts, useYesterdayReport, usePfiDeposits,
   ordersForPfi, suggestPriceBands, sumQuantity, sumAmount, topCustomersFrom,
@@ -31,6 +31,8 @@ const PAGE_SIZE = 10
 
 const money = (v: unknown) => naira(Number(v ?? 0))
 const num = (v: unknown) => Number(v ?? 0).toLocaleString()
+/** A volume with the batch's own unit — "45,000 Litres", "160 kg". */
+const withUnit = (v: unknown, unit: string) => `${num(v)}${unit ? ` ${unit}` : ''}`
 
 /**
  * A column's value for the history table.
@@ -71,20 +73,30 @@ const blankForm = (def: ReportDef) => {
   return out
 }
 
-function Field({ field, value, onChange }: { field: FieldDef; value: string; onChange: (v: string) => void }) {
+function Field({ field, value, onChange, unit }: { field: FieldDef; value: string; onChange: (v: string) => void; unit?: string }) {
   return (
     <div className={cn('space-y-1.5', field.full && 'sm:col-span-2')}>
       <Label htmlFor={field.key}>{field.label}</Label>
       {field.type === 'textarea' ? (
         <Textarea id={field.key} rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
       ) : field.type === 'number' || field.type === 'money' ? (
-        // Money takes a decimal point; litres and counts do not.
-        <NumberInput
-          id={field.key}
-          allowDecimal={field.type === 'money'}
-          value={value}
-          onValueChange={onChange}
-        />
+        // Money takes a decimal point; litres and counts do not. The unit or
+        // the naira sign sits inside the field so the number is never bare.
+        <div className="relative">
+          <NumberInput
+            id={field.key}
+            allowDecimal={field.type === 'money'}
+            value={value}
+            onValueChange={onChange}
+            className={cn(field.type === 'money' ? 'pl-7' : field.unit && unit ? 'pr-16' : undefined)}
+          />
+          {field.type === 'money' && (
+            <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-muted-foreground">₦</span>
+          )}
+          {field.type === 'number' && field.unit && unit && (
+            <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs text-muted-foreground">{unit}</span>
+          )}
+        </div>
       ) : (
         <Input id={field.key} type="text" value={value} onChange={(e) => onChange(e.target.value)} />
       )}
@@ -93,12 +105,12 @@ function Field({ field, value, onChange }: { field: FieldDef; value: string; onC
   )
 }
 
-function ComputedField({ field, value }: { field: FieldDef; value: string }) {
+function ComputedField({ field, value, unit }: { field: FieldDef; value: string; unit?: string }) {
   return (
     <div className={cn('space-y-1.5', field.full && 'sm:col-span-2')}>
       <Label>{field.label}</Label>
       <div className="flex h-9 items-center rounded-lg border border-dashed border-foreground/20 bg-muted/30 px-2.5 text-sm">
-        {value === '' ? '—' : field.type === 'money' ? money(value) : num(value)}
+        {value === '' ? '—' : field.type === 'money' ? money(value) : field.unit && unit ? withUnit(value, unit) : num(value)}
       </div>
       <p className="text-xs text-muted-foreground/70">Computed — not editable.</p>
     </div>
@@ -252,6 +264,8 @@ export function ReportPanel({ def }: { def: ReportDef }) {
   const [topRows, setTopRows] = useState<TopRow[]>(() => (def.type === 'it_compliance' ? emptyTopRows() : []))
   const [editingId, setEditingId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
+  /** Show every report this person has filed, not just this panel's type. */
+  const [allTypes, setAllTypes] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
   // Only active batches can be reported against, and every PFI carries its
@@ -261,6 +275,16 @@ export function ReportPanel({ def }: { def: ReportDef }) {
   const { data: pfiData } = usePfiList({ status: 'active', limit: 200 })
   const activePfis = (pfiData?.pfis ?? []) as PfiWithFinancials[]
   const pfi = activePfis.find((p) => p.pfiNumber === form.pfiNumber)
+
+  /**
+   * The unit a volume is counted in, taken from the batch's own product —
+   * Litres for the fuels, kg for cooking gas. Falls back to Litres, which is
+   * what every non-LPG batch uses, rather than showing a bare number.
+   */
+  const unitOf = (p?: { productUnit?: string | null }) => p?.productUnit || 'Litres'
+  const formUnit = unitOf(pfi)
+  const unitForRow = (row: { pfiNumber?: string | null }) =>
+    unitOf(activePfis.find((p) => p.pfiNumber === row.pfiNumber))
 
   const { data: bankAccounts = [] } = useBankAccounts({ status: 'Active' })
 
@@ -364,12 +388,21 @@ export function ReportPanel({ def }: { def: ReportDef }) {
 
   const computed = useMemo(() => {
     const out: Record<string, string> = {}
-    if (def.type === 'sales_manager') {
+    // Both sheets sell a day at several prices, so both derive their volume
+    // and value from the bands rather than having them typed.
+    if (def.type === 'sales_manager' || def.type === 'it_compliance') {
       const litres = bands.reduce((s, b) => s + Number(b.litres || 0), 0)
       const amount = bands.reduce((s, b) => s + Number(b.litres || 0) * Number(b.price || 0), 0)
       out.litresSold = bands.length ? String(litres) : ''
       out.totalSalesAmount = bands.length ? String(amount) : ''
-      out.differentials = form.amountPaid !== '' && bands.length ? String(Number(form.amountPaid) - amount) : ''
+      if (def.type === 'sales_manager') {
+        out.differentials = form.amountPaid !== '' && bands.length ? String(Number(form.amountPaid) - amount) : ''
+      }
+      if (def.type === 'it_compliance') {
+        // Weighted by volume, not a plain mean of the prices — a 100-litre
+        // band and a 40,000-litre one do not weigh the same on the day.
+        out.avgPrice = litres > 0 ? String(amount / litres) : ''
+      }
     }
     if (def.type === 'product_manager') {
       const opening = Number(form.openingStock || 0)
@@ -397,13 +430,22 @@ export function ReportPanel({ def }: { def: ReportDef }) {
     form.litresSold, form.commissionDue, form.fundsReceived,
   ])
 
-  // Filtered by type in SQL and paged by the server — one page number, not the
-  // two the upstream version used, which skipped records on every "next".
+  /**
+   * Filtered by type in SQL and paged by the server — one page number, not
+   * the two the upstream version used, which skipped records on every "next".
+   *
+   * `allTypes` drops the type filter. Every report filed before the per-role
+   * panels existed was written as `sales_manager` whatever the filer's role,
+   * so a product manager or compliance officer looking at their own panel
+   * sees none of their own history — it is all sitting under a type they
+   * never pick. The server still scopes to the caller either way, so this
+   * only ever widens across *their own* records, never anyone else's.
+   */
   const { data, isLoading } = useQuery({
-    queryKey: ['daily-reports', def.type, page],
+    queryKey: ['daily-reports', def.type, page, allTypes],
     queryFn: async () => {
       const res = await api.get('/daily-reports', {
-        params: { reportType: def.type, page, limit: PAGE_SIZE },
+        params: { ...(allTypes ? {} : { reportType: def.type }), page, limit: PAGE_SIZE },
       })
       return res.data.data as { reports: any[]; pagination?: { total: number; pages?: number } }
     },
@@ -539,7 +581,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
       // directly would silently drop them from the PDF.
       const v = columnValue(r, f.key)
       if (v == null || v === '') continue
-      body.push([f.label, f.type === 'money' ? money(v) : String(v)])
+      body.push([f.label, f.type === 'money' ? money(v) : f.unit ? withUnit(v, unitForRow(r)) : String(v)])
     }
 
     autoTable(doc, { startY: 40, body, styles: { fontSize: 9, cellPadding: 2.5 } })
@@ -634,7 +676,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                     return <TopCustomersEditor key={f.key} rows={topRows} onChange={setTopRows} />
                   }
                   if (f.computed) {
-                    return <ComputedField key={f.key} field={f} value={computed[f.key] ?? ''} />
+                    return <ComputedField key={f.key} field={f} value={computed[f.key] ?? ''} unit={formUnit} />
                   }
                   return (
                     <Field
@@ -642,6 +684,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                       field={f}
                       value={form[f.key] ?? ''}
                       onChange={(v) => setForm((prev) => ({ ...prev, [f.key]: v }))}
+                      unit={formUnit}
                     />
                   )
                 })}
@@ -668,13 +711,31 @@ export function ReportPanel({ def }: { def: ReportDef }) {
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={cn(MICRO, 'text-muted-foreground')}>Your submissions</span>
-          {total > 0 && <span className="text-sm text-muted-foreground">{total} filed</span>}
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-3.5"
+                checked={allTypes}
+                onChange={(e) => { setAllTypes(e.target.checked); setPage(1) }}
+              />
+              All my report types
+            </label>
+            {total > 0 && <span className="text-sm text-muted-foreground">{total} filed</span>}
+          </div>
         </div>
 
         {isLoading ? (
           <div className="flex justify-center py-12"><Loader2 className="animate-spin" /></div>
         ) : rows.length === 0 ? (
-          <PageEmpty title="No reports submitted yet" description="Fill the form above to file your first one." />
+          <PageEmpty
+            title={allTypes ? 'Nothing filed yet' : 'No reports of this type yet'}
+            description={
+              allTypes
+                ? 'Fill the form above to file your first one.'
+                : "Fill the form above to file one — or tick \"All my report types\" to see reports you filed before this panel existed."
+            }
+          />
         ) : (
           <div className="overflow-x-auto">
             <Table>
@@ -683,6 +744,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                   <TableHead>Date</TableHead>
                   <TableHead>Location</TableHead>
                   <TableHead className="hidden md:table-cell">PFI</TableHead>
+                  {allTypes && <TableHead>Type</TableHead>}
                   {def.columns.map((c) => (
                     <TableHead key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
                       {c.label}
@@ -703,11 +765,16 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                     <TableCell className="hidden md:table-cell text-muted-foreground">
                       {r.pfiNumber || '—'}
                     </TableCell>
+                    {allTypes && (
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType || '—'}
+                      </TableCell>
+                    )}
                     {def.columns.map((c) => {
                       const v = columnValue(r, c.key)
                       return (
                         <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
-                          {c.money ? money(v) : num(v)}
+                          {c.money ? money(v) : c.unit ? withUnit(v, unitForRow(r)) : num(v)}
                         </TableCell>
                       )
                     })}

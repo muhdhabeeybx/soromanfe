@@ -125,7 +125,7 @@ function OverviewDashboard() {
         actions={<PeriodFilter value={period} onChange={setPeriod} />}
       />
 
-      <StatCardGrid count={5}>
+      <StatCardGrid count={2}>
         <StatCard
           icon={<DollarSign />}
           label="Revenue"
@@ -147,20 +147,20 @@ function OverviewDashboard() {
           tone="green"
           // description={`${cust.newThisPeriod || 0} new ${data?.period?.label?.toLowerCase() || 'this month'}`}
         />
-        {/* <StatCard
+        <StatCard
           icon={<Truck />}
-          label="Fleet Utilization"
+          label="Trucks Utilization"
           value={formatPercent(fleetUtilization)}
           tone={fleetUtilization > 60 ? 'green' : fleetUtilization > 30 ? 'amber' : 'red'}
-          description={`${fleet.inTransit || 0} of ${fleet.total} in use`}
-        /> */}
-        <StatCard
+          // description={`${fleet.inTransit || 0} of ${fleet.total} in use`}
+        />
+        {/* <StatCard
           icon={<AlertTriangle />}
           label="Delivery Customers Outstanding"
           value={formatCurrency(totalOutstanding)}
           tone={totalOutstanding > 0 ? 'amber' : 'green'}
           // description={`${outstanding.customers?.length || 0} customers owe`}
-        />
+        /> */}
       </StatCardGrid>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
