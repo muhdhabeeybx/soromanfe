@@ -107,14 +107,15 @@ export const REPORTS: Record<ReportType, ReportDef> = {
   commissions: {
     type: 'commissions',
     title: 'Commission report',
-    description: 'Volume sold and commission paid today.',
+    description: 'Funds received, volume sold, and what commission that leaves due and outstanding.',
     roleLabel: 'Commissions',
     color: '064E3B',
     sections: [
       {
         label: 'Sales',
         fields: [
-          { key: 'litresSold', label: 'Litres sold today', type: 'number' },
+          { key: 'fundsReceived', label: 'Funds received', type: 'money' },
+          { key: 'litresSold', label: 'Total litres sold', type: 'number' },
           { key: 'truckCount', label: 'Trucks sold', type: 'number' },
           // Real columns. These used to be regexed out of the remarks text,
           // so editing your own note silently destroyed them.
@@ -125,14 +126,23 @@ export const REPORTS: Record<ReportType, ReportDef> = {
       {
         label: 'Commission',
         fields: [
-          { key: 'amountPaid', label: 'Total commission paid', type: 'money', full: true },
+          { key: 'commissionDue', label: 'Commission due', type: 'money' },
+          { key: 'amountPaid', label: 'Total commission paid', type: 'money' },
+          // Both derived, never typed: a stored total drifts the moment one
+          // of its inputs is corrected. See derivedFor() below.
+          { key: 'commissionOutstanding', label: 'Total commission not paid', type: 'money', computed: true },
+          { key: 'fundsRemaining', label: 'Funds remaining', type: 'money', computed: true },
           REMARKS,
         ],
       },
     ],
     columns: [
-      { key: 'litresSold', label: 'Litres sold', align: 'right' },
-      { key: 'amountPaid', label: 'Commission', align: 'right', money: true },
+      { key: 'fundsReceived', label: 'Funds received', align: 'right', money: true },
+      { key: 'litresSold', label: 'Total ltrs sold', align: 'right' },
+      { key: 'commissionDue', label: 'Commission due', align: 'right', money: true },
+      { key: 'amountPaid', label: 'Commission paid', align: 'right', money: true },
+      { key: 'commissionOutstanding', label: 'Commission not paid', align: 'right', money: true },
+      { key: 'fundsRemaining', label: 'Funds remaining', align: 'right', money: true },
     ],
     pdfTitle: 'Daily commission report',
     filePrefix: 'CommissionReport',

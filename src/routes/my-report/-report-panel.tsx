@@ -31,6 +31,26 @@ const PAGE_SIZE = 10
 const money = (v: unknown) => naira(Number(v ?? 0))
 const num = (v: unknown) => Number(v ?? 0).toLocaleString()
 
+/**
+ * A column's value for the history table.
+ *
+ * Most read straight off the saved row. The commission report's outstanding
+ * and remaining figures are derived instead of stored — a stored total drifts
+ * the moment one of its inputs is corrected — so they are worked out here,
+ * from the same arithmetic the form shows while filling it in. Blank, not 0,
+ * when the figure they are measured against was never entered.
+ */
+const columnValue = (row: Record<string, unknown>, key: string): unknown => {
+  const paid = Number(row.amountPaid ?? 0)
+  if (key === 'commissionOutstanding') {
+    return row.commissionDue == null ? '' : Number(row.commissionDue) - paid
+  }
+  if (key === 'fundsRemaining') {
+    return row.fundsReceived == null ? '' : Number(row.fundsReceived) - paid
+  }
+  return row[key]
+}
+
 type Band = { price: string; litres: string }
 type TopRow = { name: string; phone: string; litres: string }
 const emptyTopRows = (): TopRow[] => Array.from({ length: 5 }, () => ({ name: '', phone: '', litres: '' }))
@@ -356,8 +376,23 @@ export function ReportPanel({ def }: { def: ReportDef }) {
         ? String(opening + received - loaded)
         : ''
     }
+    if (def.type === 'commissions') {
+      const paid = Number(form.amountPaid || 0)
+      // Blank until the figure they are measured against is entered — an
+      // outstanding of "0" against an unfilled Commission due reads as
+      // settled when nothing is known yet.
+      out.commissionOutstanding = form.commissionDue !== ''
+        ? String(Number(form.commissionDue || 0) - paid)
+        : ''
+      out.fundsRemaining = form.fundsReceived !== ''
+        ? String(Number(form.fundsReceived || 0) - paid)
+        : ''
+    }
     return out
-  }, [def.type, bands, form.amountPaid, form.openingStock, form.receivedStock, form.litresSold])
+  }, [
+    def.type, bands, form.amountPaid, form.openingStock, form.receivedStock,
+    form.litresSold, form.commissionDue, form.fundsReceived,
+  ])
 
   // Filtered by type in SQL and paged by the server — one page number, not the
   // two the upstream version used, which skipped records on every "next".
@@ -496,7 +531,10 @@ export function ReportPanel({ def }: { def: ReportDef }) {
         })
         continue
       }
-      const v = r[f.key]
+      // columnValue, not r[f.key]: the commission report's outstanding and
+      // remaining figures are derived rather than stored, and reading the row
+      // directly would silently drop them from the PDF.
+      const v = columnValue(r, f.key)
       if (v == null || v === '') continue
       body.push([f.label, f.type === 'money' ? money(v) : String(v)])
     }
@@ -647,6 +685,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                       {c.label}
                     </TableHead>
                   ))}
+                  <TableHead>Staff</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -661,11 +700,15 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                     <TableCell className="hidden md:table-cell text-muted-foreground">
                       {r.pfiNumber || '—'}
                     </TableCell>
-                    {def.columns.map((c) => (
-                      <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
-                        {c.money ? money(r[c.key]) : num(r[c.key])}
-                      </TableCell>
-                    ))}
+                    {def.columns.map((c) => {
+                      const v = columnValue(r, c.key)
+                      return (
+                        <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
+                          {c.money ? money(v) : num(v)}
+                        </TableCell>
+                      )
+                    })}
+                    <TableCell className="max-w-[10rem] truncate">{r.submittedByName || '—'}</TableCell>
                     <TableCell>
                       <StatusChip
                         tone={STATUS_TONE[r.status as keyof typeof STATUS_TONE] ?? 'inert'}
