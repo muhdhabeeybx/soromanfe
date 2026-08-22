@@ -6,6 +6,7 @@ import { Loader2, Trash2, Pencil, Download, Plus, X } from 'lucide-react'
 import api from '#/lib/api/http'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import { NumberInput } from '#/components/ui/number-input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import {
@@ -76,14 +77,16 @@ function Field({ field, value, onChange }: { field: FieldDef; value: string; onC
       <Label htmlFor={field.key}>{field.label}</Label>
       {field.type === 'textarea' ? (
         <Textarea id={field.key} rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
-      ) : (
-        <Input
+      ) : field.type === 'number' || field.type === 'money' ? (
+        // Money takes a decimal point; litres and counts do not.
+        <NumberInput
           id={field.key}
-          type={field.type === 'number' || field.type === 'money' ? 'number' : 'text'}
-          inputMode={field.type === 'number' || field.type === 'money' ? 'numeric' : undefined}
+          allowDecimal={field.type === 'money'}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onValueChange={onChange}
         />
+      ) : (
+        <Input id={field.key} type="text" value={value} onChange={(e) => onChange(e.target.value)} />
       )}
       {field.hint && <p className="text-xs text-muted-foreground/70">{field.hint}</p>}
     </div>
@@ -166,16 +169,16 @@ function PriceBandsEditor({ bands, onChange }: { bands: Band[]; onChange: (b: Ba
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label className="text-xs">Price / litre</Label>
-          <Input
-            type="number" inputMode="numeric" className="w-32"
-            value={price} onChange={(e) => setPrice(e.target.value)}
+          <NumberInput
+            allowDecimal className="w-32"
+            value={price} onValueChange={setPrice}
           />
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Qty sold at this price</Label>
-          <Input
-            type="number" inputMode="numeric" className="w-36"
-            value={litres} onChange={(e) => setLitres(e.target.value)}
+          <NumberInput
+            className="w-36"
+            value={litres} onValueChange={setLitres}
           />
         </div>
         <Button type="button" variant="outline" size="sm" onClick={add} disabled={!price || !litres}>
@@ -226,8 +229,8 @@ function TopCustomersEditor({ rows, onChange }: { rows: TopRow[]; onChange: (r: 
                   />
                 </td>
                 <td className="p-1">
-                  <Input
-                    type="number" value={r.litres} onChange={(e) => set(i, { litres: e.target.value })}
+                  <NumberInput
+                    value={r.litres} onValueChange={(v) => set(i, { litres: v })}
                     className="h-8 border-0 bg-transparent text-right shadow-none focus-visible:ring-1"
                   />
                 </td>
