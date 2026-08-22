@@ -301,7 +301,7 @@ function ExpensesPage() {
                         {e.category_name}
                       </Badge>
                     </TableCell>
-                    <TableCell className="max-w-[12rem] truncate">{e.vendor || '—'}</TableCell>
+                    <TableCell className="max-w-[12rem] truncate font-medium">{e.vendor || '—'}</TableCell>
                     {/* <TableCell className="whitespace-nowrap text-muted-foreground">{e.tin_number || '—'}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">{e.invoice_number || '—'}</TableCell> */}
                     <TableCell className="max-w-[16rem] truncate">{e.description || '—'}</TableCell>
@@ -314,7 +314,7 @@ function ExpensesPage() {
                         <span className="ml-1 opacity-60">({Number(e.wht_rate)}%)</span>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
                     {/* Blank until it is settled — a request awaiting payment
                         has not paid ₦0. Once actually paid, a still-blank
                         amount_paid (legacy rows recorded before that column

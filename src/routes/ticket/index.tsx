@@ -433,11 +433,11 @@ function OrderRow({
   return (
     <TableRow>
       <TableCell className="text-muted-foreground">{sn}</TableCell>
-      <TableCell className="font-normal text-accent">{order.orderNumber}</TableCell>
+      <TableCell className="font-semibold text-accent">{order.orderNumber}</TableCell>
       <TableCell className="text-muted-foreground">
         {order.loadingStartedAt ? format(new Date(order.loadingStartedAt), 'd MMM yyyy') : '—'}
       </TableCell>
-      <TableCell className="max-w-[14rem] truncate">{order.customerName || '—'}</TableCell>
+      <TableCell className="max-w-[14rem] truncate font-medium">{order.customerName || '—'}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-muted-foreground">{order.companyName || order.customerCompanyName || '—'}</TableCell>
       <TableCell>{order.depotName || order.state || '—'}</TableCell>
       <TableCell className="max-w-[12rem] truncate">{order.productName || '—'}</TableCell>

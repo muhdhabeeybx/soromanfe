@@ -81,6 +81,7 @@ import { Route as LpgIndexRouteImport } from './routes/lpg/index'
 import { Route as MessagingIndexRouteImport } from './routes/messaging/index'
 import { Route as MyReportIndexRouteImport } from './routes/my-report/index'
 import { Route as OrderAuditIndexRouteImport } from './routes/order-audit/index'
+import { Route as OrderManagementIndexRouteImport } from './routes/order-management/index'
 import { Route as OrdersPfiIndexRouteImport } from './routes/orders-pfi/index'
 import { Route as OrdersIndexRouteImport } from './routes/orders/index'
 import { Route as OrdersDetailsRouteImport } from './routes/orders/details'
@@ -486,6 +487,11 @@ const OrderAuditIndexRoute = OrderAuditIndexRouteImport.update({
   path: '/order-audit/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OrderManagementIndexRoute = OrderManagementIndexRouteImport.update({
+  id: '/order-management/',
+  path: '/order-management/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OrdersPfiIndexRoute = OrdersPfiIndexRouteImport.update({
   id: '/orders-pfi/',
   path: '/orders-pfi/',
@@ -745,6 +751,7 @@ export interface FileRoutesByFullPath {
   '/messaging/': typeof MessagingIndexRoute
   '/my-report/': typeof MyReportIndexRoute
   '/order-audit/': typeof OrderAuditIndexRoute
+  '/order-management/': typeof OrderManagementIndexRoute
   '/orders-pfi/': typeof OrdersPfiIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/overpayment-refunds/': typeof OverpaymentRefundsIndexRoute
@@ -853,6 +860,7 @@ export interface FileRoutesByTo {
   '/messaging': typeof MessagingIndexRoute
   '/my-report': typeof MyReportIndexRoute
   '/order-audit': typeof OrderAuditIndexRoute
+  '/order-management': typeof OrderManagementIndexRoute
   '/orders-pfi': typeof OrdersPfiIndexRoute
   '/orders': typeof OrdersIndexRoute
   '/overpayment-refunds': typeof OverpaymentRefundsIndexRoute
@@ -962,6 +970,7 @@ export interface FileRoutesById {
   '/messaging/': typeof MessagingIndexRoute
   '/my-report/': typeof MyReportIndexRoute
   '/order-audit/': typeof OrderAuditIndexRoute
+  '/order-management/': typeof OrderManagementIndexRoute
   '/orders-pfi/': typeof OrdersPfiIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/overpayment-refunds/': typeof OverpaymentRefundsIndexRoute
@@ -1072,6 +1081,7 @@ export interface FileRouteTypes {
     | '/messaging/'
     | '/my-report/'
     | '/order-audit/'
+    | '/order-management/'
     | '/orders-pfi/'
     | '/orders/'
     | '/overpayment-refunds/'
@@ -1180,6 +1190,7 @@ export interface FileRouteTypes {
     | '/messaging'
     | '/my-report'
     | '/order-audit'
+    | '/order-management'
     | '/orders-pfi'
     | '/orders'
     | '/overpayment-refunds'
@@ -1288,6 +1299,7 @@ export interface FileRouteTypes {
     | '/messaging/'
     | '/my-report/'
     | '/order-audit/'
+    | '/order-management/'
     | '/orders-pfi/'
     | '/orders/'
     | '/overpayment-refunds/'
@@ -1397,6 +1409,7 @@ export interface RootRouteChildren {
   MessagingIndexRoute: typeof MessagingIndexRoute
   MyReportIndexRoute: typeof MyReportIndexRoute
   OrderAuditIndexRoute: typeof OrderAuditIndexRoute
+  OrderManagementIndexRoute: typeof OrderManagementIndexRoute
   OrdersPfiIndexRoute: typeof OrdersPfiIndexRoute
   OrdersIndexRoute: typeof OrdersIndexRoute
   OverpaymentRefundsIndexRoute: typeof OverpaymentRefundsIndexRoute
@@ -1926,6 +1939,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrderAuditIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/order-management/': {
+      id: '/order-management/'
+      path: '/order-management'
+      fullPath: '/order-management/'
+      preLoaderRoute: typeof OrderManagementIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/orders-pfi/': {
       id: '/orders-pfi/'
       path: '/orders-pfi'
@@ -2254,6 +2274,7 @@ const rootRouteChildren: RootRouteChildren = {
   MessagingIndexRoute: MessagingIndexRoute,
   MyReportIndexRoute: MyReportIndexRoute,
   OrderAuditIndexRoute: OrderAuditIndexRoute,
+  OrderManagementIndexRoute: OrderManagementIndexRoute,
   OrdersPfiIndexRoute: OrdersPfiIndexRoute,
   OrdersIndexRoute: OrdersIndexRoute,
   OverpaymentRefundsIndexRoute: OverpaymentRefundsIndexRoute,

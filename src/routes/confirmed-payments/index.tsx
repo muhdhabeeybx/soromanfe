@@ -561,7 +561,7 @@ function FinanceReportPage() {
                 <TableBody>
                   {pfiStock.map((p) => (
                     <TableRow key={p.pfiNumber}>
-                      <TableCell className="font-normal text-accent">{p.pfiNumber}</TableCell>
+                      <TableCell className="font-semibold text-accent">{p.pfiNumber}</TableCell>
                       <TableCell className="text-muted-foreground">{p.locationName}</TableCell>
                       <TableCell className="text-muted-foreground">{p.productName}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{p.initialStock.toLocaleString()} L</TableCell>
@@ -639,12 +639,12 @@ function FinanceReportPage() {
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
                       </TableCell>
-                      <TableCell className="font-mono text-xs whitespace-nowrap">{o.reference}</TableCell>
-                      <TableCell className="max-w-[10rem] truncate">{o.customerName || '—'}</TableCell>
+                      <TableCell className="font-mono text-xs font-semibold whitespace-nowrap">{o.reference}</TableCell>
+                      <TableCell className="max-w-[10rem] truncate font-medium">{o.customerName || '—'}</TableCell>
                       {/* Blank, not a dash, when the customer has no company
                           saved — never the order's own typed-in company. */}
                       <TableCell className="max-w-[10rem] truncate text-muted-foreground">{company}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{Number(o.quantity || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-right font-medium whitespace-nowrap">{Number(o.quantity || 0).toLocaleString()}</TableCell>
                       <TableCell className="text-muted-foreground">{o.productName || '—'}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{naira(Number(o.price))}</TableCell>
                       <TableCell className="text-right whitespace-nowrap font-medium">{naira(salesValue)}</TableCell>
@@ -652,7 +652,7 @@ function FinanceReportPage() {
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {o.paymentConfirmedAt ? format(new Date(o.paymentConfirmedAt), 'd MMM yyyy') : '—'}
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap font-medium">{naira(Number(o.totalAmount))}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap font-semibold">{naira(Number(o.totalAmount))}</TableCell>
                       <TableCell className="max-w-[16rem] truncate text-muted-foreground">{orderPaidInto(o) || '—'}</TableCell>
                       {Array.from({ length: TRAILING_BLANKS_FOR_ORDER_ROW }).map((_, blankIdx) => (
                         <TableCell key={blankIdx} />

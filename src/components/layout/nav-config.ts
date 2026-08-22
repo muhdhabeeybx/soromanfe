@@ -26,6 +26,7 @@ import {
   Store,
   Wallet,
   UserCircle,
+  Pencil,
 } from "lucide-react";
 
 export type NavItem = {
@@ -54,6 +55,7 @@ export const navCategories: NavCategory[] = [
     category: "Orders",
     items: [
       { title: "All Orders", icon: ShoppingBag, path: "/orders" },
+      { title: "Manage Orders", icon: Pencil, path: "/order-management" },
       { title: "Create Order", icon: PlusCircle, path: "/admin-order" },
       // Two role-specific order views. Both are titled "Orders" upstream;
       // named for their audience here so a SuperAdmin, who sees both, can

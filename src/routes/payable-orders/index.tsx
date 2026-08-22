@@ -149,12 +149,12 @@ function PendingOrdersPage() {
                           className="hover:bg-muted/50 transition cursor-pointer"
                           onClick={() => navigate({ to: '/orders/details' as any, search: { id: order.id } as any })}
                         >
-                          <TableCell className="font-mono font-semibold text-primary">
+                          <TableCell className="font-mono font-semibold whitespace-nowrap text-primary">
                             {order.orderNumber}
                           </TableCell>
                           <TableCell>
                             <div className="space-y-0.5">
-                              <p className="font-normal text-foreground">{custName}</p>
+                              <p className="font-medium text-foreground">{custName}</p>
                               {compName && (
                                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                   <Building2 className="size-3" />

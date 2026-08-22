@@ -441,12 +441,12 @@ function OrdersDashboard() {
                           return (
                             <TableRow key={o.id ?? o._id}>
                               <TableCell className="text-muted-foreground">{serial}</TableCell>
-                              <TableCell className="font-normal text-accent">{o.orderNumber}</TableCell>
+                              <TableCell className="font-semibold text-accent">{o.orderNumber}</TableCell>
                               <TableCell className="text-muted-foreground">
                                 {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
                               </TableCell>
                               <TableCell>
-                                <span className="block max-w-[14rem] uppercase truncate">{o.customerName || '—'}</span>
+                                <span className="block max-w-[14rem] truncate font-medium uppercase">{o.customerName || '—'}</span>
                                 {(o.companyName || o.customerCompanyName) && (
                                   <span className="block max-w-[14rem] truncate uppercase text-xs text-muted-foreground">
                                     {o.companyName || o.customerCompanyName}
@@ -455,7 +455,7 @@ function OrdersDashboard() {
                               </TableCell>
                               <TableCell className="text-muted-foreground">{o.customerPhone || '—'}</TableCell>
                               <TableCell>{o.depotName || o.state || '—'}</TableCell>
-                              <TableCell className="text-right">{formatQty(toNumber(o.quantity))}</TableCell>
+                              <TableCell className="text-right font-medium">{formatQty(toNumber(o.quantity))}</TableCell>
                               <TableCell className="text-right">{formatNaira(toNumber(o.price))}</TableCell>
                               <TableCell className="text-right font-semibold">{formatNaira(toNumber(o.totalAmount))}</TableCell>
                               <TableCell className="text-muted-foreground max-w-[14rem] truncate ">{o.pfiNumber || '—'}</TableCell>

@@ -18,6 +18,7 @@ export const PAGE_GUIDE: Record<string, string> = {
   '/depots': 'The depot directory — locations, product capacity, and which products are priced there.',
   '/products': 'The product catalogue — fuel types and units sold across the business.',
   '/confirmed-payments': 'The finance report: every confirmed payment, order by order, with where the money came from and the customer\'s wallet balance before/after.',
+  '/order-management': 'Find an order and correct it — reassign the customer or PFI, change the date, quantity or price. Changes carry through to the wallet hold and the batch stock.',
   '/payable-orders': 'Every order awaiting payment. Confirm payment to match a bank statement (or record it manually) against that specific order — wallet balance applies first, and any shortfall shows right there.',
   '/deposits': 'The wallet ledger — every credit and debit ever recorded against a customer\'s balance.',
   '/commissions': 'Commission owed to customers on their purchases, and its payment status.',

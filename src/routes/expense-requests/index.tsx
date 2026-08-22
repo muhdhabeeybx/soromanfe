@@ -167,9 +167,9 @@ function MyRequestsPage() {
                         {e.category_name}
                       </Badge>
                     </TableCell>
-                    <TableCell className="max-w-[10rem] truncate">{e.vendor || '—'}</TableCell>
+                    <TableCell className="max-w-[10rem] truncate font-medium">{e.vendor || '—'}</TableCell>
                     <TableCell className="max-w-[16rem] truncate">{e.description || '—'}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
                     <TableCell className="text-right whitespace-nowrap font-medium">
                       {e.amount_paid != null
                         ? naira(Number(e.amount_paid))
