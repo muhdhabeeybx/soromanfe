@@ -181,17 +181,25 @@ function PendingOrdersPage() {
                             </span>
                           </TableCell>
                           <TableCell>
+                            {/* "Wallet covers it", not "covered" — the balance
+                                is not applied until someone says to on the
+                                confirm dialog, so this is what the wallet
+                                could meet, not what it has. */}
                             {shortfall > 0 ? (
                               <span className="font-semibold text-warning">{formatCurrency(shortfall)}</span>
                             ) : (
-                              <span className="text-xs text-success">Covered</span>
+                              <span className="text-xs text-success">Wallet covers it</span>
                             )}
                           </TableCell>
                           <TableCell className="text-center">
+                            {/* Same button whatever the wallet holds. A
+                                covered order used to get a green
+                                confirm-and-go treatment, which read as a
+                                one-click deduction — every payment goes
+                                through the same statement match now. */}
                             <Button
                               size="sm"
-                              className={cn(shortfall > 0 ? '' : 'bg-accent text-accent-foreground hover:bg-accent/90')}
-                              variant={shortfall > 0 ? 'outline' : 'default'}
+                              variant="outline"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setConfirmingOrder(order)

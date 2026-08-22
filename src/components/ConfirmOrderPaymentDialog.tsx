@@ -6,6 +6,7 @@ import {
 } from '#/components/ui/dialog'
 import { Button } from '#/components/ui/button'
 import { Label } from '#/components/ui/label'
+import { NumberInput } from '#/components/ui/number-input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '#/components/ui/select'
 import { useCustomerDetails } from '#/lib/hooks/useCustomers'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
@@ -58,11 +59,14 @@ export function ConfirmOrderPaymentDialog({
   const [bankAccountId, setBankAccountId] = useState('')
   const [statementLines, setStatementLines] = useState<StatementLine[]>([])
   const [statementQuery, setStatementQuery] = useState('')
+  /** How much of the balance already in the wallet to put toward this order. */
+  const [walletAmount, setWalletAmount] = useState('')
   const [confirming, setConfirming] = useState(false)
 
   useEffect(() => {
     if (!open) {
-      setBankAccountId(''); setStatementLines([]); setStatementQuery(''); setConfirming(false)
+      setBankAccountId(''); setStatementLines([]); setStatementQuery('')
+      setWalletAmount(''); setConfirming(false)
     }
   }, [open])
 
@@ -74,10 +78,17 @@ export function ConfirmOrderPaymentDialog({
   // same customer is confirmed in this same session.
   const liveBalance = customer ? toNum(customer.balance) : toNum(order.customerBalance)
   const newDeposit = statementLines.reduce((s, l) => s + Number(l.amount), 0)
-  const available = liveBalance + newDeposit
+
+  // Wallet balance is applied only when someone says how much of it to use.
+  // It used to be taken automatically for the whole shortfall, which made a
+  // fully-covered order a one-click confirm with no statement behind it —
+  // and no way afterwards to say what had actually paid for it.
+  const walletApplied = Math.min(Number(walletAmount || 0), liveBalance)
+  const walletOverBalance = Number(walletAmount || 0) > liveBalance
+  const available = walletApplied + newDeposit
   const stillShort = Math.max(0, total - available)
   const excess = Math.max(0, available - total)
-  const readyToConfirm = stillShort <= 0
+  const readyToConfirm = stillShort <= 0 && !walletOverBalance
 
   const handleConfirm = async () => {
     if (!readyToConfirm) return
@@ -164,33 +175,17 @@ export function ConfirmOrderPaymentDialog({
             </div>
           )}
 
-          {stillShort <= 0 && newDeposit === 0 ? (
-            <div className="space-y-2">
-              <div className="flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-sm text-success">
-                <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
-                <p>Wallet balance already covers this order in full — nothing to match.</p>
-              </div>
-              {/* Spelling out what confirming actually does to the wallet:
-                  the order's total comes off the balance and is held against
-                  this order. */}
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-foreground/15 p-3 text-sm">
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Wallet className="size-3.5" />
-                  Allocating from wallet
-                </span>
-                <span className="font-semibold">
-                  {formatCurrency(total)} <span className="text-muted-foreground">of {formatCurrency(liveBalance)}</span>
-                </span>
-              </div>
-            </div>
-          ) : (
-            <>
-              {Math.max(0, total - liveBalance) > 0 && (
+          {/* One flow, always: match the statement, and say explicitly how
+              much of any existing wallet balance to put toward this order.
+              A covered order is not a one-click confirm — that left no
+              record of what had actually paid for it. */}
+          <>
+              {stillShort > 0 && (
                 <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                   <p>
-                    {order.customerName || 'This customer'} needs {formatCurrency(Math.max(0, total - liveBalance))} more
-                    to complete this order — match a statement line below.
+                    {formatCurrency(stillShort)} still to account for — match a statement line
+                    below, or draw more from the wallet balance.
                   </p>
                 </div>
               )}
@@ -235,21 +230,62 @@ export function ConfirmOrderPaymentDialog({
                 )}
               </div>
 
-              {/* How the order's total is actually being met — what comes off
-                  the balance already there versus what this match brings in. */}
-              {(newDeposit > 0 || liveBalance > 0) && (
-                <div className="space-y-1 rounded-lg border border-foreground/15 p-3 text-sm">
+              {/* Existing balance is only ever used if someone asks for it,
+                  and for the amount they ask for. Whatever is drawn stays
+                  traceable: the report's funding rows follow each deposit
+                  the wallet drew on back to the statement line it came
+                  from, so "from wallet" still names an original payment. */}
+              {liveBalance > 0 && (
+                <div className="space-y-1.5 rounded-lg border border-foreground/15 p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                    <Label className={cn(MICRO, 'flex items-center gap-1.5 text-muted-foreground')}>
                       <Wallet className="size-3.5" />
-                      From existing wallet balance
+                      Draw from wallet balance
+                    </Label>
+                    <span className="text-xs text-muted-foreground">
+                      {formatCurrency(liveBalance)} available
                     </span>
-                    <span className="font-semibold">{formatCurrency(Math.min(liveBalance, total))}</span>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <NumberInput
+                      allowDecimal
+                      placeholder="0"
+                      className="text-right"
+                      value={walletAmount}
+                      onValueChange={setWalletAmount}
+                      aria-invalid={walletOverBalance || undefined}
+                    />
+                    <Button
+                      type="button" variant="outline" size="sm" className="shrink-0"
+                      onClick={() => setWalletAmount(String(Math.min(liveBalance, Math.max(0, total - newDeposit))))}
+                    >
+                      Use what's needed
+                    </Button>
+                  </div>
+                  {walletOverBalance && (
+                    <p className="text-xs text-destructive">
+                      That is more than the {formatCurrency(liveBalance)} in the wallet.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* How the order's total is actually being met. */}
+              {(newDeposit > 0 || walletApplied > 0) && (
+                <div className="space-y-1 rounded-lg border border-foreground/15 p-3 text-sm">
                   {newDeposit > 0 && (
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-muted-foreground">From this statement match</span>
-                      <span className="font-semibold">{formatCurrency(Math.min(newDeposit, Math.max(0, total - liveBalance)))}</span>
+                      <span className="font-semibold">{formatCurrency(newDeposit)}</span>
+                    </div>
+                  )}
+                  {walletApplied > 0 && (
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <Wallet className="size-3.5" />
+                        From wallet balance
+                      </span>
+                      <span className="font-semibold">{formatCurrency(walletApplied)}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-3 border-t border-foreground/10 pt-1">
@@ -259,17 +295,14 @@ export function ConfirmOrderPaymentDialog({
                 </div>
               )}
 
-              {newDeposit > 0 && (
+              {(newDeposit > 0 || walletApplied > 0) && stillShort <= 0 && (
                 <p className="text-xs leading-tight text-muted-foreground">
-                  {stillShort > 0
-                    ? `Still ${formatCurrency(stillShort)} short after this.`
-                    : excess > 0
-                      ? `Covers the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet.`
-                      : 'Covers the order exactly.'}
+                  {excess > 0
+                    ? `Covers the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet.`
+                    : 'Covers the order exactly.'}
                 </p>
               )}
-            </>
-          )}
+          </>
         </div>
 
         <DialogFooter>
