@@ -27,7 +27,7 @@ import {
   ordersForPfi, suggestPriceBands, sumQuantity, sumAmount, topCustomersFrom,
 } from './-report-autofill'
 
-const PAGE_SIZE = 10
+const PAGE_SIZE = 1000
 
 const money = (v: unknown) => naira(Number(v ?? 0))
 const num = (v: unknown) => Number(v ?? 0).toLocaleString()

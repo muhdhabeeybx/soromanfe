@@ -71,7 +71,7 @@ function DangoteOrdersDashboard() {
   const [collectionFilter, setCollectionFilter] = useState('all')
   const [payableOnly, setPayableOnly] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
   const [payTargetOrder, setPayTargetOrder] = useState<any | null>(null)
 
   const payDangoteOrderMutation = usePayDangoteOrder()
@@ -88,7 +88,7 @@ function DangoteOrdersDashboard() {
   const { data, isLoading, isError, error, refetch } = useDangoteOrderRequests({
     search: debouncedSearch || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
-    limit: 100,
+    limit: 1000,
   })
 
   const requests = data?.requests || []

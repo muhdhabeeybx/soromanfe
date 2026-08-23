@@ -68,7 +68,7 @@ function LpgOrdersDashboard() {
   const [paymentFilter, setPaymentFilter] = useState('all')
   const [collectionFilter, setCollectionFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300)
@@ -82,7 +82,7 @@ function LpgOrdersDashboard() {
   const { data, isLoading, isError, error, refetch } = useLpgOrderRequests({
     search: debouncedSearch || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
-    limit: 100,
+    limit: 1000,
   })
 
   const requests = data?.requests || []

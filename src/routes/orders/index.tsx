@@ -87,7 +87,7 @@ function OrdersDashboard() {
   const [pfiFilter, setPfiFilter] = useState(ALL)
 
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(1000)
   const [detailsOrder, setDetailsOrder] = useState<any | null>(null)
   const [editOrder, setEditOrder] = useState<any | null>(null)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)

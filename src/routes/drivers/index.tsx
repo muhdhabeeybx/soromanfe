@@ -38,7 +38,7 @@ function DriversDashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
 
   const { data, isLoading } = useDriverList({ search: searchTerm || undefined, status: selectedStatus !== 'all' ? selectedStatus : undefined })
   const drivers = data?.drivers || []

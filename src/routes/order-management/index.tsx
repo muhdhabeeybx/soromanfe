@@ -58,7 +58,7 @@ function OrderManagementPage() {
   const [locationFilter, setLocationFilter] = useState(ALL)
   const [pfiFilter, setPfiFilter] = useState(ALL)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(1000)
 
   const [editing, setEditing] = useState<any | null>(null)
   const [viewing, setViewing] = useState<any | null>(null)

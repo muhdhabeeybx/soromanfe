@@ -105,7 +105,7 @@ function StaffManagement() {
   const [selectedLocation, setSelectedLocation] = useState('all')
   const [roleFilter, setRoleFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
 
   useEffect(() => {

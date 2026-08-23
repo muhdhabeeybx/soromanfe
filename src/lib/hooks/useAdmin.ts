@@ -106,11 +106,14 @@ function mapAdminToStaffMember(admin: any): StaffMember {
   };
 }
 
-export function useAdminList(params?: { search?: string }) {
+export function useAdminList(params?: { search?: string; limit?: number }) {
   return useQuery({
     queryKey: ['admins', params],
     queryFn: async () => {
-      const res = await api.get('/admin', { params })
+      // The page slices client-side, so it needs the whole staff list, not
+      // the server's default first 50 — otherwise a bigger page size just
+      // pages through rows that were never fetched.
+      const res = await api.get('/admin', { params: { limit: 1000, ...params } })
       return (res.data.data.admins || []).map(mapAdminToStaffMember) as StaffMember[]
     },
   })

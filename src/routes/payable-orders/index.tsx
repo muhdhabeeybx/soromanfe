@@ -35,7 +35,7 @@ function PendingOrdersPage() {
   /** Orders the wallet already covers vs. ones still short — the two piles a desk works differently. */
   const [coverFilter, setCoverFilter] = useState<'' | 'covered' | 'short'>('')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
   const [confirmingOrder, setConfirmingOrder] = useState<any | null>(null)
 
   // Every unpaid order awaiting a decision, not just the ones already fully

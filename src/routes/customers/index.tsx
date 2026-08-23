@@ -40,7 +40,7 @@ function CustomerDashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
 
   const POLL_INTERVAL = 30_000
   const { data, isLoading, isError, error, refetch } = useCustomerList({

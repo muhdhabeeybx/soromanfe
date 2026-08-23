@@ -3,11 +3,12 @@ import api from '#/lib/api/http'
 import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
 
-export function useDriverList(params?: { search?: string; status?: string }) {
+export function useDriverList(params?: { search?: string; status?: string; limit?: number }) {
   return useQuery({
     queryKey: ['drivers', params],
     queryFn: async () => {
-      const res = await api.get('/drivers', { params })
+      // Sliced client-side — fetch the book, not the server's first page.
+      const res = await api.get('/drivers', { params: { limit: 1000, ...params } })
       return res.data.data
     },
   })

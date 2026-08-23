@@ -65,7 +65,7 @@ function LicenceVerification() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(1000)
 
   const [previewLicense, setPreviewLicense] = useState<CustomerLicense | null>(null)
 

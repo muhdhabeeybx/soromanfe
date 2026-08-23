@@ -45,7 +45,7 @@ function DepositsDashboard() {
   const [filterType, setFilterType] = useState<'all' | 'manual' | 'paystack'>('all')
   const [timeFilter, setTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
   const [showTransfer, setShowTransfer] = useState(false)
 
   const POLL_INTERVAL = 30_000

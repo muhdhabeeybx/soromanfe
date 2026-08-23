@@ -18,7 +18,10 @@ export function Pagination({
   totalItems,
   onPageChange,
   onPageSizeChange,
-  pageSizeOptions = [5, 10, 20, 50, 100],
+  // Whole-book first: these lists are worked through, not browsed, and
+  // clicking ten pages to find one row was the complaint. 1000 matches the
+  // server's own per-request ceiling (schemas/fields.js).
+  pageSizeOptions = [100, 250, 500, 1000],
 }: PaginationProps) {
   const startItem = totalItems > 0 ? (currentPage - 1) * pageSize + 1 : 0
   const endItem = Math.min(currentPage * pageSize, totalItems)

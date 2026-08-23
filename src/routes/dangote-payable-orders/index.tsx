@@ -28,7 +28,7 @@ function PayableDangoteOrdersPage() {
   const navigate = useNavigate()
   const [searchTerm, setSearchTerm] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(1000)
   const [payingId, setPayingId] = useState<number | null>(null)
 
   const { data: orders = [], isLoading, isError, error, refetch } = usePayableDangoteOrders()
