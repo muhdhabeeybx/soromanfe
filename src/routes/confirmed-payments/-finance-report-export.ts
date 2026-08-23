@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import {
-  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, orderPaidInto, orderCompany,
+  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount, orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
 
@@ -61,40 +61,45 @@ export interface PfiStockRow {
   revenue: number
 }
 
-// The definitive column set — the on-screen table (confirmed-payments/index.tsx)
-// mirrors this exactly, same order, same set, so what's on screen is always
-// what comes out of the export. Everything up to and including "Paid Into" is
-// order-level (Paid Into is the order's own virtual account, an order fact).
-// Depositor / Payer through Recorded By is the payment-source group: only
-// ever filled in on a sub-row underneath the order, one per deposit that
-// funded it. "Amount Paid" is the one column both row kinds fill in — a
-// sub-row's amount is exactly as much of an "amount" as the order row's
-// total is.
-const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string }> = [
-  { header: 'S/N', key: 'sn', width: 6 },
-  { header: 'Date', key: 'date', width: 13 },
-  { header: 'Order Reference', key: 'ref', width: 18 },
-  { header: 'Customer', key: 'customer', width: 24 },
-  { header: 'Company', key: 'company', width: 22 },
-  { header: 'Qty (Litres)', key: 'qty', width: 14, fmt: QTY },
-  { header: 'Product', key: 'product', width: 14 },
-  { header: 'Rate', key: 'rate', width: 14, fmt: NGN },
-  { header: 'Sales Value', key: 'salesValue', width: 16, fmt: NGN },
-  { header: 'Location', key: 'location', width: 20 },
-  { header: 'Payment Date', key: 'paymentDate', width: 13 },
-  { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN },
-  { header: 'Paid Into', key: 'paidInto', width: 38 },
-  { header: 'Depositor / Payer', key: 'depositor', width: 22 },
-  { header: 'Deposit Reference', key: 'depositRef', width: 20 },
-  { header: 'Deposit Date', key: 'depositDate', width: 13 },
-  { header: 'Recorded By', key: 'recordedBy', width: 18 },
+/**
+ * The definitive column set — the on-screen table
+ * (confirmed-payments/index.tsx) mirrors this exactly, same order, same set,
+ * so what's on screen is always what comes out of the export.
+ *
+ * Each column declares which row kind fills it in: an order row carries the
+ * order's own facts, a funding sub-row underneath it carries one payment.
+ * `scope` is what drives the blank cells on both sides, rather than the
+ * index arithmetic this used to do — that assumed the two groups were each
+ * contiguous, which stopped being true once Paid Into landed between the
+ * payment columns and Recorded By.
+ *
+ * "Amount Paid" is deliberately funding-only. The order row leaves it empty
+ * so the column reads as a list of the actual payments received, with Sales
+ * Value alongside as what was owed — the differential between the two being
+ * the thing this report exists to show.
+ */
+type ColumnScope = 'order' | 'funding'
+const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string; scope: ColumnScope }> = [
+  { header: 'S/N', key: 'sn', width: 6, scope: 'order' },
+  { header: 'Date', key: 'date', width: 13, scope: 'order' },
+  { header: 'Order Reference', key: 'ref', width: 18, scope: 'order' },
+  { header: 'PFI', key: 'pfi', width: 14, scope: 'order' },
+  { header: 'Customer', key: 'customer', width: 24, scope: 'order' },
+  { header: 'Company', key: 'company', width: 22, scope: 'order' },
+  { header: 'Qty (Litres)', key: 'qty', width: 14, fmt: QTY, scope: 'order' },
+  { header: 'Product', key: 'product', width: 14, scope: 'order' },
+  { header: 'Rate', key: 'rate', width: 14, fmt: NGN, scope: 'order' },
+  { header: 'Sales Value', key: 'salesValue', width: 16, fmt: NGN, scope: 'order' },
+  { header: 'Deposit Date', key: 'depositDate', width: 13, scope: 'funding' },
+  { header: 'Depositor / Payer', key: 'depositor', width: 22, scope: 'funding' },
+  { header: 'Deposit Reference', key: 'depositRef', width: 20, scope: 'funding' },
+  { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
+  { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
+  { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
-/** Columns before this index (0-based) belong to the order row; this one on is payment-source only. */
-export const FIRST_FUNDING_COLUMN_INDEX = COLUMNS.findIndex((c) => c.key === 'depositor')
-/** The one column both an order row and a funding sub-row fill in. */
-export const SHARED_AMOUNT_COLUMN_INDEX = COLUMNS.findIndex((c) => c.key === 'amount')
-/** Order-only columns sitting between Amount and the payment-source group — blank on a sub-row, no colSpan needed since they're each their own cell. */
-export const MIDDLE_BLANKS_AFTER_AMOUNT = FIRST_FUNDING_COLUMN_INDEX - SHARED_AMOUNT_COLUMN_INDEX - 1
+
+/** The columns, in order, with whether each is filled on an order row or a funding sub-row. */
+export const REPORT_COLUMNS = COLUMNS.map((c) => ({ header: c.header, key: c.key, scope: c.scope }))
 export const TOTAL_COLUMN_COUNT = COLUMNS.length
 
 /** Exported text reads upper-cased throughout — the on-screen table doesn't. */
@@ -108,17 +113,15 @@ function rowValues(o: FinanceReportOrder, i: number) {
     sn: i + 1,
     date: o.createdAt ? new Date(o.createdAt) : null,
     ref: up(o.reference),
+    pfi: up(o.pfiNumber || '—'),
     customer: up(o.customerName || 'Unknown'),
-    // Blank, not a dash, when the customer has no company saved — see
-    // orderCompany on why this never falls back to the order's own field.
+    // Blank, not a dash, when neither the order nor the customer names one —
+    // see orderCompany for which of the two wins.
     company: company ? up(company) : '',
     qty,
     product: up(o.productName || '—'),
     rate,
     salesValue: rate * qty,
-    location: up(o.depotName || '—'),
-    paymentDate: o.paymentConfirmedAt ? new Date(o.paymentConfirmedAt) : null,
-    amount: Number(o.totalAmount || 0),
     paidInto: up(orderPaidInto(o) || '—'),
   }
 }
@@ -143,7 +146,9 @@ function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
 /** A funding sub-row — no order details repeated, just where that money came from. */
 function fundingRowValues(f: OrderFunding) {
   return {
-    amount: Number(f.amount || 0),
+    // The payment as it actually arrived, not the slice attributed to this
+    // order — see fundingAmount.
+    amount: fundingAmount(f),
     depositor: up(fundingDepositor(f) || '—'),
     depositRef: up(fundingReference(f) || '—'),
     // When the money landed per the bank statement, not when the deposit row
@@ -300,7 +305,6 @@ export async function exportFinanceReportExcel(
       if (c.fmt) cell.numFmt = c.fmt
     }
     if (row.getCell('date').value) row.getCell('date').numFmt = 'dd/mm/yyyy'
-    if (row.getCell('paymentDate').value) row.getCell('paymentDate').numFmt = 'dd/mm/yyyy'
     cursor++
 
     if (o.fundingTracked) {
@@ -444,44 +448,44 @@ export async function exportFinanceReportPdf(
     cursorY += 5
   }
 
-  // How many blank cells surround the shared "Amount" column on each row
-  // kind — all derived from COLUMNS itself so none of this drifts out of
-  // sync with the header if a column is ever added or reordered.
-  const leadingBlanksForFunding = SHARED_AMOUNT_COLUMN_INDEX
-  const trailingBlanksForOrder = COLUMNS.length - FIRST_FUNDING_COLUMN_INDEX
+  // Each row is laid out by walking COLUMNS and asking each one whether this
+  // row kind fills it — so a column can be added, moved, or switched between
+  // order and funding scope without any index arithmetic here needing to
+  // follow it.
+  const cellsFor = (scope: ColumnScope, values: Record<string, string | number>) =>
+    COLUMNS.map((c) => (c.scope === scope ? (values[c.key] ?? '') : ''))
 
   const body: (string | number)[][] = []
   rows.forEach((o, i) => {
     const v = rowValues(o, i)
-    body.push([
-      v.sn,
-      v.date ? format(v.date, 'dd/MM/yyyy') : '—',
-      v.ref,
-      v.customer,
-      v.company,
-      v.qty.toLocaleString(),
-      v.product,
-      naira(v.rate),
-      naira(v.salesValue),
-      v.location,
-      v.paymentDate ? format(v.paymentDate, 'dd/MM/yyyy') : '—',
-      naira(v.amount),
-      v.paidInto,
-      ...Array(trailingBlanksForOrder).fill(''),
-    ])
+    body.push(
+      cellsFor('order', {
+        sn: v.sn,
+        date: v.date ? format(v.date, 'dd/MM/yyyy') : '—',
+        ref: v.ref,
+        pfi: v.pfi,
+        customer: v.customer,
+        company: v.company,
+        qty: v.qty.toLocaleString(),
+        product: v.product,
+        rate: naira(v.rate),
+        salesValue: naira(v.salesValue),
+        paidInto: v.paidInto,
+      }),
+    )
 
     if (o.fundingTracked) {
       for (const f of o.funding) {
         const fv = fundingRowValues(f)
-        body.push([
-          ...Array(leadingBlanksForFunding).fill(''),
-          naira(fv.amount),
-          ...Array(MIDDLE_BLANKS_AFTER_AMOUNT).fill(''),
-          fv.depositor,
-          fv.depositRef,
-          fv.depositDate ? format(fv.depositDate, 'dd/MM/yyyy') : '—',
-          fv.recordedBy,
-        ])
+        body.push(
+          cellsFor('funding', {
+            depositDate: fv.depositDate ? format(fv.depositDate, 'dd/MM/yyyy') : '—',
+            depositor: fv.depositor,
+            depositRef: fv.depositRef,
+            amount: naira(fv.amount),
+            recordedBy: fv.recordedBy,
+          }),
+        )
       }
     }
   })

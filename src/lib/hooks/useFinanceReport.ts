@@ -9,7 +9,10 @@ export type { PaystackDetails }
 /** One credit deposit that contributed to an order's payment. */
 export interface OrderFunding {
   depositId: number
+  /** The slice of the deposit FIFO attributed to this order — not what landed. */
   amount: string | number
+  /** What the payment actually was, before any split across orders or surplus to wallet. */
+  depositAmount?: string | number | null
   depositReference: string | null
   depositCreatedAt: string | null
   paystackDetails: PaystackDetails | null
@@ -175,6 +178,20 @@ function internalSource(f: OrderFunding): string {
     return `${f.transferFromCustomerName} (wallet transfer)`
   }
   return (f.depositDescription || '').trim()
+}
+
+/**
+ * What this payment actually was — the deposit's own amount, not the slice
+ * of it FIFO attributed to this order.
+ *
+ * The two differ whenever one payment covered several orders, or part of it
+ * went to the wallet as surplus. Showing the attributed slice nets those
+ * movements away silently, so a row could read less than the money that
+ * genuinely arrived; showing the real figure leaves the differential against
+ * sales value visible, which is the point of the column.
+ */
+export function fundingAmount(f: OrderFunding): number {
+  return Number(f.depositAmount ?? f.amount ?? 0)
 }
 
 /**

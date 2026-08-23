@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
-  FileSpreadsheet, ArrowRight, Trash2, RefreshCw, Unlink,
+  FileSpreadsheet, ArrowRight, RefreshCw, Unlink,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -27,28 +27,23 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference,
+  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { RematchFundingDialog } from '#/components/RematchFundingDialog'
-import { useDeleteOrder } from '#/lib/hooks/useOrders'
 import { useUnmatchDeposit } from '#/lib/hooks/useDeposits'
-import { useRoles } from '#/lib/hooks/useRoles'
 import {
-  exportFinanceReportExcel, exportFinanceReportPdf,
-  FIRST_FUNDING_COLUMN_INDEX, SHARED_AMOUNT_COLUMN_INDEX, MIDDLE_BLANKS_AFTER_AMOUNT, TOTAL_COLUMN_COUNT,
+  exportFinanceReportExcel, exportFinanceReportPdf, REPORT_COLUMNS,
   type FinanceReportFilters, type FinanceReportSummary, type PfiStockRow,
 } from './-finance-report-export'
 
-// The screen table mirrors the export's column set exactly (see COLUMNS in
-// -finance-report-export.ts) — these derived counts are what make the
-// funding sub-row's blank cells land under the right headers without a
-// magic number to keep in sync by hand.
-const LEADING_BLANKS_FOR_FUNDING_ROW = SHARED_AMOUNT_COLUMN_INDEX
-const TRAILING_BLANKS_FOR_ORDER_ROW = TOTAL_COLUMN_COUNT - FIRST_FUNDING_COLUMN_INDEX
+// Which columns render right-aligned — the numeric ones. Everything else
+// about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
+// -finance-report-export.ts), so the screen and the exports cannot drift.
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -276,13 +271,10 @@ function FinanceReportPage() {
   const [pfiId, setPfiId] = useState(ALL)
   const [productId, setProductId] = useState(ALL)
   const [viewing, setViewing] = useState<FinanceReportOrder | null>(null)
-  const [deleting, setDeleting] = useState<FinanceReportOrder | null>(null)
   const [rematching, setRematching] = useState<FinanceReportOrder | null>(null)
   const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; funding: OrderFunding } | null>(null)
   const unmatchDeposit = useUnmatchDeposit()
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
-  const { isSuperAdmin: canDelete } = useRoles()
-  const deleteOrderMutation = useDeleteOrder()
 
   const range = useMemo(
     () => resolveRange(datePreset, { from: customDate ? new Date(customDate) : undefined }),
@@ -342,11 +334,33 @@ function FinanceReportPage() {
     [rows],
   )
 
+  // The money actually received — the same deposit figures the Amount Paid
+  // column lists, not the orders' own totals, which are what was owed and
+  // already shown as Sales Value.
+  //
+  // Counted once per deposit, because one payment can cover several orders
+  // and is shown in full under each of them. Adding the rows up as displayed
+  // would count that payment twice (~₦125m over a single week of live data),
+  // so the column reads as what genuinely arrived while the total still
+  // reconciles to the bank.
+  const totalAmountPaid = useMemo(() => {
+    const seen = new Set<number>()
+    let sum = 0
+    for (const o of rows) {
+      for (const f of o.funding) {
+        if (seen.has(f.depositId)) continue
+        seen.add(f.depositId)
+        sum += fundingAmount(f)
+      }
+    }
+    return sum
+  }, [rows])
+
   const summary: FinanceReportSummary = {
     count: totals?.count ?? 0,
     totalQuantity: totals?.totalQuantity ?? 0,
     totalSalesValue,
-    totalAmountPaid: totals?.totalAmount ?? 0,
+    totalAmountPaid,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
   }
@@ -640,85 +654,83 @@ function FinanceReportPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">S/N</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Order Reference</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Company</TableHead>
-                  <TableHead className="text-right">Qty (Litres)</TableHead>
-                  <TableHead>Product</TableHead>
-                  <TableHead className="text-right">Rate</TableHead>
-                  <TableHead className="text-right">Sales Value</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Payment Date</TableHead>
-                  <TableHead className="text-right">Amount Paid</TableHead>
-                  <TableHead>Paid Into</TableHead>
-                  <TableHead>Depositor / Payer</TableHead>
-                  <TableHead>Deposit Reference</TableHead>
-                  <TableHead>Deposit Date</TableHead>
-                  <TableHead>Recorded By</TableHead>
-                  {canDelete && <TableHead className="text-right">Delete</TableHead>}
+                  {REPORT_COLUMNS.map((c) => (
+                    <TableHead
+                      key={c.key}
+                      className={cn(
+                        c.key === 'sn' && 'w-10',
+                        NUMERIC_COLUMNS.has(c.key) && 'text-right',
+                      )}
+                    >
+                      {c.header}
+                    </TableHead>
+                  ))}
+                  {/* Delete column commented out. Deleting an order is still
+                      available from the Orders page; a destructive control in
+                      a report people scan all day is more hazard than help.
+                      The dialog that went with it is commented out below —
+                      restore the two together. */}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((o, i) => {
                   const salesValue = Number(o.price) * Number(o.quantity || 0)
                   const company = orderCompany(o)
-                  return (
-                  <Fragment key={o.id}>
-                    <TableRow className="cursor-pointer" onClick={() => setViewing(o)}>
-                      <TableCell className="text-muted-foreground">{i + 1}</TableCell>
-                      <TableCell className="whitespace-nowrap text-muted-foreground">
+                  // Keyed by column so the cells follow REPORT_COLUMNS wherever
+                  // it puts them — the order row fills the order columns, the
+                  // funding sub-rows below fill the rest, and neither needs to
+                  // know the other's positions.
+                  const orderCells: Record<string, React.ReactNode> = {
+                    sn: <span className="text-muted-foreground">{i + 1}</span>,
+                    date: (
+                      <span className="whitespace-nowrap text-muted-foreground">
                         {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs font-semibold whitespace-nowrap">{o.reference}</TableCell>
-                      <TableCell className="max-w-[10rem] truncate font-medium">{o.customerName || '—'}</TableCell>
-                      {/* Blank, not a dash, when the customer has no company
-                          saved — never the order's own typed-in company. */}
-                      <TableCell className="max-w-[10rem] truncate text-muted-foreground">{company}</TableCell>
-                      <TableCell className="text-right font-medium whitespace-nowrap">{Number(o.quantity || 0).toLocaleString()}</TableCell>
-                      <TableCell className="text-muted-foreground">{o.productName || '—'}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{naira(Number(o.price))}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap font-medium">{naira(salesValue)}</TableCell>
-                      <TableCell className="max-w-[10rem] truncate text-muted-foreground">{o.depotName || '—'}</TableCell>
-                      <TableCell className="whitespace-nowrap text-muted-foreground">
-                        {o.paymentConfirmedAt ? format(new Date(o.paymentConfirmedAt), 'd MMM yyyy') : '—'}
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap font-semibold">{naira(Number(o.totalAmount))}</TableCell>
-                      <TableCell className="max-w-[16rem] truncate text-muted-foreground">{orderPaidInto(o) || '—'}</TableCell>
-                      {Array.from({ length: TRAILING_BLANKS_FOR_ORDER_ROW }).map((_, blankIdx) => (
-                        <TableCell key={blankIdx} />
-                      ))}
-                      {canDelete && (
-                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="ghost" size="icon-sm"
-                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => setDeleting(o)}
-                          >
-                            <Trash2 />
-                            <span className="sr-only">Delete {o.reference}</span>
-                          </Button>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                    {o.fundingTracked && o.funding.map((f) => (
-                      <TableRow key={`${o.id}-funding-${f.depositId}`} className="bg-muted/20 hover:bg-muted/30">
-                        <TableCell colSpan={LEADING_BLANKS_FOR_FUNDING_ROW} />
-                        <TableCell className="text-right whitespace-nowrap">{naira(Number(f.amount))}</TableCell>
-                        {Array.from({ length: MIDDLE_BLANKS_AFTER_AMOUNT }).map((_, blankIdx) => (
-                          <TableCell key={blankIdx} />
+                      </span>
+                    ),
+                    ref: <span className="font-mono text-xs font-semibold whitespace-nowrap">{o.reference}</span>,
+                    pfi: <span className="whitespace-nowrap font-medium">{o.pfiNumber || '—'}</span>,
+                    customer: <span className="block max-w-[10rem] truncate font-medium">{o.customerName || '—'}</span>,
+                    company: <span className="block max-w-[10rem] truncate text-muted-foreground">{company}</span>,
+                    qty: <span className="whitespace-nowrap font-medium">{Number(o.quantity || 0).toLocaleString()}</span>,
+                    product: <span className="text-muted-foreground">{o.productName || '—'}</span>,
+                    rate: <span className="whitespace-nowrap">{naira(Number(o.price))}</span>,
+                    salesValue: <span className="whitespace-nowrap font-semibold">{naira(salesValue)}</span>,
+                    paidInto: <span className="block max-w-[16rem] truncate text-muted-foreground">{orderPaidInto(o) || '—'}</span>,
+                  }
+                  return (
+                    <Fragment key={o.id}>
+                      <TableRow className="cursor-pointer" onClick={() => setViewing(o)}>
+                        {REPORT_COLUMNS.map((c) => (
+                          <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                            {c.scope === 'order' ? orderCells[c.key] : null}
+                          </TableCell>
                         ))}
-                        <TableCell className="max-w-[10rem] truncate">{fundingDepositor(f) || '—'}</TableCell>
-                        <TableCell className="max-w-[10rem] truncate">{fundingReference(f) || '—'}</TableCell>
-                        <TableCell className="whitespace-nowrap text-muted-foreground">
-                          {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
-                        </TableCell>
-                        <TableCell className="max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</TableCell>
-                        {canDelete && <TableCell />}
                       </TableRow>
-                    ))}
-                  </Fragment>
+                      {o.fundingTracked && o.funding.map((f) => {
+                        const fundingCells: Record<string, React.ReactNode> = {
+                          depositDate: (
+                            <span className="whitespace-nowrap text-muted-foreground">
+                              {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
+                            </span>
+                          ),
+                          depositor: <span className="block max-w-[12rem] truncate">{fundingDepositor(f) || '—'}</span>,
+                          depositRef: <span className="block max-w-[10rem] truncate">{fundingReference(f) || '—'}</span>,
+                          // What actually landed, not the slice attributed to
+                          // this order — see fundingAmount.
+                          amount: <span className="whitespace-nowrap font-semibold">{naira(fundingAmount(f))}</span>,
+                          recordedBy: <span className="block max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</span>,
+                        }
+                        return (
+                          <TableRow key={`${o.id}-funding-${f.depositId}`} className="bg-muted/20 hover:bg-muted/30">
+                            {REPORT_COLUMNS.map((c) => (
+                              <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                                {c.scope === 'funding' ? fundingCells[c.key] : null}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        )
+                      })}
+                    </Fragment>
                   )
                 })}
               </TableBody>
@@ -793,9 +805,8 @@ function FinanceReportPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Names what goes with it — the same delete the Orders page offers,
-          reachable here too since this is often where a mistaken payment is
-          first noticed. */}
+{/* Delete dialog — commented out with the Delete column above; the
+          column was its only trigger. Restore both together.
       <Dialog open={deleting != null} onOpenChange={(open) => !open && setDeleting(null)}>
         <DialogContent>
           <DialogHeader>
@@ -821,7 +832,7 @@ function FinanceReportPage() {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> */}
     </div>
   )
 }
