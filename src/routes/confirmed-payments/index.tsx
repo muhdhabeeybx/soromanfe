@@ -27,7 +27,7 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt,
+  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference,
   orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
@@ -155,7 +155,7 @@ function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?
             />
           </>
         )}
-        <Row label="Deposit reference" value={funding.depositReference} icon={Hash} />
+        <Row label="Deposit reference" value={fundingReference(funding)} icon={Hash} />
         <Row label="Recorded by" value={recorder} icon={User} />
       </div>
     </div>
@@ -710,7 +710,7 @@ function FinanceReportPage() {
                           <TableCell key={blankIdx} />
                         ))}
                         <TableCell className="max-w-[10rem] truncate">{fundingDepositor(f) || '—'}</TableCell>
-                        <TableCell className="max-w-[10rem] truncate">{f.depositReference || '—'}</TableCell>
+                        <TableCell className="max-w-[10rem] truncate">{fundingReference(f) || '—'}</TableCell>
                         <TableCell className="whitespace-nowrap text-muted-foreground">
                           {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
                         </TableCell>

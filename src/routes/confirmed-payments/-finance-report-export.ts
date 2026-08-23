@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import {
-  fundingRecorder, fundingDepositor, fundingPaidAt, orderPaidInto, orderCompany,
+  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
 
@@ -145,7 +145,7 @@ function fundingRowValues(f: OrderFunding) {
   return {
     amount: Number(f.amount || 0),
     depositor: up(fundingDepositor(f) || '—'),
-    depositRef: up(f.depositReference || '—'),
+    depositRef: up(fundingReference(f) || '—'),
     // When the money landed per the bank statement, not when the deposit row
     // happened to be keyed in — those differ by days on a back-dated match.
     depositDate: fundingPaidAt(f) ? new Date(String(fundingPaidAt(f))) : null,

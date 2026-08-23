@@ -19,6 +19,10 @@ export interface OrderFunding {
   statementDepositor?: string | null
   /** Value date on the matched bank statement line — when the money actually landed. */
   statementTxnDate?: string | null
+  /** The deposit's own description — the only record of source for an internal wallet movement. */
+  depositDescription?: string | null
+  /** Customer the money came from, resolved from a "customer #N" in the description. */
+  transferFromCustomerName?: string | null
 }
 
 export interface FinanceReportOrder {
@@ -29,6 +33,8 @@ export interface FinanceReportOrder {
   customerName?: string | null
   customerEmail?: string | null
   customerPhone?: string | null
+  /** The company recorded on the order itself — what the report shows. */
+  companyName?: string | null
   customerCompanyName?: string | null
   customerVirtualAccountNumber?: string | null
   customerVirtualAccountBank?: string | null
@@ -147,7 +153,38 @@ export function fundingRecorder(f: OrderFunding): string {
  */
 export function fundingDepositor(f: OrderFunding): string {
   const ps = (f.paystackDetails || {}) as Record<string, any>
-  return f.statementDepositor || ps.senderName || ps.depositorName || ''
+  return f.statementDepositor || ps.senderName || ps.depositorName || internalSource(f)
+}
+
+/**
+ * Where an internal wallet movement came from, when no bank paid it in.
+ *
+ * A transfer between customers and an overpayment carried over from another
+ * order both land as a deposit with no statement line and no reference, so
+ * the report showed a bare dash in both the payer and reference columns —
+ * looking like missing data when the source was in fact recorded, just only
+ * ever in the free-text description.
+ *
+ * Two shapes appear there: "Wallet transfer from customer #1533", whose id
+ * the server resolves to a name, and a typed note naming the order the
+ * surplus came off ("Overpayment received from order #11169"). The first is
+ * rewritten to read as a name; the second is already legible as written.
+ */
+function internalSource(f: OrderFunding): string {
+  if (f.transferFromCustomerName && /from customer #/i.test(f.depositDescription || '')) {
+    return `${f.transferFromCustomerName} (wallet transfer)`
+  }
+  return (f.depositDescription || '').trim()
+}
+
+/**
+ * What to show in the reference column. An internal movement has no bank
+ * reference to show — it is named for what it is rather than left blank, so
+ * an empty cell always means genuinely unknown.
+ */
+export function fundingReference(f: OrderFunding): string {
+  if (f.depositReference) return f.depositReference
+  return internalSource(f) ? 'Internal transfer' : ''
 }
 
 /**
@@ -190,15 +227,16 @@ export function orderPaidInto(o: {
 }
 
 /**
- * The company on the row.
+ * The company on the row — the one recorded on the order itself.
  *
- * Deliberately the customer's own saved company, never orders.companyName —
- * that one is typed at the point of order and drifts from the customer
- * record ("NNPC Retail" against a saved "NNPC"). A customer with no company
- * saved reads blank rather than borrowing whatever was typed that day.
+ * This is the order-time value, not the customer's saved company: an order
+ * is often placed on behalf of a specific company that isn't the one on the
+ * customer record, and the report is a record of what was actually
+ * transacted. Falls back to the customer's saved company only when the order
+ * carries none of its own.
  */
-export function orderCompany(o: { customerCompanyName?: string | null }): string {
-  return (o.customerCompanyName || '').trim()
+export function orderCompany(o: { companyName?: string | null; customerCompanyName?: string | null }): string {
+  return (o.companyName || o.customerCompanyName || '').trim()
 }
 
 /**
