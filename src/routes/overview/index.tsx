@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { PageHeader } from '#/components/PageHeader'
+import { PageError } from '#/components/PageError'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
-import { StatusChip, LiveDot } from '#/components/ui/status-chip'
+import { StatusChip } from '#/components/ui/status-chip'
 import { HoverArrowLink } from '#/components/ui/hover-arrow-link'
 import { Skeleton } from '#/components/ui/skeleton'
-import { PeriodFilter, type Period } from '#/components/overview/PeriodFilter'
+import { PeriodFilter, PERIOD_LABELS, type Period } from '#/components/overview/PeriodFilter'
 import { RevenueTrendChart } from '#/components/overview/RevenueTrendChart'
-import { OrderStatusChart } from '#/components/overview/OrderStatusChart'
-import { FleetUtilizationChart } from '#/components/overview/FleetUtilizationChart'
 import { ActivityFeed } from '#/components/overview/ActivityFeed'
 import { useDashboardOverview } from '#/lib/hooks/useDashboard'
 import { useAuthStore } from '#/modules/auth'
@@ -28,7 +27,6 @@ import {
   ShoppingCart,
   Users,
   Truck,
-  AlertTriangle,
   Package,
   Flame,
 } from 'lucide-react'
@@ -48,34 +46,81 @@ function PanelSkeleton() {
   )
 }
 
+/**
+ * The skeleton mirrors the loaded page exactly — four tiles in the same two
+ * columns, then the same run of panels. It used to show five tiles across four
+ * columns and stop after the first panel row, so the whole page reflowed under
+ * the reader the moment the request landed.
+ *
+ * The tiles carry no description line because none of the live cards do.
+ */
+function OverviewSkeleton() {
+  return (
+    <>
+      <StatCardGrid count={2}>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className={cn(PANEL, 'p-4')}>
+            <Skeleton className="mb-2 h-10 w-10 rounded-2xl" />
+            <Skeleton className="mt-5 h-3 w-20" />
+            <Skeleton className="mt-2 h-8 w-28" />
+          </div>
+        ))}
+      </StatCardGrid>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <PanelSkeleton />
+        <PanelSkeleton />
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <PanelSkeleton />
+        <PanelSkeleton />
+      </div>
+      <PanelSkeleton />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <PanelSkeleton />
+        <PanelSkeleton />
+      </div>
+      <PanelSkeleton />
+    </>
+  )
+}
+
 function OverviewDashboard() {
   const [period, setPeriod] = useState<Period>('month')
-  const { data, isLoading } = useDashboardOverview(period)
+  const { data, isLoading, isError, error, refetch } = useDashboardOverview(period)
   const user = useAuthStore((s) => s.user)
+
+  // Named off the filter rather than the response, so the sentence under the
+  // title is already right while the request is still in flight.
+  const periodLabel = PERIOD_LABELS[period].toLowerCase()
+
+  const header = (
+    <PageHeader
+      eyebrow="Overview"
+      title="Dashboard"
+      description={`Welcome back, ${user?.firstName || 'Admin'}. Here's what's happening ${periodLabel}.`}
+      actions={<PeriodFilter value={period} onChange={setPeriod} />}
+    />
+  )
 
   if (isLoading) {
     return (
       <div className="animate-fade-in space-y-6">
-        <PageHeader
-          eyebrow="Overview"
-          title="Dashboard"
-          description={`Welcome back, ${user?.firstName || 'Admin'}.`}
-          actions={<PeriodFilter value={period} onChange={setPeriod} />}
+        {header}
+        <OverviewSkeleton />
+      </div>
+    )
+  }
+
+  // Every figure on this page falls back to zero, so without this a failed
+  // request renders as a calm dashboard reporting no revenue and no orders.
+  if (isError) {
+    return (
+      <div className="animate-fade-in space-y-6">
+        {header}
+        <PageError
+          message={(error as Error)?.message || 'Could not load the dashboard.'}
+          onRetry={() => refetch()}
         />
-        <StatCardGrid count={5}>
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className={cn(PANEL, 'p-4')}>
-              <Skeleton className="mb-2 h-10 w-10 rounded-2xl" />
-              <Skeleton className="mt-5 h-3 w-20" />
-              <Skeleton className="mt-2 h-8 w-28" />
-              <Skeleton className="mt-2 h-3 w-24" />
-            </div>
-          ))}
-        </StatCardGrid>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <PanelSkeleton />
-          <PanelSkeleton />
-        </div>
       </div>
     )
   }
@@ -86,10 +131,8 @@ function OverviewDashboard() {
   const pfi = data?.pfi || { byStatus: [] }
   const outstanding = data?.outstanding || { totalOutstanding: 0, customers: [] }
   const fleet = data?.fleet || { total: 0, inTransit: 0, idle: 0, maintenance: 0 }
-  const drv = data?.drivers || { total: 0, active: 0, onTrip: 0, offDuty: 0 }
   const cust = data?.customers || { total: 0, newThisPeriod: 0 }
   const trend = data?.revenueTrend || []
-  const orderStatus = data?.orderStatusBreakdown || []
   const activity = data?.recentActivity || []
   const depotLeaderboard = data?.depotLeaderboard || []
   const dangote = data?.dangote || { totalRequests: 0, totalValue: 0, paidValue: 0, byStatus: [] }
@@ -104,26 +147,9 @@ function OverviewDashboard() {
   const totalRemainingLitres = activePfis.reduce((sum: number, p: { remainingLitres?: number }) => sum + (p.remainingLitres || 0), 0)
   const totalPfiValue = activePfis.reduce((sum: number, p: { totalValue?: number }) => sum + Number(p.totalValue || 0), 0)
 
-  const fleetChartData = [
-    { name: 'In Transit', value: fleet.inTransit || 0, color: 'var(--chart-1)' },
-    { name: 'Idle', value: fleet.idle || 0, color: 'var(--chart-4)' },
-    { name: 'Maintenance', value: fleet.maintenance || 0, color: 'var(--destructive)' },
-  ]
-
-  const orderStatusData = orderStatus.map((s: { name: string; value: number }) => ({
-    name: s.name,
-    value: s.value,
-    color: '',
-  }))
-
   return (
     <div className="animate-fade-in space-y-6">
-      <PageHeader
-        eyebrow="Overview"
-        title="Dashboard"
-        description={`Welcome back, ${user?.firstName || 'Admin'}. Here's what's happening ${data?.period?.label?.toLowerCase() || 'this month'}.`}
-        actions={<PeriodFilter value={period} onChange={setPeriod} />}
-      />
+      {header}
 
       <StatCardGrid count={2}>
         <StatCard
@@ -151,7 +177,17 @@ function OverviewDashboard() {
           icon={<Truck />}
           label="Trucks Utilization"
           value={formatPercent(fleetUtilization)}
-          tone={fleetUtilization > 60 ? 'green' : fleetUtilization > 30 ? 'amber' : 'red'}
+          // With no trucks on the books there is nothing to be alarmed about,
+          // so an empty fleet reads neutral rather than red.
+          tone={
+            fleet.total === 0
+              ? 'neutral'
+              : fleetUtilization > 60
+                ? 'green'
+                : fleetUtilization > 30
+                  ? 'amber'
+                  : 'red'
+          }
           // description={`${fleet.inTransit || 0} of ${fleet.total} in use`}
         />
         {/* <StatCard
@@ -239,78 +275,6 @@ function OverviewDashboard() {
 
       </div>
 
-      {false && (
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={PANEL} aria-label="Financial summary">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Financial summary</span>
-          </div>
-          <div className="divide-y divide-foreground/10">
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total revenue</span>
-              <span className="text-sm font-semibold">{formatCurrency(combinedRevenue)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Order revenue</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.orders?.total || 0)}</span>
-            </div>
-            {/* <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Offline sales</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.offlineSales?.total || 0)}</span>
-            </div> */}
-            {/* <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Delivery payments</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.deliverySales?.paymentAmount || 0)}</span>
-            </div> */}
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Customer wallets</span>
-              <span className="text-sm font-semibold">{formatCurrency(Number(wallet.balances?.totalBalance || 0))}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Active holds</span>
-              <span className="text-sm font-semibold text-warning">{formatCurrency(Number(wallet.activeHolds?.totalHeld || 0))}</span>
-            </div>
-          </div>
-          <div className={cn(PANEL_FOOTER, 'justify-between')}>
-            <span className="text-xs text-muted-foreground">
-              Deposits: <span className="font-semibold text-foreground">{formatCurrency(Number(wallet.movement?.credits || 0))}</span>
-            </span>
-            <HoverArrowLink to={'/deposits' as any}>View deposits</HoverArrowLink>
-          </div>
-        </section>
-
-        {/* <section className={PANEL} aria-label="Fleet and operations">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Fleet &amp; Operations</span>
-            <StatusChip tone="accent" size="rail">
-              <LiveDot />
-              Live
-            </StatusChip>
-          </div>
-          <div className={PANEL_BODY}>
-            <FleetUtilizationChart data={fleetChartData} />
-          </div>
-          <div className="divide-y divide-foreground/10">
-            <div className="flex items-center justify-between px-6 py-3">
-              <span className="text-sm">Active drivers</span>
-              <span className="text-sm font-semibold text-accent">{drv.active}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3">
-              <span className="text-sm">On trip</span>
-              <span className="text-sm font-semibold text-warning">{drv.onTrip}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3">
-              <span className="text-sm">Off duty</span>
-              <span className="text-sm font-semibold text-muted-foreground">{drv.offDuty}</span>
-            </div>
-          </div>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
-            <HoverArrowLink to={'/fleet-trucks' as any}>View fleet</HoverArrowLink>
-          </div>
-        </section> */}
-      </div>
-      )}
-
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className={PANEL} aria-label="PFI and inventory">
           <div className={PANEL_RAIL}>
@@ -333,7 +297,7 @@ function OverviewDashboard() {
               <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
                 <span className="text-sm capitalize">{s.status} PFIs</span>
                 <span className="text-sm font-semibold">
-                  {s.pfiCount} &middot; {formatLitres(s.remainingLitres || 0)}
+                  {formatNumber(s.pfiCount)} &middot; {formatLitres(s.remainingLitres || 0)}
                 </span>
               </div>
             ))}
@@ -368,7 +332,9 @@ function OverviewDashboard() {
                 ))}
               </div>
               <div className={cn(PANEL_FOOTER, 'justify-end')}>
-                <HoverArrowLink to={'/delivery-sales' as any}>View all</HoverArrowLink>
+                {/* These figures are delivery sales netted off per customer, and
+                  the customer database is where they are carried. */}
+              <HoverArrowLink to={'/delivery-customer' as any}>View all</HoverArrowLink>
               </div>
             </>
           ) : (
@@ -429,14 +395,14 @@ function OverviewDashboard() {
             </span>
             {dangote.totalRequests > 0 && (
               <StatusChip tone="accent" size="rail">
-                {dangote.totalRequests} requests
+                {formatNumber(dangote.totalRequests)} requests
               </StatusChip>
             )}
           </div>
           <div className="divide-y divide-foreground/10">
             <div className="flex items-center justify-between px-6 py-3.5">
               <span className="text-sm">Total requests</span>
-              <span className="text-sm font-semibold">{dangote.totalRequests}</span>
+              <span className="text-sm font-semibold">{formatNumber(dangote.totalRequests)}</span>
             </div>
             <div className="flex items-center justify-between px-6 py-3.5">
               <span className="text-sm">Total value</span>
@@ -450,7 +416,7 @@ function OverviewDashboard() {
               <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
                 <span className="text-sm">{s.status}</span>
                 <span className="text-sm font-semibold">
-                  {s.count} &middot; {formatCurrency(Number(s.total))}
+                  {formatNumber(s.count)} &middot; {formatCurrency(Number(s.total))}
                 </span>
               </div>
             ))}
@@ -468,14 +434,14 @@ function OverviewDashboard() {
             </span>
             {lpg.totalOrders > 0 && (
               <StatusChip tone="accent" size="rail">
-                {lpg.totalOrders} orders
+                {formatNumber(lpg.totalOrders)} orders
               </StatusChip>
             )}
           </div>
           <div className="divide-y divide-foreground/10">
             <div className="flex items-center justify-between px-6 py-3.5">
               <span className="text-sm">Total orders</span>
-              <span className="text-sm font-semibold">{lpg.totalOrders}</span>
+              <span className="text-sm font-semibold">{formatNumber(lpg.totalOrders)}</span>
             </div>
             <div className="flex items-center justify-between px-6 py-3.5">
               <span className="text-sm">Total value</span>
@@ -495,7 +461,7 @@ function OverviewDashboard() {
               <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
                 <span className="text-sm">{s.status}</span>
                 <span className="text-sm font-semibold">
-                  {s.count} &middot; {formatCurrency(Number(s.total))}
+                  {formatNumber(s.count)} &middot; {formatCurrency(Number(s.total))}
                 </span>
               </div>
             ))}

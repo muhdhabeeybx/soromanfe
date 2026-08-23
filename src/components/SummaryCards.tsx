@@ -18,18 +18,12 @@ export type SummaryCard = {
  * brand mark carries it and the emerald shows up on every page. Pass an
  * explicit tone only when the figure genuinely means something.
  *
- * gridClassName replaces the count-driven column logic wholesale — the
- * overview uses it to force 2 x 2 instead of one wide row.
+ * Columns follow the card count. A page that wants a different shape — the
+ * overview's 2 x 2, for one — reaches for StatCardGrid directly.
  */
-export function SummaryCards({
-  cards,
-  gridClassName,
-}: {
-  cards: SummaryCard[]
-  gridClassName?: string
-}) {
+export function SummaryCards({ cards }: { cards: SummaryCard[] }) {
   return (
-    <StatCardGrid count={cards.length} className={gridClassName}>
+    <StatCardGrid count={cards.length}>
       {cards.map((c, idx) => (
         <StatCard
           key={`${c.title}-${idx}`}

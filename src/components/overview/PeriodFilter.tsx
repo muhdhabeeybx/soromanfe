@@ -10,6 +10,15 @@ const PERIODS = [
 
 export type Period = (typeof PERIODS)[number]['value']
 
+/**
+ * The same labels the buttons carry, keyed by value. Page copy reads these
+ * rather than waiting for the response to name the period, so a heading does
+ * not rewrite itself the moment the request lands.
+ */
+export const PERIOD_LABELS = Object.fromEntries(
+  PERIODS.map((p) => [p.value, p.label]),
+) as Record<Period, string>
+
 interface PeriodFilterProps {
   value: Period
   onChange: (period: Period) => void
