@@ -1,5 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '#/lib/api/http'
+import { useToast } from '#/lib/hooks/useToast'
+import { getErrorMessage } from '#/lib/utils'
 import type { PaystackDetails } from '#/lib/types'
 
 export type { PaystackDetails }
@@ -174,4 +176,37 @@ export function orderPaidInto(o: {
  */
 export function orderCompany(o: { customerCompanyName?: string | null }): string {
   return (o.customerCompanyName || '').trim()
+}
+
+/**
+ * Point a paid order at the statement line(s) that actually paid for it.
+ *
+ * The correction for a wrong match that could not be undone: a MATCHED line
+ * had no way back, so the report named the wrong payment for that order
+ * permanently. The replaced line returns to the unmatched pool, ready to be
+ * matched to the order it really belongs to.
+ */
+export function useRematchOrderFunding() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({
+      orderId, bankAccountId, lineIds, description,
+    }: {
+      orderId: number | string
+      bankAccountId: string | number
+      lineIds: number[]
+      description?: string
+    }) => (await api.post(`/orders/${orderId}/rematch-funding`, { bankAccountId, lineIds, description })).data,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['finance-report'] })
+      queryClient.invalidateQueries({ queryKey: ['deposits'] })
+      queryClient.invalidateQueries({ queryKey: ['customers'] })
+      queryClient.invalidateQueries({ queryKey: ['bank-statements'] })
+      toast.success(res?.message || 'Payment re-matched')
+    },
+    onError: (err: any) => toast.error(getErrorMessage(err)),
+  })
 }

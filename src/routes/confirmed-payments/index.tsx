@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
-  FileSpreadsheet, ArrowRight, Trash2,
+  FileSpreadsheet, ArrowRight, Trash2, RefreshCw,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -33,6 +33,7 @@ import {
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
+import { RematchFundingDialog } from '#/components/RematchFundingDialog'
 import { useDeleteOrder } from '#/lib/hooks/useOrders'
 import { useRoles } from '#/lib/hooks/useRoles'
 import {
@@ -147,7 +148,7 @@ function FundingCard({ funding }: { funding: OrderFunding }) {
   )
 }
 
-function OrderDetailDialog({ order, open, onOpenChange }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void }) {
+function OrderDetailDialog({ order, open, onOpenChange, onRematch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void }) {
   if (!order) return null
 
   return (
@@ -213,9 +214,17 @@ function OrderDetailDialog({ order, open, onOpenChange }: { order: FinanceReport
           </div>
 
           <div className="py-3 space-y-3">
-            <p className={cn(MICRO, 'text-muted-foreground')}>
-              Payment source{order.funding.length ? ` (${order.funding.length})` : ''}
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className={cn(MICRO, 'text-muted-foreground')}>
+                Payment source{order.funding.length ? ` (${order.funding.length})` : ''}
+              </p>
+              {order.paymentStatus === 'Paid' && onRematch && (
+                <Button variant="outline" size="sm" onClick={onRematch}>
+                  <RefreshCw data-icon="inline-start" />
+                  Re-match
+                </Button>
+              )}
+            </div>
             {!order.fundingTracked ? (
               <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
                 Payment source not tracked — this order was paid before detailed payment tracking began.
@@ -248,6 +257,7 @@ function FinanceReportPage() {
   const [productId, setProductId] = useState(ALL)
   const [viewing, setViewing] = useState<FinanceReportOrder | null>(null)
   const [deleting, setDeleting] = useState<FinanceReportOrder | null>(null)
+  const [rematching, setRematching] = useState<FinanceReportOrder | null>(null)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
   const { isSuperAdmin: canDelete } = useRoles()
   const deleteOrderMutation = useDeleteOrder()
@@ -695,7 +705,18 @@ function FinanceReportPage() {
         )}
       </div>
 
-      <OrderDetailDialog order={viewing} open={!!viewing} onOpenChange={(o) => !o && setViewing(null)} />
+      <OrderDetailDialog
+        order={viewing}
+        open={!!viewing}
+        onOpenChange={(o) => !o && setViewing(null)}
+        onRematch={() => { setRematching(viewing); setViewing(null) }}
+      />
+
+      <RematchFundingDialog
+        order={rematching}
+        open={rematching !== null}
+        onOpenChange={(o) => { if (!o) setRematching(null) }}
+      />
 
       {/* Names what goes with it — the same delete the Orders page offers,
           reachable here too since this is often where a mistaken payment is
