@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
-  FileSpreadsheet, ArrowRight, Trash2, RefreshCw,
+  FileSpreadsheet, ArrowRight, Trash2, RefreshCw, Unlink,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -27,7 +27,7 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor,
+  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt,
   orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
@@ -35,6 +35,7 @@ import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/ho
 import { useProductList } from '#/lib/hooks/useProducts'
 import { RematchFundingDialog } from '#/components/RematchFundingDialog'
 import { useDeleteOrder } from '#/lib/hooks/useOrders'
+import { useUnmatchDeposit } from '#/lib/hooks/useDeposits'
 import { useRoles } from '#/lib/hooks/useRoles'
 import {
   exportFinanceReportExcel, exportFinanceReportPdf,
@@ -96,7 +97,7 @@ function SummaryItem({ label, value }: { label: string; value: React.ReactNode }
  * breakdown below is commented out on purpose and kept only for reference —
  * see isPaystackFunding.
  */
-function FundingCard({ funding }: { funding: OrderFunding }) {
+function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?: () => void }) {
   const ps = (funding.paystackDetails || {}) as Record<string, any>
   const paystack = isPaystackFunding(funding)
   const recorder = fundingRecorder(funding) || null
@@ -107,7 +108,20 @@ function FundingCard({ funding }: { funding: OrderFunding }) {
         <Badge className="bg-warning/15 text-warning border-warning/30 font-normal">
           {paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
         </Badge>
-        <span className="text-sm font-semibold">{naira(Number(funding.amount))}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">{naira(Number(funding.amount))}</span>
+          {onUnmatch && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+              onClick={onUnmatch}
+            >
+              <Unlink className="size-3.5" />
+              Unmatch
+            </Button>
+          )}
+        </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {/* Paystack gateway breakdown — kept for historical reference only,
@@ -130,13 +144,13 @@ function FundingCard({ funding }: { funding: OrderFunding }) {
         )} */}
         {!paystack && (
           <>
-            <Row label="Depositor / payer" value={ps.senderName || ps.depositorName} icon={User} />
+            <Row label="Depositor / payer" value={fundingDepositor(funding)} icon={User} />
             <Row label="Receiving bank" value={ps.bankName || ps.receiverBankName} icon={Landmark} />
             <Row label="Receiving account name" value={ps.accountName || ps.receiverAccountName} icon={User} />
             <Row label="Receiving account number" value={ps.accountNumber || ps.receiverAccountNumber} icon={CreditCard} />
             <Row
               label="Payment date"
-              value={ps.paidAt || ps.paymentDate ? format(new Date(String(ps.paidAt || ps.paymentDate)), 'd MMM yyyy') : undefined}
+              value={fundingPaidAt(funding) ? format(new Date(String(fundingPaidAt(funding))), 'd MMM yyyy') : undefined}
               icon={Clock}
             />
           </>
@@ -148,7 +162,7 @@ function FundingCard({ funding }: { funding: OrderFunding }) {
   )
 }
 
-function OrderDetailDialog({ order, open, onOpenChange, onRematch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void }) {
+function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void; onUnmatch?: (f: OrderFunding) => void }) {
   if (!order) return null
 
   return (
@@ -231,7 +245,13 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch }: { order: Fi
               </p>
             ) : (
               <>
-                {order.funding.map((f) => <FundingCard key={f.depositId} funding={f} />)}
+                {order.funding.map((f) => (
+                  <FundingCard
+                    key={f.depositId}
+                    funding={f}
+                    onUnmatch={onUnmatch ? () => onUnmatch(f) : undefined}
+                  />
+                ))}
                 {order.unattributedAmount > 0 && (
                   <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground flex items-center gap-2">
                     <Info className="size-4 shrink-0" />
@@ -258,6 +278,8 @@ function FinanceReportPage() {
   const [viewing, setViewing] = useState<FinanceReportOrder | null>(null)
   const [deleting, setDeleting] = useState<FinanceReportOrder | null>(null)
   const [rematching, setRematching] = useState<FinanceReportOrder | null>(null)
+  const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; funding: OrderFunding } | null>(null)
+  const unmatchDeposit = useUnmatchDeposit()
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
   const { isSuperAdmin: canDelete } = useRoles()
   const deleteOrderMutation = useDeleteOrder()
@@ -690,7 +712,7 @@ function FinanceReportPage() {
                         <TableCell className="max-w-[10rem] truncate">{fundingDepositor(f) || '—'}</TableCell>
                         <TableCell className="max-w-[10rem] truncate">{f.depositReference || '—'}</TableCell>
                         <TableCell className="whitespace-nowrap text-muted-foreground">
-                          {f.depositCreatedAt ? format(new Date(f.depositCreatedAt), 'd MMM yyyy') : '—'}
+                          {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
                         </TableCell>
                         <TableCell className="max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</TableCell>
                         {canDelete && <TableCell />}
@@ -710,6 +732,7 @@ function FinanceReportPage() {
         open={!!viewing}
         onOpenChange={(o) => !o && setViewing(null)}
         onRematch={() => { setRematching(viewing); setViewing(null) }}
+        onUnmatch={(f) => viewing && setUnmatching({ order: viewing, funding: f })}
       />
 
       <RematchFundingDialog
@@ -717,6 +740,58 @@ function FinanceReportPage() {
         open={rematching !== null}
         onOpenChange={(o) => { if (!o) setRematching(null) }}
       />
+
+      {/* Detach one statement match so its line can go to the order it really
+          belongs to. Distinct from Re-match: this leaves the order with less
+          funding rather than swapping a replacement in, so the server refuses
+          it whenever that money is what a live order's hold is holding — which
+          is most of the time here. The copy says so up front rather than
+          letting the refusal be the first the user hears of it. */}
+      <Dialog open={unmatching != null} onOpenChange={(open) => !open && setUnmatching(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unmatch this payment?</DialogTitle>
+            <DialogDescription>
+              {unmatching && (
+                <>
+                  This takes {naira(Number(unmatching.funding.amount))}
+                  {fundingDepositor(unmatching.funding) ? ` from ${fundingDepositor(unmatching.funding)}` : ''} off{' '}
+                  {unmatching.order.reference} and back out of the wallet, returning its bank
+                  statement line to the unmatched pool so it can be matched elsewhere.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
+            If this money is what currently funds a live order, this will be refused — nothing
+            will change. Use <span className="font-semibold text-foreground">Re-match</span> on
+            that order instead, which swaps the correct line in rather than leaving it unfunded.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUnmatching(null)} disabled={unmatchDeposit.isPending}>
+              Keep it
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={unmatchDeposit.isPending}
+              onClick={async () => {
+                if (!unmatching) return
+                try {
+                  await unmatchDeposit.mutateAsync({ id: unmatching.funding.depositId })
+                  setUnmatching(null)
+                } catch {
+                  // Refused — the hook has already surfaced the server's own
+                  // message. The dialog stays open so the reason sits next to
+                  // the action it explains.
+                }
+              }}
+            >
+              {unmatchDeposit.isPending && <Loader2 className="animate-spin" />}
+              Unmatch payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Names what goes with it — the same delete the Orders page offers,
           reachable here too since this is often where a mistaken payment is

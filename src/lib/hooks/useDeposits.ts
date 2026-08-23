@@ -106,3 +106,32 @@ export function useReverseDeposit() {
     },
   })
 }
+
+/**
+ * Undo a statement match: detach the deposit from whatever order it was
+ * attributed to, take the money back out of the wallet, and return its
+ * statement line to the unmatched pool.
+ *
+ * Refused (409) while that money is what funds a live order — removing it
+ * would take the balance below what the order's hold has committed. The
+ * server's message points at Re-match for that case, which swaps in a
+ * replacement rather than leaving the order unfunded.
+ */
+export function useUnmatchDeposit() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ id, description }: { id: string | number; description?: string }) =>
+      (await api.post(`/deposits/${id}/unmatch`, { description })).data,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['deposits'] })
+      queryClient.invalidateQueries({ queryKey: ['customers'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-report'] })
+      queryClient.invalidateQueries({ queryKey: ['bank-statements'] })
+      toast.success(res?.message || 'Unmatched')
+    },
+    onError: (err: any) => toast.error(getErrorMessage(err)),
+  })
+}

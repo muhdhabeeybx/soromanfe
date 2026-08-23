@@ -15,6 +15,10 @@ export interface OrderFunding {
   paystackDetails: PaystackDetails | null
   recorderFirstName: string | null
   recorderSurname: string | null
+  /** Depositor named on the matched bank statement line — null if this deposit has no line. */
+  statementDepositor?: string | null
+  /** Value date on the matched bank statement line — when the money actually landed. */
+  statementTxnDate?: string | null
 }
 
 export interface FinanceReportOrder {
@@ -132,10 +136,29 @@ export function fundingRecorder(f: OrderFunding): string {
   return f.recorderFirstName ? `${f.recorderFirstName} ${f.recorderSurname || ''}`.trim() : ''
 }
 
-/** Who actually paid the money in — the sender/depositor, not the receiver. */
+/**
+ * Who actually paid the money in — the sender/depositor, not the receiver.
+ *
+ * The statement line comes first because it is the source of truth and is
+ * populated for every matched deposit; the deposit's own JSON only began
+ * carrying senderName recently, so on historical matches it is empty even
+ * though the line behind them names the payer. The JSON still answers for
+ * deposits typed in by hand, which have no line at all.
+ */
 export function fundingDepositor(f: OrderFunding): string {
   const ps = (f.paystackDetails || {}) as Record<string, any>
-  return ps.senderName || ps.depositorName || ''
+  return f.statementDepositor || ps.senderName || ps.depositorName || ''
+}
+
+/**
+ * When the money actually landed, ISO or null — the statement line's value
+ * date ahead of the JSON's paidAt, for the same reason as fundingDepositor.
+ * Falls back to when the deposit row was created, which is the only date a
+ * hand-typed deposit has.
+ */
+export function fundingPaidAt(f: OrderFunding): string | null {
+  const ps = (f.paystackDetails || {}) as Record<string, any>
+  return f.statementTxnDate || ps.paidAt || ps.paymentDate || f.depositCreatedAt || null
 }
 
 /** "Zenith Bank · 1311924890" — the same "bank · account number" shape the Order DVA row already uses. */

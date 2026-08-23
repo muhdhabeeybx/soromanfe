@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import {
-  fundingRecorder, fundingDepositor, orderPaidInto, orderCompany,
+  fundingRecorder, fundingDepositor, fundingPaidAt, orderPaidInto, orderCompany,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
 
@@ -123,13 +123,32 @@ function rowValues(o: FinanceReportOrder, i: number) {
   }
 }
 
+/**
+ * Oldest payment first — the order an exported ledger is read in, and the
+ * opposite of the on-screen table, which leads with the most recent because
+ * that is what someone scanning the page is looking for. So the sort lives
+ * here rather than in the query: the two views want genuinely different
+ * orders, and S/N then numbers 1..n down the page in payment sequence.
+ *
+ * COALESCE'd to the order date the same way the server's sort is, so an
+ * unpaid order (no confirmation date, present when the filter is Unpaid/All)
+ * still lands in a sensible place instead of at one end.
+ */
+function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
+  const at = (o: FinanceReportOrder) =>
+    new Date(o.paymentConfirmedAt || o.createdAt || 0).getTime()
+  return [...rows].sort((a, b) => at(a) - at(b) || a.id - b.id)
+}
+
 /** A funding sub-row — no order details repeated, just where that money came from. */
 function fundingRowValues(f: OrderFunding) {
   return {
     amount: Number(f.amount || 0),
     depositor: up(fundingDepositor(f) || '—'),
     depositRef: up(f.depositReference || '—'),
-    depositDate: f.depositCreatedAt ? new Date(f.depositCreatedAt) : null,
+    // When the money landed per the bank statement, not when the deposit row
+    // happened to be keyed in — those differ by days on a back-dated match.
+    depositDate: fundingPaidAt(f) ? new Date(String(fundingPaidAt(f))) : null,
     recordedBy: up(fundingRecorder(f) || '—'),
   }
 }
@@ -199,11 +218,12 @@ function extraFilterNote(filters: FinanceReportFilters): string {
  * columns so nothing about the order itself is repeated.
  */
 export async function exportFinanceReportExcel(
-  rows: FinanceReportOrder[],
+  unsortedRows: FinanceReportOrder[],
   summary: FinanceReportSummary,
   filters: FinanceReportFilters,
   pfiStock: PfiStockRow[] = [],
 ) {
+  const rows = chronological(unsortedRows)
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Soroman System'
@@ -380,11 +400,12 @@ export async function exportFinanceReportExcel(
 }
 
 export async function exportFinanceReportPdf(
-  rows: FinanceReportOrder[],
+  unsortedRows: FinanceReportOrder[],
   summary: FinanceReportSummary,
   filters: FinanceReportFilters,
   pfiStock: PfiStockRow[] = [],
 ) {
+  const rows = chronological(unsortedRows)
   const { jsPDF } = await import('jspdf')
   const autoTable = (await import('jspdf-autotable')).default
 
