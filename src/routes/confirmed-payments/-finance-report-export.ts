@@ -14,6 +14,18 @@ import {
  */
 const NGN = '₦#,##0.00;[Red]-₦#,##0.00'
 const QTY = '#,##0 "L"'
+/**
+ * Dates read dd-mm-yyyy, hyphen separated.
+ *
+ * The hyphens matter: in an Excel number-format code "/" is not a literal
+ * but a placeholder for the machine's own date separator, so a format
+ * written with slashes comes out however the reader's locale renders dates —
+ * dots on some machines. "-" is a literal and survives intact, so every
+ * reader sees the same thing.
+ */
+const DATE_FMT = 'dd-mm-yyyy'
+/** The date-fns equivalent, for the PDF and anywhere text is written directly. */
+const DATE_PATTERN = 'dd-MM-yyyy'
 
 const BRAND_GREEN = 'FF007A55'
 const HEADER_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FF1F3864' } }
@@ -304,7 +316,7 @@ export async function exportFinanceReportExcel(
       cell.border = ALL_BORDERS
       if (c.fmt) cell.numFmt = c.fmt
     }
-    if (row.getCell('date').value) row.getCell('date').numFmt = 'dd/mm/yyyy'
+    if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
     cursor++
 
     if (o.fundingTracked) {
@@ -317,7 +329,7 @@ export async function exportFinanceReportExcel(
           cell.fill = SUBROW_FILL
           if (c.key === 'amount') cell.numFmt = NGN
         }
-        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = 'dd/mm/yyyy'
+        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
         cursor++
       }
     }
@@ -461,7 +473,7 @@ export async function exportFinanceReportPdf(
     body.push(
       cellsFor('order', {
         sn: v.sn,
-        date: v.date ? format(v.date, 'dd/MM/yyyy') : '—',
+        date: v.date ? format(v.date, DATE_PATTERN) : '—',
         ref: v.ref,
         pfi: v.pfi,
         customer: v.customer,
@@ -479,7 +491,7 @@ export async function exportFinanceReportPdf(
         const fv = fundingRowValues(f)
         body.push(
           cellsFor('funding', {
-            depositDate: fv.depositDate ? format(fv.depositDate, 'dd/MM/yyyy') : '—',
+            depositDate: fv.depositDate ? format(fv.depositDate, DATE_PATTERN) : '—',
             depositor: fv.depositor,
             depositRef: fv.depositRef,
             amount: naira(fv.amount),
