@@ -4,6 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Search, Plus, Package, Banknote, Droplets, TriangleAlert,
   ArrowUpDown, Lock, Pencil, Download, X, TrendingUp, TrendingDown,
+  FileSpreadsheet, FileText,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -23,7 +24,7 @@ import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import {
   naira, litres, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
 } from '#/routes/pfi/-pfi-utils'
-import { downloadPfiReport, downloadMasterReport } from '#/routes/pfi/-pfi-report'
+import { downloadPfiReport, downloadPfiReportPdf, downloadMasterReport } from '#/routes/pfi/-pfi-report'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/pfi/')({
@@ -354,12 +355,21 @@ function PFIDashboard() {
                         Close PFI
                       </Button>
                     )}
+                    {/* Excel and PDF off the same data — the workbook is for
+                        working with, the PDF for circulating. */}
                     <Button
                       variant="outline" size="sm" className="ml-auto"
                       onClick={() => downloadPfiReport(Number(p.id))}
                     >
-                      <Download data-icon="inline-start" />
-                      Download report
+                      <FileSpreadsheet data-icon="inline-start" />
+                      Excel
+                    </Button>
+                    <Button
+                      variant="outline" size="sm"
+                      onClick={() => downloadPfiReportPdf(Number(p.id))}
+                    >
+                      <FileText data-icon="inline-start" />
+                      PDF
                     </Button>
                   </div>
                 </div>

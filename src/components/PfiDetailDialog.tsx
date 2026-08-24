@@ -22,21 +22,50 @@ import {
   naira, litres, pct, moneyTone, SurplusDeficit, SellThroughBar, profitCaveat,
 } from '#/routes/pfi/-pfi-utils'
 
+/**
+ * A label/value line in the detail dialog.
+ *
+ * Every value used to render at font-normal, so a section of eight rows had
+ * nothing to land on and the figures that matter — landing cost, balance —
+ * read exactly like the ones that don't.
+ *
+ * `emphasis` is the one figure a section is really about; `tone` is reserved
+ * for values whose SIGN or state means something, so colour never becomes
+ * decoration.
+ */
 function Row({
-  label, value, tone, hint,
+  label, value, tone, hint, emphasis = false, divider = false,
 }: {
   label: string
   value: React.ReactNode
   tone?: string
   hint?: string
+  emphasis?: boolean
+  /** Rules a subtotal off from the lines that feed it. */
+  divider?: boolean
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-2">
+    <div
+      className={cn(
+        'flex items-baseline justify-between gap-4 py-2',
+        divider && 'border-t border-foreground/15',
+      )}
+    >
       <div className="min-w-0">
-        <p className="text-sm text-muted-foreground">{label}</p>
+        <p className={cn('text-sm', emphasis ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+          {label}
+        </p>
         {hint && <p className="text-xs leading-tight text-muted-foreground/60">{hint}</p>}
       </div>
-      <p className={cn('shrink-0 text-sm font-normal', tone)}>{value}</p>
+      <p
+        className={cn(
+          'shrink-0 tabular-nums',
+          emphasis ? 'text-base font-semibold' : 'text-sm font-medium',
+          tone || 'text-foreground',
+        )}
+      >
+        {value}
+      </p>
     </div>
   )
 }
@@ -185,11 +214,22 @@ export function PfiDetailDialog({
                   // label={`Total Expenses (${data.expenses.length} line${data.expenses.length === 1 ? '' : 's'})`}
                   value={naira(f.totalExpenses)}
                 />
-                <Row label="Total Cost" value={naira(f.totalCost)} />
+                {f.pendingExpenses > 0 && (
+                  <Row
+                    label="Awaiting approval"
+                    hint="Committed, not yet spent — outside the cost above"
+                    value={naira(f.pendingExpenses)}
+                    tone="text-warning"
+                  />
+                )}
+                <Row label="Total Cost" value={naira(f.totalCost)} divider />
                 {f.creditBalance > 0 && (
                   <>
+                    {/* A credit reduces what the batch cost, so it reads as a
+                        gain rather than as another cost line. */}
                     <Row
                       label="Credit Balance" value={`-${naira(f.creditBalance)}`}
+                      tone="text-accent"
                       // hint="Rebate, discount or claim credited back"
                     />
                     <Row
@@ -199,13 +239,34 @@ export function PfiDetailDialog({
                   </>
                 )}
                 <Row
+                  label="Landing cost / litre"
+                  hint="Grand total cost ÷ BL quantity"
+                  value={naira(f.landingCostPerLitre)}
+                  emphasis
+                />
+                {/* Only worth showing when the two bases actually differ —
+                    which is exactly when there was a discharge shortage. */}
+                {f.landingCostPerLitreTank != null
+                  && f.landingCostPerLitre != null
+                  && Math.abs(f.landingCostPerLitreTank - f.landingCostPerLitre) >= 0.01 && (
+                  <Row
+                    label="— against tank quantity"
+                    hint="What it actually cost per litre that landed"
+                    value={naira(f.landingCostPerLitreTank)}
+                    tone="text-warning"
+                  />
+                )}
+                <Row
                   label={`Total Revenue`}
                   // label={`Total Revenue (${pfi.orderCount} order${pfi.orderCount === 1 ? '' : 's'})`}
                   value={naira(f.revenue)}
+                  tone="text-accent"
+                  divider
                   // hint="Invoiced value on paid, released, loading and completed orders"
                 />
                 <Row
                   label="Balance" value={naira(f.profitLoss)} tone={moneyTone(f.profitLoss)}
+                  emphasis
                 />
                 <Row label="Margin" value={pct(f.margin)} tone={moneyTone(f.margin)} />
                 <Row

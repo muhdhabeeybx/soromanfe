@@ -225,6 +225,109 @@ function extraFilterNote(filters: FinanceReportFilters): string {
 }
 
 /**
+ * The payments table — header, one row per order with its funding sub-rows
+ * indented beneath, and the totals bar.
+ *
+ * Extracted so the PFI report can put the SAME table on its own sheet for a
+ * single batch. The two must not drift: a figure that reads one way on the
+ * finance report and another on a PFI report is worse than either of them
+ * being wrong on its own.
+ *
+ * Returns the row after the totals bar.
+ */
+export function writeFinanceTable(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ws: any,
+  rows: FinanceReportOrder[],
+  summary: Pick<FinanceReportSummary, 'totalQuantity' | 'totalSalesValue' | 'totalAmountPaid' | 'totalDifferential'>,
+  startRow: number,
+): number {
+  let cursor = startRow
+
+  const headerRow = ws.getRow(cursor)
+  headerRow.values = COLUMNS.map((c) => c.header)
+  headerRow.height = ROW_HEIGHT.header
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  headerRow.eachCell((cell: any) => {
+    cell.font = HEADER_FONT
+    cell.fill = HEADER_FILL
+    cell.border = ALL_BORDERS
+    cell.alignment = { vertical: 'middle', wrapText: true }
+  })
+  cursor++
+
+  const tableStartRow = cursor
+  rows.forEach((o, i) => {
+    const values = rowValues(o, i)
+    const row = ws.getRow(cursor)
+    row.values = values
+    row.height = ROW_HEIGHT.body
+    for (const c of COLUMNS) {
+      const cell = row.getCell(c.key)
+      cell.border = ALL_BORDERS
+      if (c.fmt) cell.numFmt = c.fmt
+      if (c.signed) {
+        const v = (values as Record<string, unknown>)[c.key]
+        if (typeof v === 'number') paintSigned(cell, v)
+      }
+    }
+    row.getCell('ref').font = { bold: true }
+    if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
+    cursor++
+
+    if (o.fundingTracked) {
+      for (const f of o.funding) {
+        const subRow = ws.getRow(cursor)
+        subRow.values = fundingRowValues(f)
+        subRow.height = ROW_HEIGHT.body
+        for (const c of COLUMNS) {
+          const cell = subRow.getCell(c.key)
+          cell.border = ALL_BORDERS
+          cell.fill = SUBROW_FILL
+          if (c.key === 'amount') cell.numFmt = NGN
+        }
+        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
+        cursor++
+      }
+    }
+  })
+  ws.views = [{ state: 'frozen', ySplit: tableStartRow - 1 }]
+  ws.autoFilter = {
+    from: { row: tableStartRow - 1, column: 1 },
+    to: { row: tableStartRow - 1, column: COLUMNS.length },
+  }
+
+  const totalRow = ws.getRow(cursor)
+  totalRow.values = {
+    ref: `Total (${rows.length} orders)`,
+    qty: summary.totalQuantity,
+    salesValue: summary.totalSalesValue,
+    amount: summary.totalAmountPaid,
+    differential: summary.totalDifferential,
+  }
+  totalRow.height = ROW_HEIGHT.total
+  // eachCell() alone would skip the columns this row never set a value for,
+  // leaving the shading/border look like it stops partway across — walk
+  // every column position instead so the totals row reads as one solid bar.
+  for (let i = 1; i <= COLUMNS.length; i++) {
+    const cell = totalRow.getCell(i)
+    cell.border = TOTAL_BORDERS
+    cell.fill = GRAND_TOTAL_FILL
+    cell.font = TOTAL_FONT
+  }
+  totalRow.getCell('differential').numFmt = NGN_SIGNED
+  paintSigned(totalRow.getCell('differential'), summary.totalDifferential)
+  totalRow.getCell('qty').numFmt = QTY
+  totalRow.getCell('salesValue').numFmt = NGN
+  totalRow.getCell('amount').numFmt = NGN
+
+  return cursor + 1
+}
+
+/** The column widths the payments table needs, for a sheet that hosts only it. */
+export const FINANCE_TABLE_COLUMNS = COLUMNS.map((c) => ({ key: c.key, width: c.width }))
+
+/**
  * One sheet: the summary table first, then a blank gap, then the payments
  * table — deliberately not split across sheets, so opening the file lands
  * on everything at once. Each order with tracked funding gets one indented
@@ -307,81 +410,7 @@ export async function exportFinanceReportExcel(
   }
   cursor += 1
 
-  const headerRow = ws.getRow(cursor)
-  headerRow.values = COLUMNS.map((c) => c.header)
-  headerRow.height = ROW_HEIGHT.header
-  headerRow.eachCell((cell) => {
-    cell.font = HEADER_FONT
-    cell.fill = HEADER_FILL
-    cell.border = ALL_BORDERS
-    cell.alignment = { vertical: 'middle', wrapText: true }
-  })
-  cursor++
-
-  const tableStartRow = cursor
-  rows.forEach((o, i) => {
-    const values = rowValues(o, i)
-    const row = ws.getRow(cursor)
-    row.values = values
-    row.height = ROW_HEIGHT.body
-    for (const c of COLUMNS) {
-      const cell = row.getCell(c.key)
-      cell.border = ALL_BORDERS
-      if (c.fmt) cell.numFmt = c.fmt
-      if (c.signed) {
-        const v = (values as Record<string, unknown>)[c.key]
-        if (typeof v === 'number') paintSigned(cell, v)
-      }
-    }
-    row.getCell('ref').font = { bold: true }
-    if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
-    cursor++
-
-    if (o.fundingTracked) {
-      for (const f of o.funding) {
-        const subRow = ws.getRow(cursor)
-        subRow.values = fundingRowValues(f)
-        subRow.height = ROW_HEIGHT.body
-        for (const c of COLUMNS) {
-          const cell = subRow.getCell(c.key)
-          cell.border = ALL_BORDERS
-          cell.fill = SUBROW_FILL
-          if (c.key === 'amount') cell.numFmt = NGN
-        }
-        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
-        cursor++
-      }
-    }
-  })
-  ws.views = [{ state: 'frozen', ySplit: tableStartRow - 1 }]
-  ws.autoFilter = {
-    from: { row: tableStartRow - 1, column: 1 },
-    to: { row: tableStartRow - 1, column: COLUMNS.length },
-  }
-
-  const totalRow = ws.getRow(cursor)
-  totalRow.values = {
-    ref: `Total (${rows.length} orders)`,
-    qty: summary.totalQuantity,
-    salesValue: summary.totalSalesValue,
-    amount: summary.totalAmountPaid,
-    differential: summary.totalDifferential,
-  }
-  totalRow.height = ROW_HEIGHT.total
-  // eachCell() alone would skip the columns this row never set a value for,
-  // leaving the shading/border look like it stops partway across — walk
-  // every column position instead so the totals row reads as one solid bar.
-  for (let i = 1; i <= COLUMNS.length; i++) {
-    const cell = totalRow.getCell(i)
-    cell.border = TOTAL_BORDERS
-    cell.fill = GRAND_TOTAL_FILL
-    cell.font = TOTAL_FONT
-  }
-  totalRow.getCell('differential').numFmt = NGN_SIGNED
-  paintSigned(totalRow.getCell('differential'), summary.totalDifferential)
-  totalRow.getCell('qty').numFmt = QTY
-  totalRow.getCell('salesValue').numFmt = NGN
-  totalRow.getCell('amount').numFmt = NGN
+  cursor = writeFinanceTable(ws, rows, summary, cursor)
   cursor += 3
 
   if (pfiStock.length > 0) {

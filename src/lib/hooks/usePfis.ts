@@ -32,8 +32,13 @@ export type PfiFinancials = {
   creditBalance: number
   /** totalCost − creditBalance. What profit is actually computed against. */
   grandTotalCost: number | null
-  /** grandTotalCost ÷ tank quantity. Null until totalCost is known. */
+  /** grandTotalCost ÷ BL quantity — what the batch cost per litre purchased. Null until totalCost is known. */
   landingCostPerLitre: number | null
+  /** The same cost over what actually measured into the tank. Higher than the BL figure when there was a discharge shortage. */
+  landingCostPerLitreTank: number | null
+  /** Expense lines still walking the approval chain — committed, not yet spent. */
+  pendingExpenses: number
+  pendingExpenseCount: number
   revenue: number
   profitLoss: number | null
   margin: number | null
@@ -102,6 +107,8 @@ export type PfiExpense = {
   bank_paid_from: string
   receipt_reference?: string
   entered_by: string
+  /** entered_by resolved to a NAME. The raw column holds a bare staff id on most historical rows. */
+  entered_by_name?: string | null
   deleted_at: string | null
 
   // ── The approval chain ────────────────────────────────────────────────

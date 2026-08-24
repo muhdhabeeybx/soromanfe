@@ -78,6 +78,7 @@ export const NGN_SIGNED = '[Color10]₦#,##0.00;[Red](₦#,##0.00);₦0.00'
 export const QTY = '#,##0 "L"'
 export const QTY_KG = '#,##0 "kg"'
 export const COUNT = '#,##0'
+export const PCT = '0.0%'
 /**
  * dd-mm-yyyy, hyphens deliberate: in an Excel format code "/" is a
  * placeholder for the reader's own locale separator, so a format written
