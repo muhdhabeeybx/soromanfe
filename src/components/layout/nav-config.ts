@@ -63,6 +63,7 @@ export const navCategories: NavCategory[] = [
       // { title: "Marketing Orders", icon: ShoppingBag, path: "/sales-manager-view" },
       // { title: "Location Orders", icon: ShoppingBag, path: "/product-manager-view" },
       { title: "Our Customers", icon: Building2, path: "/customers" },
+      { title: "Contacts & Leads", icon: Contact, path: "/contacts" },
       // { title: "Customer Desk", icon: Contact, path: "/customer-desk" },
     ],
   },

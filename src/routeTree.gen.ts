@@ -28,6 +28,7 @@ import { Route as BankStatementsIndexRouteImport } from './routes/bank-statement
 import { Route as CommissionRatesIndexRouteImport } from './routes/commission-rates/index'
 import { Route as CommissionsIndexRouteImport } from './routes/commissions/index'
 import { Route as ConfirmedPaymentsIndexRouteImport } from './routes/confirmed-payments/index'
+import { Route as ContactsIndexRouteImport } from './routes/contacts/index'
 import { Route as CustomerDeskIndexRouteImport } from './routes/customer-desk/index'
 import { Route as CustomersIndexRouteImport } from './routes/customers/index'
 import { Route as CustomersDetailsRouteImport } from './routes/customers/details'
@@ -212,6 +213,11 @@ const CommissionsIndexRoute = CommissionsIndexRouteImport.update({
 const ConfirmedPaymentsIndexRoute = ConfirmedPaymentsIndexRouteImport.update({
   id: '/confirmed-payments/',
   path: '/confirmed-payments/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactsIndexRoute = ContactsIndexRouteImport.update({
+  id: '/contacts/',
+  path: '/contacts/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CustomerDeskIndexRoute = CustomerDeskIndexRouteImport.update({
@@ -722,6 +728,7 @@ export interface FileRoutesByFullPath {
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
   '/confirmed-payments/': typeof ConfirmedPaymentsIndexRoute
+  '/contacts/': typeof ContactsIndexRoute
   '/customer-desk/': typeof CustomerDeskIndexRoute
   '/customers/': typeof CustomersIndexRoute
   '/dangote-order-request/': typeof DangoteOrderRequestIndexRoute
@@ -831,6 +838,7 @@ export interface FileRoutesByTo {
   '/commission-rates': typeof CommissionRatesIndexRoute
   '/commissions': typeof CommissionsIndexRoute
   '/confirmed-payments': typeof ConfirmedPaymentsIndexRoute
+  '/contacts': typeof ContactsIndexRoute
   '/customer-desk': typeof CustomerDeskIndexRoute
   '/customers': typeof CustomersIndexRoute
   '/dangote-order-request': typeof DangoteOrderRequestIndexRoute
@@ -941,6 +949,7 @@ export interface FileRoutesById {
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
   '/confirmed-payments/': typeof ConfirmedPaymentsIndexRoute
+  '/contacts/': typeof ContactsIndexRoute
   '/customer-desk/': typeof CustomerDeskIndexRoute
   '/customers/': typeof CustomersIndexRoute
   '/dangote-order-request/': typeof DangoteOrderRequestIndexRoute
@@ -1052,6 +1061,7 @@ export interface FileRouteTypes {
     | '/commission-rates/'
     | '/commissions/'
     | '/confirmed-payments/'
+    | '/contacts/'
     | '/customer-desk/'
     | '/customers/'
     | '/dangote-order-request/'
@@ -1161,6 +1171,7 @@ export interface FileRouteTypes {
     | '/commission-rates'
     | '/commissions'
     | '/confirmed-payments'
+    | '/contacts'
     | '/customer-desk'
     | '/customers'
     | '/dangote-order-request'
@@ -1270,6 +1281,7 @@ export interface FileRouteTypes {
     | '/commission-rates/'
     | '/commissions/'
     | '/confirmed-payments/'
+    | '/contacts/'
     | '/customer-desk/'
     | '/customers/'
     | '/dangote-order-request/'
@@ -1380,6 +1392,7 @@ export interface RootRouteChildren {
   CommissionRatesIndexRoute: typeof CommissionRatesIndexRoute
   CommissionsIndexRoute: typeof CommissionsIndexRoute
   ConfirmedPaymentsIndexRoute: typeof ConfirmedPaymentsIndexRoute
+  ContactsIndexRoute: typeof ContactsIndexRoute
   CustomerDeskIndexRoute: typeof CustomerDeskIndexRoute
   CustomersIndexRoute: typeof CustomersIndexRoute
   DangoteOrderRequestIndexRoute: typeof DangoteOrderRequestIndexRoute
@@ -1566,6 +1579,13 @@ declare module '@tanstack/react-router' {
       path: '/confirmed-payments'
       fullPath: '/confirmed-payments/'
       preLoaderRoute: typeof ConfirmedPaymentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacts/': {
+      id: '/contacts/'
+      path: '/contacts'
+      fullPath: '/contacts/'
+      preLoaderRoute: typeof ContactsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/customer-desk/': {
@@ -2245,6 +2265,7 @@ const rootRouteChildren: RootRouteChildren = {
   CommissionRatesIndexRoute: CommissionRatesIndexRoute,
   CommissionsIndexRoute: CommissionsIndexRoute,
   ConfirmedPaymentsIndexRoute: ConfirmedPaymentsIndexRoute,
+  ContactsIndexRoute: ContactsIndexRoute,
   CustomerDeskIndexRoute: CustomerDeskIndexRoute,
   CustomersIndexRoute: CustomersIndexRoute,
   DangoteOrderRequestIndexRoute: DangoteOrderRequestIndexRoute,

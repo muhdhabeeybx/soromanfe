@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useDepots } from '#/lib/hooks/useDepots'
 import { useCustomerList } from '#/lib/hooks/useCustomers'
+import { useContactList, useContactTags } from '#/lib/hooks/useContacts'
 import {
   useCustomerSegment, useBroadcast, useNotificationDeliveries,
   useMessageTemplates, useCreateMessageTemplate, useDeleteMessageTemplate,
@@ -59,7 +60,7 @@ const STARTER_TEMPLATES: Array<{ name: string; subject: string; body: string; ch
   },
 ]
 
-type AudienceMode = 'segment' | 'specific'
+type AudienceMode = 'segment' | 'specific' | 'contacts'
 type CatalogDepot = { id: number; name: string; products: Array<{ name: string; code: string; unit: string; price: number }> }
 
 const formatMoney = (v: number) =>
@@ -120,7 +121,31 @@ function MessagingPage() {
     })
   )
 
-  const recipientCount = audienceMode === 'specific' ? selectedCustomerIds.length : (segmentData?.count ?? 0)
+  // ── Contacts & leads ────────────────────────────────────────────────────
+  //
+  // Non-customers have no principal to address, so they are sent as their own
+  // details rather than as ids — see BroadcastPayload. Opted-out contacts are
+  // already excluded by the server, and anyone who has since become a
+  // customer is filtered out here by default so a campaign does not reach the
+  // same person twice under two identities.
+  const [contactStage, setContactStage] = useState<'' | 'lead' | 'contact'>('lead')
+  const [contactTag, setContactTag] = useState('')
+  const [excludeConverted, setExcludeConverted] = useState(true)
+  const { data: contactTags = [] } = useContactTags()
+  const { data: contactData, isFetching: contactsLoading } = useContactList(
+    audienceMode === 'contacts'
+      ? { stage: contactStage, tag: contactTag, optedOut: 'no', converted: excludeConverted ? 'no' : '', limit: 5000 }
+      : { limit: 1 },
+  )
+  const contactRecipients = useMemo(
+    () => (audienceMode === 'contacts' ? (contactData?.contacts ?? []) : []),
+    [audienceMode, contactData],
+  )
+
+  const recipientCount =
+    audienceMode === 'specific' ? selectedCustomerIds.length
+      : audienceMode === 'contacts' ? contactRecipients.length
+        : (segmentData?.count ?? 0)
 
   // ── Channels + message ─────────────────────────────────────────────────
   const [emailOn, setEmailOn] = useState(true)
@@ -201,14 +226,26 @@ function MessagingPage() {
   }
 
   const handleSend = async () => {
-    const customerIds = audienceMode === 'specific' ? selectedCustomerIds : (segmentData?.customers.map((c) => c.id) ?? [])
-    await broadcast.mutateAsync({
+    const common = {
       title: subject.trim() || 'Message from Soroman',
       body: body.trim(),
-      audience: 'customers',
-      customerIds,
       channels,
-    })
+    }
+    await broadcast.mutateAsync(
+      audienceMode === 'contacts'
+        ? {
+          ...common,
+          audience: 'contacts' as const,
+          contacts: contactRecipients.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
+        }
+        : {
+          ...common,
+          audience: 'customers' as const,
+          customerIds: audienceMode === 'specific'
+            ? selectedCustomerIds
+            : (segmentData?.customers.map((c) => c.id) ?? []),
+        },
+    )
     setConfirmOpen(false)
     setSubject('')
     setBody('')
@@ -252,9 +289,13 @@ function MessagingPage() {
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${audienceMode === 'specific' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
               Specific customers
             </button>
+            <button type="button" onClick={() => setAudienceMode('contacts')}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${audienceMode === 'contacts' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
+              Contacts &amp; leads
+            </button>
             <div className="ml-auto flex items-center">
               <Badge variant="secondary" className="text-xs px-3 py-1.5 font-semibold">
-                {segmentLoading || specificLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
+                {segmentLoading || specificLoading || contactsLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
                 {recipientCount} recipient{recipientCount === 1 ? '' : 's'}
               </Badge>
             </div>
@@ -307,6 +348,61 @@ function MessagingPage() {
               </label>
 
               <p className="text-xs text-muted-foreground">Filters combine — e.g. a depot plus "frequent buyers" targets frequent buyers at that depot. Opted-out and inactive/suspended customers are never included.</p>
+            </div>
+          ) : audienceMode === 'contacts' ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+                    <Users className="size-3.5" /> Who
+                  </Label>
+                  <Select value={contactStage || 'all'} onValueChange={(v) => setContactStage(v === 'all' ? '' : (v as 'lead' | 'contact'))}>
+                    <SelectTrigger className="w-full text-sm h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="lead">Leads only</SelectItem>
+                      <SelectItem value="contact">Other contacts only</SelectItem>
+                      <SelectItem value="all">Everyone on the contacts list</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {contactTags.length > 0 && (
+                  <div>
+                    <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+                      <Tag className="size-3.5" /> Tag
+                    </Label>
+                    <Select value={contactTag || 'any'} onValueChange={(v) => setContactTag(v === 'any' ? '' : v)}>
+                      <SelectTrigger className="w-full text-sm h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="any">Any tag</SelectItem>
+                        {contactTags.map((t) => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <label className="flex items-start gap-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={excludeConverted}
+                  onChange={(e) => setExcludeConverted(e.target.checked)}
+                  className="mt-1 size-4 rounded border-input text-primary accent-primary cursor-pointer"
+                />
+                <div className="flex-1">
+                  <span className="flex items-center gap-1.5 text-sm font-normal text-foreground">
+                    <CheckCircle2 className="size-3.5" /> Skip anyone who is already a customer
+                  </span>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    A lead who has since signed up would otherwise be messaged twice — once here
+                    and once as a customer.
+                  </p>
+                </div>
+              </label>
+
+              <p className="text-xs text-muted-foreground">
+                Contacts have no account, so they are reached on the phone number and email
+                held for them. Anyone who has opted out of messages is never included.
+              </p>
             </div>
           ) : (
             <MultiSelectPicker

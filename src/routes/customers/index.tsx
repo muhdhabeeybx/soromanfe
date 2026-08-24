@@ -155,7 +155,7 @@ function CustomerDashboard() {
       // The BOM is what makes Excel read the naira sign and any accented name
       // correctly instead of mojibake.
       triggerDownload(
-        new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }),
+        new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }),
         `customer-contacts-${new Date().toISOString().slice(0, 10)}.csv`,
       )
       toast.success(`${all.length} contact${all.length === 1 ? '' : 's'} exported`)

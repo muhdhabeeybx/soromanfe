@@ -30,13 +30,21 @@ export function useCustomerSegment(filters: SegmentFilters, options?: { enabled?
   })
 }
 
-export interface BroadcastPayload {
+/** A lead or other non-customer, addressed by their details rather than an id. */
+export interface BroadcastContact {
+  name?: string
+  email?: string
+  phone?: string
+}
+
+export type BroadcastPayload = {
   title: string
   body: string
-  audience: 'customers'
-  customerIds: number[]
   channels: Array<'email' | 'sms'>
-}
+} & (
+  | { audience: 'customers'; customerIds: number[]; contacts?: never }
+  | { audience: 'contacts'; contacts: BroadcastContact[]; customerIds?: never }
+)
 
 export interface BroadcastResult {
   recipients: number
@@ -54,20 +62,28 @@ export function useBroadcast() {
   return useMutation({
     retry: false,
     mutationFn: async (payload: BroadcastPayload) => {
-      const chunks: number[][] = []
-      for (let i = 0; i < payload.customerIds.length; i += BROADCAST_CHUNK_SIZE) {
-        chunks.push(payload.customerIds.slice(i, i + BROADCAST_CHUNK_SIZE))
+      // Customers travel as ids, contacts as their details — but both are
+      // capped at 1,000 a request by the same schema, so both are chunked the
+      // same way rather than one path growing its own batching.
+      const all: Array<number | BroadcastContact> =
+        payload.audience === 'contacts' ? payload.contacts : payload.customerIds
+
+      const chunks: Array<Array<number | BroadcastContact>> = []
+      for (let i = 0; i < all.length; i += BROADCAST_CHUNK_SIZE) {
+        chunks.push(all.slice(i, i + BROADCAST_CHUNK_SIZE))
       }
       if (chunks.length === 0) chunks.push([])
 
       const totals: BroadcastResult = { recipients: 0, delivered: 0, duplicates: 0 }
-      for (const customerIds of chunks) {
+      for (const chunk of chunks) {
         const res = await api.post('/notifications/broadcast', {
           title: payload.title,
           body: payload.body,
           audience: payload.audience,
-          customerIds,
           channels: payload.channels,
+          ...(payload.audience === 'contacts'
+            ? { contacts: chunk as BroadcastContact[] }
+            : { customerIds: chunk as number[] }),
         })
         const data = res.data.data as BroadcastResult
         totals.recipients += data.recipients || 0
