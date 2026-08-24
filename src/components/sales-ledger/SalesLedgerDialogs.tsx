@@ -732,12 +732,31 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
       const numQty = Number(stripCommas(setupQuantity)) || 0
       const calcSalesValue = numRate * numQty > 0 ? numRate * numQty : undefined
 
+      // A row with no payments yet has nowhere to keep a rate except the
+      // loading itself, and that is where the ledger already looks for one:
+      // useLedgerGroups falls back to `loading.rate` whenever the sales carry
+      // none. Until now the rate was written only onto payment rows, so
+      // setting it on a truck that had not been paid yet saved nothing at all
+      // — the dialog still said "Row setup saved", the rate came back blank,
+      // Expected stayed at zero, and Add Payment refused the row for being
+      // incomplete. Writing it here fixes both halves of that.
+      //
+      // Not on a multi-customer cycle: those share one loading between several
+      // customers who can each have their own rate, and one customer's rate on
+      // the shared row would silently become everyone's. A multi-customer
+      // group is built out of its payments, so it always has payment rows to
+      // carry the rate instead.
       if (target.loadingId) {
         const isMulti = target.key.split(':').length > 2
         await updateInventory.mutateAsync({
           id: String(target.loadingId),
           data: {
-            ...(isMulti ? {} : { customerId: customerId || undefined, customerName: customerName || undefined, location: setupDestination.trim() || undefined }),
+            ...(isMulti ? {} : {
+              customerId: customerId || undefined,
+              customerName: customerName || undefined,
+              location: setupDestination.trim() || undefined,
+              ...(numRate > 0 ? { rate: numRate } : {}),
+            }),
             ...(numQty > 0 ? { quantityAllocated: numQty } : {}),
             allocationCode: normalized || null,
           },
@@ -771,6 +790,12 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
             },
           }),
         ))
+      } else {
+        // Neither a loading nor a payment to write to. Nothing was saved, so
+        // this must not report that something was — the old code fell through
+        // both branches and toasted success over a no-op.
+        toast.error('This row has no loading or payment behind it yet — record a payment against it first')
+        return
       }
 
       toast.success('Row setup saved')
