@@ -41,6 +41,8 @@ export interface WalletStatementSource {
   narration: string
   txnDate: string | null
   reference: string
+  recorderFirstName: string | null
+  recorderSurname: string | null
 }
 
 /**
@@ -59,6 +61,8 @@ export interface WalletSource {
   statementDepositor: string
   statementNarration: string
   statementTxnDate: string | null
+  recorderFirstName: string | null
+  recorderSurname: string | null
   transferFromCustomerId: number | null
   transferFromCustomerName: string
   /** The bank credits behind a wallet transfer, when they reconcile exactly. */
@@ -242,6 +246,13 @@ export interface StatementRow {
   txnDate: string | null
   amount: number
   reference: string
+  /** The staff member who keyed this credit in — not the payer. */
+  recordedBy: string
+}
+
+/** A recorder's name from the two columns it arrives in, blank if unknown. */
+function recorderName(first: string | null | undefined, last: string | null | undefined): string {
+  return first ? `${first} ${last || ''}`.trim() : ''
 }
 
 export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
@@ -256,6 +267,7 @@ export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
           txnDate: s.txnDate,
           amount: s.amount,
           reference: s.reference,
+          recordedBy: recorderName(s.recorderFirstName, s.recorderSurname),
         })
       }
       continue
@@ -268,6 +280,7 @@ export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
       txnDate: w.statementTxnDate || w.createdAt,
       amount: w.amount,
       reference: w.reference,
+      recordedBy: recorderName(w.recorderFirstName, w.recorderSurname),
     })
   }
   return rows

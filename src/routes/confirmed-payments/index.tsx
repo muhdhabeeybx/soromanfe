@@ -842,10 +842,12 @@ function FinanceReportPage() {
                           ),
                           depositRef: <span className="block max-w-[10rem] truncate">{r.reference || '—'}</span>,
                           amount: <span className="whitespace-nowrap font-semibold">{naira(r.amount)}</span>,
+                          // Who keyed the credit in. This printed the bank
+                          // narration until the recorder was carried through
+                          // the wallet trace, so a column headed Recorded By
+                          // was naming the payer.
                           recordedBy: (
-                            <span className="block max-w-[10rem] truncate text-muted-foreground" title={r.narration}>
-                              {r.narration}
-                            </span>
+                            <span className="block max-w-[10rem] truncate">{r.recordedBy || '—'}</span>
                           ),
                         }
                         return (

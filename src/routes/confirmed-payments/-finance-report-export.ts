@@ -109,11 +109,11 @@ const COLUMNS: Array<{
   { header: 'Sales Value', key: 'salesValue', width: 16, fmt: NGN, scope: 'order' },
   { header: 'Deposit Date', key: 'depositDate', width: 13, scope: 'funding' },
   { header: 'Depositor', key: 'depositor', width: 22, scope: 'funding' },
-  { header: 'Payment Reference', key: 'depositRef', width: 20, scope: 'funding' },
+  { header: 'Bank Reference', key: 'depositRef', width: 20, scope: 'funding' },
   { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
-  // { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
+  { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
 
 /** The columns, in order, with whether each is filled on an order row or a funding sub-row. */
@@ -176,9 +176,11 @@ function statementRowValues(r: StatementRow) {
     depositor: up(r.depositor || '—'),
     depositRef: up(r.reference || '—'),
     depositDate: r.txnDate ? new Date(r.txnDate) : null,
-    // The full machine narration, so the sheet can be matched line by line
-    // against the bank's own statement without opening the app.
-    recordedBy: r.narration || '',
+    // The staff member who keyed the credit in, matching what the funding
+    // sub-row puts here. This used to carry the full bank narration so the
+    // sheet could be matched against the statement by eye, but the column is
+    // headed Recorded By and a narration names the payer, not the recorder.
+    recordedBy: up(r.recordedBy || '—'),
   }
 }
 
@@ -221,8 +223,8 @@ function summaryColumns(
   filters: FinanceReportFilters,
 ): Array<{ header: string; value: string | number; fmt?: string; signed?: boolean }> {
   const cols: Array<{ header: string; value: string | number; fmt?: string; signed?: boolean }> = [
-    { header: 'Generated At', value: up(format(new Date(), 'd MMM yyyy, HH:mm')) },
-    { header: 'Period', value: up(filters.periodLabel) },
+    // { header: 'Generated At', value: up(format(new Date(), 'd MMM yyyy, HH:mm')) },
+    { header: 'Report for', value: up(filters.periodLabel) },
     { header: 'Location', value: up(filters.locationName) },
     { header: 'PFI', value: up(filters.pfiNumber) },
     { header: 'Product', value: up(filters.product) },
