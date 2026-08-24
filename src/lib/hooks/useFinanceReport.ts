@@ -46,9 +46,9 @@ export interface WalletStatementSource {
 /**
  * A credit that was sitting in the wallet when this order took its money.
  *
- * INFERRED, not a recorded allocation: the server works back from the hold
- * amount and date. Anything rendered from this has to say so — see
- * `WALLET_SOURCE_NOTE`.
+ * The server works back from the hold amount and date. Rendered through
+ * walletStatementRows, which drops the wallet hop and shows only the bank
+ * credits behind it.
  */
 export interface WalletSource {
   depositId: number
@@ -223,50 +223,83 @@ function internalSource(f: OrderFunding): string {
 }
 
 /**
- * Said wherever a traced wallet source is shown, in every medium.
+ * A wallet-funded order's payment source, as one flat list of bank credits.
  *
- * These lines are worked back from the hold amount and date, not read off an
- * allocation row. One sentence, one place, so the screen, the PDF and the
- * workbook cannot end up making different promises about the same figures.
+ * The intermediate wallet hop is deliberately not rendered anywhere. Nobody
+ * reconciling a payment wants to be told the money came "from wallet" or
+ * "via a transfer from BALA" — they want the lines they can find on the bank
+ * statement, so that is all that is returned: the credits themselves, in the
+ * order the bank lists them.
+ *
+ * Where the chain cannot be resolved to statement lines, the wallet credit
+ * itself is emitted as a single row carrying whatever it does name, rather
+ * than nothing.
  */
-export const WALLET_SOURCE_NOTE =
-  'Traced from the wallet ledger by amount and date — not a recorded allocation.'
-
-/** Who paid a traced wallet credit in, as a person would say it. */
-export function walletSourceDepositor(w: WalletSource): string {
-  if (w.statementDepositor) return w.statementDepositor
-  if (w.transferFromCustomerName) return `${w.transferFromCustomerName} (wallet transfer)`
-  return w.description || '—'
+export interface StatementRow {
+  key: string
+  depositor: string
+  narration: string
+  txnDate: string | null
+  amount: number
+  reference: string
 }
 
-/**
- * The one-line summary of where a wallet credit came from.
- *
- * A transfer that reconciles names the banks behind it, because "transfer from
- * BALA" is not what anybody is looking for when they open this — they want the
- * narration they can find on the statement.
- */
-export function walletSourceSummary(w: WalletSource): string {
-  if (!w.reconciled || w.statementSources.length === 0) return walletSourceDepositor(w)
-  const names = [...new Set(w.statementSources.map((s) => shortDepositor(s.depositor)))]
-  return `${w.transferFromCustomerName || 'Wallet transfer'} — via ${names.join(', ')}`
+export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
+  const rows: StatementRow[] = []
+  for (const w of order.walletSource ?? []) {
+    if (w.statementSources.length > 0) {
+      for (const s of w.statementSources) {
+        rows.push({
+          key: `s${s.depositId}`,
+          depositor: shortDepositor(s.depositor),
+          narration: s.narration || s.depositor || '',
+          txnDate: s.txnDate,
+          amount: s.amount,
+          reference: s.reference,
+        })
+      }
+      continue
+    }
+    // Nothing to trace to: show what the credit itself records.
+    rows.push({
+      key: `w${w.depositId}`,
+      depositor: shortDepositor(w.statementDepositor) || w.transferFromCustomerName || w.description || '—',
+      narration: w.statementNarration || w.description || '',
+      txnDate: w.statementTxnDate || w.createdAt,
+      amount: w.amount,
+      reference: w.reference,
+    })
+  }
+  return rows
 }
 
 /**
  * The payer's name out of a bank narration.
  *
- * Statement text is machine-written and long: "NIP/FDP/DIMKPA INTEGRATED
- * SERVICES/COB TRF FROM DIMKPA INT 9574 FBP". The payer is the third slashed
- * field on the NIP/CIP shapes the banks here use; anything that doesn't match
- * keeps its full text rather than being truncated into nonsense.
+ * Statement text is machine-written, long, and shaped differently by each
+ * rail. Two slash shapes cover ~2,050 of the lines here and put the payer in
+ * different fields, so they are handled separately rather than by one index:
+ *
+ *   NIP/FDP/DIMKPA INTEGRATED SERVICES/COB TRF …   -> field 3
+ *   CIP CR/ JOE BROWN OIL TOOLS  amp  EQUIP/AT132  -> field 2
+ *   NISS INFLOW/ACTION ENERGY LTD/United Bank …    -> field 2
+ *
+ * Taking field 3 from a CIP line yields the transaction id, not a name —
+ * which is exactly what it did before this. Anything not matching a known
+ * shape ("TRF FRM SAUDAT GLOBAL ENTERPRISE TO …") keeps its full text rather
+ * than being sliced into nonsense.
  */
-export function shortDepositor(narration: string): string {
-  const parts = (narration || '').split('/')
-  if (parts.length >= 3 && /^(NIP|CIP|NISS)/i.test(parts[0])) {
-    const name = parts[2].trim()
-    if (name) return name
-  }
-  return (narration || '').trim()
+export function shortDepositor(narration: string | null | undefined): string {
+  // "&" arrives HTML-escaped and then stripped to a bare "amp" by whatever
+  // wrote the statement; put it back before anyone reads it.
+  const clean = (v: string) => v.replace(/\s+amp\s+/gi, ' & ').replace(/\s+/g, ' ').trim()
+
+  const raw = (narration || '').trim()
+  if (!raw) return ''
+  const parts = raw.split('/')
+  if (parts.length >= 3 && /^NIP\b/i.test(parts[0])) return clean(parts[2]) || clean(raw)
+  if (parts.length >= 2 && /^(CIP|NISS)\b/i.test(parts[0])) return clean(parts[1]) || clean(raw)
+  return clean(raw)
 }
 
 /**

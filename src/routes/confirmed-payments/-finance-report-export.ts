@@ -2,12 +2,12 @@ import { format } from 'date-fns'
 import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  walletSourceSummary, shortDepositor,
-  type FinanceReportOrder, type OrderFunding, type WalletSource,
+  walletStatementRows,
+  type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
 import {
   XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
-  ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL, BAND_FILL,
+  ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   writeTitleBlock, writeSectionHeading, paintSigned,
   pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
@@ -163,37 +163,22 @@ function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
 }
 
 /**
- * A traced wallet sub-row.
+ * A statement credit behind a wallet-funded order, as the bank carries it.
  *
- * Same columns as a funding sub-row, because it answers the same question,
- * but every cell is marked so the workbook cannot pass a reconstruction off as
- * a recorded allocation: the depositor is prefixed, and the reference column
- * says how many statement credits stand behind it. Where a transfer reconciles
- * to bank credits, they follow as their own indented rows carrying the
- * narration exactly as the statement has it.
+ * Fills the same columns a funding sub-row would, because it answers the same
+ * question — who paid, when, how much, under what reference. The wallet hop
+ * between the order and this credit is not printed: it is not what anybody
+ * reconciling against a statement is looking for.
  */
-function walletRowValues(w: WalletSource) {
+function statementRowValues(r: StatementRow) {
   return {
-    amount: w.amount,
-    depositor: up(`[traced] ${walletSourceSummary(w)}`),
-    depositRef: w.reconciled
-      ? up(`${w.statementSources.length} statement credit${w.statementSources.length === 1 ? '' : 's'}`)
-      : 'TRACED',
-    depositDate: w.createdAt ? new Date(w.createdAt) : null,
-    recordedBy: 'WALLET',
-  }
-}
-
-/** One bank credit behind a traced transfer, as the statement carries it. */
-function walletStatementRowValues(source: WalletSource['statementSources'][number]) {
-  return {
-    amount: source.amount,
-    depositor: up(`    ${shortDepositor(source.depositor)}`),
-    depositRef: up(source.reference || '—'),
-    depositDate: source.txnDate ? new Date(source.txnDate) : null,
-    // The full machine narration, so the workbook can be matched line by line
+    amount: r.amount,
+    depositor: up(r.depositor || '—'),
+    depositRef: up(r.reference || '—'),
+    depositDate: r.txnDate ? new Date(r.txnDate) : null,
+    // The full machine narration, so the sheet can be matched line by line
     // against the bank's own statement without opening the app.
-    recordedBy: source.narration || '',
+    recordedBy: r.narration || '',
   }
 }
 
@@ -328,34 +313,18 @@ export function writeFinanceTable(
     } else {
       // A wallet-funded order has no allocation to print, and used to leave
       // the depositor and reference columns blank on every row.
-      for (const w of o.walletSource ?? []) {
+      for (const r of walletStatementRows(o)) {
         const subRow = ws.getRow(cursor)
-        subRow.values = walletRowValues(w)
+        subRow.values = statementRowValues(r)
         subRow.height = ROW_HEIGHT.body
         for (const c of COLUMNS) {
           const cell = subRow.getCell(c.key)
           cell.border = ALL_BORDERS
           cell.fill = SUBROW_FILL
-          cell.font = { italic: true, size: 10 }
           if (c.key === 'amount') cell.numFmt = NGN
         }
         if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
         cursor++
-
-        for (const source of w.statementSources) {
-          const stRow = ws.getRow(cursor)
-          stRow.values = walletStatementRowValues(source)
-          stRow.height = ROW_HEIGHT.body
-          for (const c of COLUMNS) {
-            const cell = stRow.getCell(c.key)
-            cell.border = ALL_BORDERS
-            cell.fill = BAND_FILL
-            cell.font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
-            if (c.key === 'amount') cell.numFmt = NGN
-          }
-          if (stRow.getCell('depositDate').value) stRow.getCell('depositDate').numFmt = DATE_FMT
-          cursor++
-        }
       }
     }
   })
@@ -646,31 +615,19 @@ export async function exportFinanceReportPdf(
         )
       }
     } else {
-      // The traced wallet credits, and the statement lines behind them —
-      // same rows as the workbook, so the two documents say the same thing.
-      for (const w of o.walletSource ?? []) {
-        const wv = walletRowValues(w)
+      // The statement credits behind a wallet-funded order — the same rows as
+      // the workbook, so the two documents say the same thing.
+      for (const r of walletStatementRows(o)) {
+        const sv = statementRowValues(r)
         body.push(
           cellsFor('funding', {
-            depositDate: wv.depositDate ? format(wv.depositDate, DATE_PATTERN) : '—',
-            depositor: wv.depositor,
-            depositRef: wv.depositRef,
-            amount: naira(wv.amount),
-            recordedBy: wv.recordedBy,
+            depositDate: sv.depositDate ? format(sv.depositDate, DATE_PATTERN) : '—',
+            depositor: sv.depositor,
+            depositRef: sv.depositRef,
+            amount: naira(sv.amount),
+            recordedBy: sv.recordedBy,
           }),
         )
-        for (const source of w.statementSources) {
-          const sv = walletStatementRowValues(source)
-          body.push(
-            cellsFor('funding', {
-              depositDate: sv.depositDate ? format(sv.depositDate, DATE_PATTERN) : '—',
-              depositor: sv.depositor,
-              depositRef: sv.depositRef,
-              amount: naira(sv.amount),
-              recordedBy: sv.recordedBy,
-            }),
-          )
-        }
       }
     }
   })
