@@ -2,11 +2,12 @@ import { format } from 'date-fns'
 import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  type FinanceReportOrder, type OrderFunding,
+  walletSourceSummary, shortDepositor,
+  type FinanceReportOrder, type OrderFunding, type WalletSource,
 } from '#/lib/hooks/useFinanceReport'
 import {
   XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
-  ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
+  ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL, BAND_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   writeTitleBlock, writeSectionHeading, paintSigned,
   pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
@@ -161,6 +162,41 @@ function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
   return [...rows].sort((a, b) => at(a) - at(b) || a.id - b.id)
 }
 
+/**
+ * A traced wallet sub-row.
+ *
+ * Same columns as a funding sub-row, because it answers the same question,
+ * but every cell is marked so the workbook cannot pass a reconstruction off as
+ * a recorded allocation: the depositor is prefixed, and the reference column
+ * says how many statement credits stand behind it. Where a transfer reconciles
+ * to bank credits, they follow as their own indented rows carrying the
+ * narration exactly as the statement has it.
+ */
+function walletRowValues(w: WalletSource) {
+  return {
+    amount: w.amount,
+    depositor: up(`[traced] ${walletSourceSummary(w)}`),
+    depositRef: w.reconciled
+      ? up(`${w.statementSources.length} statement credit${w.statementSources.length === 1 ? '' : 's'}`)
+      : 'TRACED',
+    depositDate: w.createdAt ? new Date(w.createdAt) : null,
+    recordedBy: 'WALLET',
+  }
+}
+
+/** One bank credit behind a traced transfer, as the statement carries it. */
+function walletStatementRowValues(source: WalletSource['statementSources'][number]) {
+  return {
+    amount: source.amount,
+    depositor: up(`    ${shortDepositor(source.depositor)}`),
+    depositRef: up(source.reference || '—'),
+    depositDate: source.txnDate ? new Date(source.txnDate) : null,
+    // The full machine narration, so the workbook can be matched line by line
+    // against the bank's own statement without opening the app.
+    recordedBy: source.narration || '',
+  }
+}
+
 /** A funding sub-row — no order details repeated, just where that money came from. */
 function fundingRowValues(f: OrderFunding) {
   return {
@@ -288,6 +324,38 @@ export function writeFinanceTable(
         }
         if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
         cursor++
+      }
+    } else {
+      // A wallet-funded order has no allocation to print, and used to leave
+      // the depositor and reference columns blank on every row.
+      for (const w of o.walletSource ?? []) {
+        const subRow = ws.getRow(cursor)
+        subRow.values = walletRowValues(w)
+        subRow.height = ROW_HEIGHT.body
+        for (const c of COLUMNS) {
+          const cell = subRow.getCell(c.key)
+          cell.border = ALL_BORDERS
+          cell.fill = SUBROW_FILL
+          cell.font = { italic: true, size: 10 }
+          if (c.key === 'amount') cell.numFmt = NGN
+        }
+        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
+        cursor++
+
+        for (const source of w.statementSources) {
+          const stRow = ws.getRow(cursor)
+          stRow.values = walletStatementRowValues(source)
+          stRow.height = ROW_HEIGHT.body
+          for (const c of COLUMNS) {
+            const cell = stRow.getCell(c.key)
+            cell.border = ALL_BORDERS
+            cell.fill = BAND_FILL
+            cell.font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
+            if (c.key === 'amount') cell.numFmt = NGN
+          }
+          if (stRow.getCell('depositDate').value) stRow.getCell('depositDate').numFmt = DATE_FMT
+          cursor++
+        }
       }
     }
   })
@@ -576,6 +644,33 @@ export async function exportFinanceReportPdf(
             recordedBy: fv.recordedBy,
           }),
         )
+      }
+    } else {
+      // The traced wallet credits, and the statement lines behind them —
+      // same rows as the workbook, so the two documents say the same thing.
+      for (const w of o.walletSource ?? []) {
+        const wv = walletRowValues(w)
+        body.push(
+          cellsFor('funding', {
+            depositDate: wv.depositDate ? format(wv.depositDate, DATE_PATTERN) : '—',
+            depositor: wv.depositor,
+            depositRef: wv.depositRef,
+            amount: naira(wv.amount),
+            recordedBy: wv.recordedBy,
+          }),
+        )
+        for (const source of w.statementSources) {
+          const sv = walletStatementRowValues(source)
+          body.push(
+            cellsFor('funding', {
+              depositDate: sv.depositDate ? format(sv.depositDate, DATE_PATTERN) : '—',
+              depositor: sv.depositor,
+              depositRef: sv.depositRef,
+              amount: naira(sv.amount),
+              recordedBy: sv.recordedBy,
+            }),
+          )
+        }
       }
     }
   })

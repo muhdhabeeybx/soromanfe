@@ -28,6 +28,44 @@ export interface OrderFunding {
   transferFromCustomerName?: string | null
 }
 
+/**
+ * One bank credit behind an internal wallet transfer, as the statement has it.
+ *
+ * Present only where the credits reconcile to the transfer amount exactly —
+ * the server drops an inexact set rather than guess. See traceWalletSources.
+ */
+export interface WalletStatementSource {
+  depositId: number
+  amount: number
+  depositor: string
+  narration: string
+  txnDate: string | null
+  reference: string
+}
+
+/**
+ * A credit that was sitting in the wallet when this order took its money.
+ *
+ * INFERRED, not a recorded allocation: the server works back from the hold
+ * amount and date. Anything rendered from this has to say so — see
+ * `WALLET_SOURCE_NOTE`.
+ */
+export interface WalletSource {
+  depositId: number
+  amount: number
+  createdAt: string | null
+  description: string
+  reference: string
+  statementDepositor: string
+  statementNarration: string
+  statementTxnDate: string | null
+  transferFromCustomerId: number | null
+  transferFromCustomerName: string
+  /** The bank credits behind a wallet transfer, when they reconcile exactly. */
+  statementSources: WalletStatementSource[]
+  reconciled: boolean
+}
+
 export interface FinanceReportOrder {
   id: number
   orderNumber: string
@@ -63,6 +101,10 @@ export interface FinanceReportOrder {
   funding: OrderFunding[]
   /** false = this order predates the allocation ledger; not an error. */
   fundingTracked: boolean
+  /** Traced wallet credits, for a wallet-funded order the ledger has nothing for. */
+  walletSource: WalletSource[]
+  /** A wallet hold exists — this was paid from wallet balance, tracked or not. */
+  walletFunded: boolean
   /** >0 only on a tracked order whose balance partly came from untracked deposits. */
   unattributedAmount: number
   /** The customer's wallet balance the instant before this order took its amount — null if undeterminable (order predates wallet-hold tracking). */
@@ -178,6 +220,53 @@ function internalSource(f: OrderFunding): string {
     return `${f.transferFromCustomerName} (wallet transfer)`
   }
   return (f.depositDescription || '').trim()
+}
+
+/**
+ * Said wherever a traced wallet source is shown, in every medium.
+ *
+ * These lines are worked back from the hold amount and date, not read off an
+ * allocation row. One sentence, one place, so the screen, the PDF and the
+ * workbook cannot end up making different promises about the same figures.
+ */
+export const WALLET_SOURCE_NOTE =
+  'Traced from the wallet ledger by amount and date — not a recorded allocation.'
+
+/** Who paid a traced wallet credit in, as a person would say it. */
+export function walletSourceDepositor(w: WalletSource): string {
+  if (w.statementDepositor) return w.statementDepositor
+  if (w.transferFromCustomerName) return `${w.transferFromCustomerName} (wallet transfer)`
+  return w.description || '—'
+}
+
+/**
+ * The one-line summary of where a wallet credit came from.
+ *
+ * A transfer that reconciles names the banks behind it, because "transfer from
+ * BALA" is not what anybody is looking for when they open this — they want the
+ * narration they can find on the statement.
+ */
+export function walletSourceSummary(w: WalletSource): string {
+  if (!w.reconciled || w.statementSources.length === 0) return walletSourceDepositor(w)
+  const names = [...new Set(w.statementSources.map((s) => shortDepositor(s.depositor)))]
+  return `${w.transferFromCustomerName || 'Wallet transfer'} — via ${names.join(', ')}`
+}
+
+/**
+ * The payer's name out of a bank narration.
+ *
+ * Statement text is machine-written and long: "NIP/FDP/DIMKPA INTEGRATED
+ * SERVICES/COB TRF FROM DIMKPA INT 9574 FBP". The payer is the third slashed
+ * field on the NIP/CIP shapes the banks here use; anything that doesn't match
+ * keeps its full text rather than being truncated into nonsense.
+ */
+export function shortDepositor(narration: string): string {
+  const parts = (narration || '').split('/')
+  if (parts.length >= 3 && /^(NIP|CIP|NISS)/i.test(parts[0])) {
+    const name = parts[2].trim()
+    if (name) return name
+  }
+  return (narration || '').trim()
 }
 
 /**

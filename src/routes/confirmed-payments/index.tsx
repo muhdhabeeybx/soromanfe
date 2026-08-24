@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
-  FileSpreadsheet, ArrowRight, RefreshCw, Unlink,
+  FileSpreadsheet, ArrowRight, RefreshCw, Unlink, Wallet,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -29,7 +29,8 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderDifferential,
-  type FinanceReportOrder, type OrderFunding,
+  walletSourceSummary, shortDepositor, WALLET_SOURCE_NOTE,
+  type FinanceReportOrder, type OrderFunding, type WalletSource,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
@@ -182,6 +183,81 @@ function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?
   )
 }
 
+/**
+ * A wallet credit that paid for an order, and the bank money behind it.
+ *
+ * Visually distinct from FundingCard — dashed border, "traced" chip, the
+ * caveat spelled out — because a FundingCard states a recorded fact and this
+ * states a reconstruction. Where the transfer reconciles to bank credits, they
+ * are listed with the narration exactly as the statement carries it, which is
+ * the thing anybody opening this is actually trying to find.
+ */
+function WalletSourceCard({ source }: { source: WalletSource }) {
+  return (
+    <div className="rounded-lg border border-dashed border-foreground/25 bg-muted/20 p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="gap-1">
+            <Wallet className="size-3" />
+            Paid from wallet
+          </Badge>
+          <Badge variant="secondary" className="text-xs">traced</Badge>
+        </div>
+        <span className="text-sm font-semibold">{naira(source.amount)}</span>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Row label="Wallet credit" value={source.description} icon={FileText} />
+        <Row
+          label="Credited"
+          value={source.createdAt ? format(new Date(source.createdAt), 'd MMM yyyy') : undefined}
+          icon={Clock}
+        />
+        {source.transferFromCustomerName && (
+          <Row label="Transferred from" value={source.transferFromCustomerName} icon={User} />
+        )}
+        {source.statementDepositor && (
+          <Row label="Depositor / payer" value={source.statementDepositor} icon={User} />
+        )}
+        {source.reference && <Row label="Deposit reference" value={source.reference} icon={Hash} />}
+      </div>
+
+      {source.statementSources.length > 0 && (
+        <div className="mt-3 border-t border-foreground/10 pt-3">
+          <p className={cn(MICRO, 'pb-2 text-muted-foreground')}>
+            As it appears in the statement — {source.statementSources.length} credit
+            {source.statementSources.length === 1 ? '' : 's'}, reconciling to {naira(source.amount)}
+          </p>
+          <div className="space-y-2">
+            {source.statementSources.map((s) => (
+              <div key={s.depositId} className="rounded-md border border-foreground/10 bg-background/60 p-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{shortDepositor(s.depositor)}</p>
+                    {/* The raw narration, unabridged: it is what someone
+                        scanning the bank statement matches against by eye. */}
+                    <p className="mt-0.5 text-xs break-words text-muted-foreground">{s.narration}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-semibold">{naira(s.amount)}</span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+                  {s.txnDate && <span>{format(new Date(s.txnDate), 'd MMM yyyy')}</span>}
+                  {s.reference && <span>Ref {s.reference}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+        <Info className="mt-0.5 size-3.5 shrink-0" />
+        {WALLET_SOURCE_NOTE}
+      </p>
+    </div>
+  )
+}
+
 function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void; onUnmatch?: (f: OrderFunding) => void }) {
   if (!order) return null
 
@@ -260,9 +336,24 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
               )}
             </div>
             {!order.fundingTracked ? (
-              <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
-                Payment source not tracked — this order was paid before detailed payment tracking began.
-              </p>
+              // An order paid from wallet balance writes no allocation row, so
+              // it used to land on the "predates tracking" message even when it
+              // was raised last week. Where the wallet credits behind it can be
+              // traced, they are shown instead; the historical wording is kept
+              // for orders that genuinely have nothing behind them.
+              order.walletSource?.length ? (
+                <div className="space-y-3">
+                  {order.walletSource.map((w) => (
+                    <WalletSourceCard key={w.depositId} source={w} />
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
+                  {order.walletFunded
+                    ? 'Paid from wallet balance. The credits behind it could not be traced — no deposit on this wallet covers the amount held.'
+                    : 'Payment source not tracked — this order was paid before detailed payment tracking began.'}
+                </p>
+              )
             ) : (
               <>
                 {order.funding.map((f) => (
@@ -774,6 +865,43 @@ function FinanceReportPage() {
                           </TableCell>
                         ))}
                       </TableRow>
+                      {/* Traced wallet credits fill the same funding columns
+                          when there is no allocation to fill them, so a
+                          wallet-paid order stops printing an empty depositor
+                          and reference. Italic and prefixed, never mistakable
+                          for a recorded allocation row. */}
+                      {!o.fundingTracked && o.walletSource?.map((w) => {
+                        const cells: Record<string, React.ReactNode> = {
+                          depositDate: (
+                            <span className="whitespace-nowrap text-muted-foreground">
+                              {w.createdAt ? format(new Date(w.createdAt), 'd MMM yyyy') : '—'}
+                            </span>
+                          ),
+                          depositor: (
+                            <span className="block max-w-[12rem] truncate italic" title={walletSourceSummary(w)}>
+                              ↳ {walletSourceSummary(w)}
+                            </span>
+                          ),
+                          depositRef: (
+                            <span className="block max-w-[10rem] truncate italic text-muted-foreground">
+                              {w.reconciled
+                                ? `${w.statementSources.length} statement credit${w.statementSources.length === 1 ? '' : 's'}`
+                                : 'traced'}
+                            </span>
+                          ),
+                          amount: <span className="whitespace-nowrap font-semibold">{naira(w.amount)}</span>,
+                          recordedBy: <span className="block max-w-[10rem] truncate italic text-muted-foreground">wallet</span>,
+                        }
+                        return (
+                          <TableRow key={`${o.id}-wallet-${w.depositId}`} className="bg-muted/10 hover:bg-muted/20">
+                            {REPORT_COLUMNS.map((c) => (
+                              <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                                {c.scope === 'funding' ? cells[c.key] : null}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        )
+                      })}
                       {o.fundingTracked && o.funding.map((f) => {
                         const fundingCells: Record<string, React.ReactNode> = {
                           depositDate: (
