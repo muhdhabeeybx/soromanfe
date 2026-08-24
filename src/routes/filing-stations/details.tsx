@@ -23,7 +23,7 @@ import {
 import { format, parseISO } from 'date-fns'
 import { useFilingStations } from '#/lib/hooks/useFilingStations'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
-import { useDeliverySalesList, useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale } from '#/lib/hooks/useDeliverySales'
+import { useDeliverySalesList, useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale, useSetDepositStatus } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
 import { cn, toNum } from '#/lib/utils'
@@ -38,7 +38,11 @@ export const Route = createFileRoute('/filing-stations/details')({
   component: FilingStationDetailsView,
 })
 
-import { BANK_ACCOUNTS } from '#/components/sales-ledger/SalesLedgerDialogs'
+import { useBankAccountPicker, bankAccountToString, resolveBankAccount } from '#/lib/bank-accounts'
+import {
+  DepositChannelPicker, BankAccountSelect, BankChargesPanel, RemittanceAmountField,
+} from '#/components/filing-stations/RemittanceChannelFields'
+import { sumByChannel, type DepositChannel } from '#/lib/deposit-channel'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -87,7 +91,12 @@ interface QuickPaymentForm {
   payer_name: string
   phone_number: string
   bank_account_id: string
-  deposit_status: 'pending' | 'confirmed'
+  /** Which of the two remittance channels this entry is. */
+  deposit_channel: DepositChannel
+  // The DB enum is pending | paid | partial; the form used to carry
+  // 'confirmed', which is not one of them. It never mattered because the
+  // update route stripped the field entirely — see the deposit-status route.
+  deposit_status: 'pending' | 'paid'
   remarks: string
 }
 
@@ -134,6 +143,7 @@ function FilingStationDetailsView() {
 
   const createSaleMutation = useCreateDeliverySale()
   const updateSaleMutation = useUpdateDeliverySale()
+  const setDepositStatusMutation = useSetDepositStatus()
   const deleteSaleMutation = useDeleteDeliverySale()
 
   const deliveryCustomers = useMemo(() => {
@@ -181,17 +191,34 @@ function FilingStationDetailsView() {
   const [recordDialogOpen, setRecordDialogOpen] = useState(false)
   const [activeEntryTab, setActiveEntryTab] = useState<EntryTab>('sale')
   const [selectedGroup, setSelectedGroup] = useState<LedgerGroup | null>(state.ledgerGroup || null)
+  // Every account, not only the active ones — an entry recorded into an
+  // account since retired still has to resolve to a name.
+  const { accounts: bankAccounts, byId: bankAccountsById } = useBankAccountPicker()
   const [quickForm, setQuickForm] = useState<QuickPaymentForm>({
     payment_amount: '', rate: '', quantity: '', date_of_payment: format(new Date(), 'yyyy-MM-dd'),
-    payer_name: '', phone_number: '', bank_account_id: '1', deposit_status: 'confirmed', remarks: '',
+    // No default account: '1' was an index into the old hardcoded array and
+    // meant nothing once accounts came from the managed table. An unselected
+    // account is caught on save rather than guessed at.
+    payer_name: '', phone_number: '', bank_account_id: '', deposit_channel: 'bank_deposit',
+    deposit_status: 'paid', remarks: '',
   })
   const [saving, setSaving] = useState(false)
+
+  // Bank charges are the gap between the two channels across this cycle, so
+  // the dialog needs the cycle's running totals, not just the amount being
+  // typed. Derived from the entries themselves rather than stored anywhere:
+  // a stored figure drifts the moment one of those entries is edited.
+  const cycleChannelTotals = useMemo(
+    () => sumByChannel(selectedGroup?.payments || []),
+    [selectedGroup],
+  )
 
   // ── Edit dialog state ──────────────────────────────────────────────
   const [editTarget, setEditTarget] = useState<DeliverySale | null>(null)
   const [editForm, setEditForm] = useState<{
     quantity: string; rate: string; payment_amount: string; expenses_amount: string
-    payer_name: string; bank_account_id: string; deposit_status: 'pending' | 'confirmed'
+    payer_name: string; bank_account_id: string; deposit_channel: DepositChannel
+    deposit_status: 'pending' | 'paid'
     phone_number: string; remarks: string; date_of_payment: string
   } | null>(null)
   const [editSaving, setEditSaving] = useState(false)
@@ -319,7 +346,8 @@ function FilingStationDetailsView() {
     setQuickForm({
       payment_amount: '', rate: group.rate > 0 ? String(group.rate) : '', quantity: '',
       date_of_payment: format(new Date(), 'yyyy-MM-dd'), payer_name: '',
-      phone_number: '', bank_account_id: '1', deposit_status: 'confirmed', remarks: '',
+      phone_number: '', bank_account_id: '', deposit_channel: 'bank_deposit',
+      deposit_status: 'paid', remarks: '',
     })
     setRecordDialogOpen(true)
   }
@@ -353,8 +381,12 @@ function FilingStationDetailsView() {
         if (!amount || amount <= 0) { toast.error('Enter a valid amount'); setSaving(false); return }
         if (!quickForm.bank_account_id) { toast.error('Select a bank account'); setSaving(false); return }
 
-        const bankAcct = BANK_ACCOUNTS.find(b => String(b.id) === quickForm.bank_account_id)
-        const bankStr = bankAcct ? `${bankAcct.account_number} · ${bankAcct.bank_name}` : undefined
+        const bankAcct = bankAccountsById.get(quickForm.bank_account_id)
+        // The string stays written alongside the id: it is what every report
+        // and every pre-existing row resolves through, and it must keep
+        // reading correctly even if the account is later retired.
+        const bankStr = bankAcct ? bankAccountToString(bankAcct) : undefined
+        const channelLabel = quickForm.deposit_channel === 'pos' ? 'POS Transaction' : 'Bank Deposit'
 
         await createSaleMutation.mutateAsync({
           truckNumber: selectedGroup.truckNumber,
@@ -367,13 +399,14 @@ function FilingStationDetailsView() {
           paymentAmount: amount,
           payerName: quickForm.payer_name.trim() || undefined,
           bank: bankStr,
+          bankAccountId: bankAcct ? Number(bankAcct.id) : undefined,
+          depositChannel: quickForm.deposit_channel,
           dateOfPayment: quickForm.date_of_payment || format(new Date(), 'yyyy-MM-dd'),
-          depositStatus: quickForm.deposit_status,
           phoneNumber: quickForm.phone_number.trim() || undefined,
-          remarks: quickForm.remarks.trim() || `Bank Deposit: ₦${amount.toLocaleString()}`,
+          remarks: quickForm.remarks.trim() || `${channelLabel}: ₦${amount.toLocaleString()}`,
           allocationCode: selectedGroup.code || undefined,
         })
-        toast.success(`Deposit recorded · ₦${amount.toLocaleString()}`)
+        toast.success(`${channelLabel} recorded · ₦${amount.toLocaleString()}`)
       } else {
         const amount = Number(stripCommas(quickForm.payment_amount))
         if (!amount || amount <= 0) { toast.error('Enter a valid expense amount'); setSaving(false); return }
@@ -401,7 +434,7 @@ function FilingStationDetailsView() {
     } finally {
       setSaving(false)
     }
-  }, [selectedGroup, station, activeEntryTab, quickForm, createSaleMutation, toast])
+  }, [selectedGroup, station, activeEntryTab, quickForm, bankAccountsById, createSaleMutation, toast])
 
   const openEditDialog = (entry: DeliverySale, group: LedgerGroup) => {
     setSelectedGroup(group)
@@ -413,11 +446,11 @@ function FilingStationDetailsView() {
       expenses_amount: toNum(entry.expensesAmount ?? 0) > 0 ? formatWithCommas(String(toNum(entry.expensesAmount ?? 0))) : '',
       payer_name: entry.payerName || '',
       bank_account_id: (() => {
-        if (!entry.bank) return ''
-        const match = BANK_ACCOUNTS.find(b => entry.bank.startsWith(b.account_number) || entry.bank.includes(b.account_number))
+        const match = resolveBankAccount(bankAccounts, entry.bank)
         return match ? String(match.id) : ''
       })(),
-      deposit_status: entry.depositStatus === 'confirmed' ? 'confirmed' : 'pending',
+      deposit_channel: (entry.depositChannel as DepositChannel) || 'bank_deposit',
+      deposit_status: entry.depositStatus === 'paid' ? 'paid' : 'pending',
       phone_number: entry.phoneNumber || '',
       remarks: entry.remarks || '',
       date_of_payment: entry.dateOfPayment || format(new Date(), 'yyyy-MM-dd'),
@@ -435,8 +468,10 @@ function FilingStationDetailsView() {
       const rate = Number(stripCommas(editForm.rate)) || 0
       const pa = Number(stripCommas(editForm.payment_amount)) || 0
       const ea = Number(stripCommas(editForm.expenses_amount)) || 0
-      const bankAcct = editForm.bank_account_id ? BANK_ACCOUNTS.find(b => String(b.id) === editForm.bank_account_id) : null
-      const bankStr = bankAcct ? `${bankAcct.account_number} · ${bankAcct.bank_name}` : editTarget.bank || undefined
+      const bankAcct = editForm.bank_account_id ? bankAccountsById.get(editForm.bank_account_id) : null
+      // Falls back to what the entry already carried, so editing an unrelated
+      // field on a row whose account has since been retired does not blank it.
+      const bankStr = bankAcct ? bankAccountToString(bankAcct) : editTarget.bank || undefined
 
       await updateSaleMutation.mutateAsync({
         id: entryId,
@@ -445,12 +480,21 @@ function FilingStationDetailsView() {
           paymentAmount: pa, expensesAmount: ea,
           payerName: editForm.payer_name.trim() || undefined,
           bank: bankStr,
+          bankAccountId: bankAcct ? Number(bankAcct.id) : undefined,
+          // Only carried on rows that actually move money — tagging a pump
+          // sale or an expense with a remittance channel would pull it into
+          // the bank-charges pair it has nothing to do with.
+          depositChannel: pa > 0 ? editForm.deposit_channel : null,
           dateOfPayment: editForm.date_of_payment,
-          depositStatus: editForm.deposit_status,
           phoneNumber: editForm.phone_number.trim() || undefined,
           remarks: editForm.remarks.trim() || undefined,
         },
       })
+      // depositStatus is not part of this payload: the update route rejects
+      // it by design, so it goes through its own endpoint below.
+      if (editForm.deposit_status !== (editTarget.depositStatus === 'paid' ? 'paid' : 'pending')) {
+        await setDepositStatusMutation.mutateAsync({ id: entryId, depositStatus: editForm.deposit_status })
+      }
       toast.success('Entry updated')
       setEditTarget(null)
       setEditForm(null)
@@ -478,20 +522,24 @@ function FilingStationDetailsView() {
   // ── Deposit Status Quick Toggle ───────────────────────────────────
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null)
 
+  // 'paid' is the enum's confirmed state. This used to send 'confirmed',
+  // which is not one of the three the column accepts — and it sent it on the
+  // update route, which strips depositStatus outright. So the toggle flipped
+  // nothing at all while reporting that it had.
   const handleToggleDepositStatus = useCallback(async (entry: DeliverySale) => {
     const entryId = String(entry._id || entry.id || '')
     if (!entryId) return
-    const nextStatus = entry.depositStatus === 'confirmed' ? 'pending' : 'confirmed'
+    const nextStatus = entry.depositStatus === 'paid' ? 'pending' : 'paid'
     setUpdatingStatusId(entryId)
     try {
-      await updateSaleMutation.mutateAsync({ id: entryId, data: { depositStatus: nextStatus } })
-      toast.success(`Deposit status changed to ${nextStatus}`)
+      await setDepositStatusMutation.mutateAsync({ id: entryId, depositStatus: nextStatus })
+      toast.success(nextStatus === 'paid' ? 'Deposit confirmed' : 'Deposit set back to pending')
     } catch {
       toast.error('Failed to update status')
     } finally {
       setUpdatingStatusId(null)
     }
-  }, [updateSaleMutation, toast])
+  }, [setDepositStatusMutation, toast])
 
   // ── Loading / Not found ────────────────────────────────────────────
   if (!station && (isLoadingStations || isLoadingCustomers)) {
@@ -707,7 +755,7 @@ function FilingStationDetailsView() {
                             const depositAmt = toNum(entry.paymentAmount)
                             const expenseAmt = toNum(entry.expensesAmount ?? 0)
                             const isSale = saleQty > 0 && saleQty < group.quantity
-                            const isConfirmed = entry.depositStatus === 'confirmed'
+                            const isConfirmed = entry.depositStatus === 'paid'
                             const entryDate = entry.dateOfPayment || entry.dateLoaded || ''
 
                             return (
@@ -872,37 +920,47 @@ function FilingStationDetailsView() {
             {/* Bank Deposit Tab */}
             {activeEntryTab === 'deposit' && (
               <div className="space-y-4 pt-1">
+                <DepositChannelPicker
+                  value={quickForm.deposit_channel}
+                  onChange={c => setQuickForm(p => ({ ...p, deposit_channel: c }))}
+                />
+
+                {/* Both sides of the pair, updating as the amount is typed.
+                    Charges are the gap between them and mean nothing until
+                    both have been entered, so the panel says so rather than
+                    showing a confident ₦0. */}
+                <BankChargesPanel
+                  totals={cycleChannelTotals}
+                  pending={Number(stripCommas(quickForm.payment_amount)) || 0}
+                  pendingChannel={quickForm.deposit_channel}
+                />
+
                 <div className="grid grid-cols-2 gap-3">
+                  <RemittanceAmountField
+                    channel={quickForm.deposit_channel}
+                    value={quickForm.payment_amount}
+                    onChange={v => setQuickForm(p => ({ ...p, payment_amount: v }))}
+                  />
                   <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">Amount Deposited (₦) <span className="text-destructive">*</span></label>
-                    <Input type="text" inputMode="decimal" placeholder="e.g. 5,000,000" className="h-9 text-sm"
-                      value={quickForm.payment_amount} onChange={e => setQuickForm(p => ({ ...p, payment_amount: formatWithCommas(e.target.value) }))} />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">Date of Deposit</label>
+                    <label className="text-xs text-muted-foreground">
+                      {quickForm.deposit_channel === 'pos' ? 'Transaction Date' : 'Date of Deposit'}
+                    </label>
                     <Input type="date" className="h-9 text-sm" value={quickForm.date_of_payment}
                       onChange={e => setQuickForm(p => ({ ...p, date_of_payment: e.target.value }))} />
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">Bank Account <span className="text-destructive">*</span></label>
-                    <select aria-label="Bank account" value={quickForm.bank_account_id}
-                      onChange={e => setQuickForm(p => ({ ...p, bank_account_id: e.target.value }))}
-                      className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
-                      <option value="">Select account…</option>
-                      {BANK_ACCOUNTS.filter(b => b.is_active).map(b => (
-                        <option key={b.id} value={String(b.id)}>{b.account_number} · {b.bank_name}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <BankAccountSelect
+                    value={quickForm.bank_account_id}
+                    onChange={id => setQuickForm(p => ({ ...p, bank_account_id: id }))}
+                  />
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">Status</label>
                     <select aria-label="Status" value={quickForm.deposit_status}
-                      onChange={e => setQuickForm(p => ({ ...p, deposit_status: e.target.value as 'pending' | 'confirmed' }))}
-                      className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
+                      onChange={e => setQuickForm(p => ({ ...p, deposit_status: e.target.value as 'pending' | 'paid' }))}
+                      className="h-9 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
                       <option value="pending">Pending</option>
-                      <option value="confirmed">Confirmed</option>
+                      <option value="paid">Confirmed</option>
                     </select>
                   </div>
                 </div>
@@ -1045,21 +1103,29 @@ function FilingStationDetailsView() {
                       <div className="space-y-1">
                         <label className="text-xs text-muted-foreground">Status</label>
                         <select aria-label="Status" value={editForm.deposit_status}
-                          onChange={e => setEditForm(p => p ? { ...p, deposit_status: e.target.value as 'pending' | 'confirmed' } : null)}
+                          onChange={e => setEditForm(p => p ? { ...p, deposit_status: e.target.value as 'pending' | 'paid' } : null)}
                           className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
                           <option value="pending">Pending</option>
                           <option value="confirmed">Confirmed</option>
                         </select>
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Bank Account</label>
-                      <select aria-label="Bank" value={editForm.bank_account_id}
-                        onChange={e => setEditForm(p => p ? { ...p, bank_account_id: e.target.value } : null)}
-                        className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
-                        <option value="">Select account…</option>
-                        {BANK_ACCOUNTS.filter(b => b.is_active).map(b => <option key={b.id} value={String(b.id)}>{b.account_number} · {b.bank_name}</option>)}
-                      </select>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <BankAccountSelect
+                        value={editForm.bank_account_id}
+                        onChange={id => setEditForm(p => p ? { ...p, bank_account_id: id } : null)}
+                        legacyLabel={editTarget?.bank || null}
+                        required={false}
+                      />
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Remittance Type</label>
+                        <select aria-label="Remittance type" value={editForm.deposit_channel}
+                          onChange={e => setEditForm(p => p ? { ...p, deposit_channel: e.target.value as DepositChannel } : null)}
+                          className="h-9 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
+                          <option value="bank_deposit">Bank Deposit</option>
+                          <option value="pos">POS Transaction</option>
+                        </select>
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1">

@@ -16,44 +16,11 @@ import { useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation } from '#/lib/sales-ledger-utils'
+import { useBankAccountPicker, bankAccountToString } from '#/lib/bank-accounts'
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Hardcoded Bank Accounts
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface BankAccount {
-  id: number
-  account_name: string
-  account_number: string
-  bank_name: string
-  is_active: boolean
-}
-
-export const BANK_ACCOUNTS: BankAccount[] = [
-  { id: 1, account_name: 'Soroman Trucks', account_number: '1311924986', bank_name: 'Zenith Bank', is_active: true },
-  { id: 2, account_name: 'Action Energy', account_number: '1017185599', bank_name: 'Zenith Bank', is_active: true },
-  { id: 3, account_name: 'Soroman Nigeria Ltd', account_number: '1000102110', bank_name: 'Optimus Bank', is_active: true },
-]
-
-export const resolveBankAccount = (bankStr: string | null | undefined): BankAccount | null => {
-  if (!bankStr) return null
-  return BANK_ACCOUNTS.find(b => bankStr.startsWith(b.account_number) || bankStr.includes(b.account_number)) || null
-}
-
-export const formatBankLabel = (bankStr: string | null | undefined): string => {
-  if (!bankStr) return ''
-  const acct = resolveBankAccount(bankStr)
-  if (acct) return `${acct.account_name} — ${acct.bank_name} (${acct.account_number})`
-  return bankStr
-}
-
-export const bankStringToId = (bankStr: string): string => {
-  if (!bankStr) return ''
-  const match = BANK_ACCOUNTS.find(b =>
-    bankStr.startsWith(b.account_number) || bankStr.includes(b.account_number),
-  )
-  return match ? String(match.id) : ''
-}
+// Bank accounts come from the managed table via #/lib/bank-accounts — they
+// used to be three literals right here. See that module for why resolution
+// stayed keyed on the account number.
 
 // Helpers (imported from lib/sales-ledger-utils)
 
@@ -889,6 +856,7 @@ interface EditEntryDialogProps {
 export function EditEntryDialog({ open, onOpenChange, target, tripCodes, customerMap }: EditEntryDialogProps) {
   const toast = useToast()
   const updateSale = useUpdateDeliverySale()
+  const { options: bankOptions } = useBankAccountPicker()
   const [saving, setSaving] = useState(false)
   const [editTripCode, setEditTripCode] = useState('')
   const [form, setForm] = useState<{
@@ -1069,9 +1037,15 @@ export function EditEntryDialog({ open, onOpenChange, target, tripCodes, custome
                   className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm"
                 >
                   <option value="">No Bank Selected / Cash</option>
-                  {BANK_ACCOUNTS.map(acct => (
-                    <option key={acct.id} value={`${acct.account_number} (${acct.bank_name})`}>
-                      {acct.account_name} — {acct.bank_name} ({acct.account_number})
+                  {/* An account already on the entry but no longer active (or
+                      deleted outright) is still offered, so opening an old
+                      entry and saving it does not quietly blank its bank. */}
+                  {form.bank && !bankOptions.some(o => bankAccountToString(o.account) === form.bank) && (
+                    <option value={form.bank}>{form.bank} (on record)</option>
+                  )}
+                  {bankOptions.map(o => (
+                    <option key={o.id} value={bankAccountToString(o.account)}>
+                      {o.account.accountName} — {o.account.bankName} ({o.account.accountNumber})
                     </option>
                   ))}
                 </select>

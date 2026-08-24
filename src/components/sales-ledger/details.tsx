@@ -22,12 +22,16 @@ import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
   RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, EditEntryDialog, DeleteConfirmDialog,
-  resolveBankAccount, type LedgerGroup,
+  type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
 import { toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate } from '#/lib/sales-ledger-utils'
+import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 
 export function SalesLedgerDetails() {
   const navigate = useNavigate()
+  // Every account, not just the active ones: a payment recorded into an
+  // account since retired still has to name it.
+  const { accounts: bankAccounts } = useBankAccountPicker()
   const toast = useToast()
   const searchParams = useSearch({ strict: false }) as {
     key?: string
@@ -470,7 +474,7 @@ export function SalesLedgerDetails() {
                         return targetGroup.payments.map((payment, idx) => {
                           cumulative += toNum(payment.paymentAmount)
                           const balanceAfter = targetGroup.expected - cumulative
-                          const bankAcct = resolveBankAccount(payment.bank)
+                          const bankAcct = resolveBankAccount(bankAccounts, payment.bank)
 
                           return (
                             <TableRow key={payment._id || payment.id || idx} className="hover:bg-muted/50 border-b border-border transition-colors duration-250 ease-luxe">
@@ -497,8 +501,8 @@ export function SalesLedgerDetails() {
                               <TableCell className="text-foreground whitespace-nowrap">
                                 {bankAcct ? (
                                   <div>
-                                    <p className="font-semibold text-foreground">{bankAcct.account_name}</p>
-                                    <p className="text-xs text-muted-foreground">{bankAcct.bank_name} ({bankAcct.account_number})</p>
+                                    <p className="font-semibold text-foreground">{bankAcct.accountName}</p>
+                                    <p className="text-xs text-muted-foreground">{bankAcct.bankName} ({bankAcct.accountNumber})</p>
                                   </div>
                                 ) : payment.bank ? (
                                   <span className="text-xs text-muted-foreground">{payment.bank}</span>

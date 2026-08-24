@@ -28,12 +28,13 @@ import { useSalesLedgerFilters } from '#/lib/hooks/useSalesLedgerFilters'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
-  RecordPaymentDialog, formatBankLabel,
+  RecordPaymentDialog,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
 import {
   toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate,
   getCodeTheme, type TimePreset,
 } from '#/lib/sales-ledger-utils'
+import { useBankAccountPicker, formatBankLabel } from '#/lib/bank-accounts'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/sales-ledger/')({
@@ -42,6 +43,9 @@ export const Route = createFileRoute('/sales-ledger/')({
 })
 
 function SalesLedgerDashboard() {
+  // Every account, active or not — an export must still name the account a
+  // historical payment went into.
+  const { accounts: bankAccounts } = useBankAccountPicker()
   const navigate = useNavigate()
   const toast = useToast()
 
@@ -401,7 +405,7 @@ function SalesLedgerDashboard() {
             idx === 0 ? String(sn) : '', idx === 0 ? (group.code || '') : '', idx === 0 ? group.truckNumber : '', idx === 0 ? u(group.customerName || '') : '', idx === 0 ? u(group.location || '') : '',
             idx === 0 && group.quantity > 0 ? String(group.quantity) : '', idx === 0 && group.rate > 0 ? String(group.rate) : '', idx === 0 && group.expected > 0 ? String(group.expected) : '',
             toNum(s.paymentAmount) > 0 ? String(toNum(s.paymentAmount)) : '', group.expected > 0 ? (bal === 0 ? 'FULLY PAID' : bal > 0 ? String(bal) : `+${String(Math.abs(bal))}`) : '',
-            u(s.payerName || ''), u(formatBankLabel(s.bank)), safeFmtDate(s.dateOfPayment),
+            u(s.payerName || ''), u(formatBankLabel(bankAccounts, s.bank)), safeFmtDate(s.dateOfPayment),
           ])
         })
       }
@@ -424,7 +428,7 @@ function SalesLedgerDashboard() {
       u(s.customerName || customerMap.get(String(s.customerId))?.name || ''), u(s.location || ''),
       toNum(s.quantity) > 0 ? String(toNum(s.quantity)) : '', toNum(s.rate) > 0 ? String(toNum(s.rate)) : '',
       toNum(s.salesValue) > 0 ? String(toNum(s.salesValue)) : '', toNum(s.paymentAmount) > 0 ? String(toNum(s.paymentAmount)) : '',
-      u(s.payerName || ''), u(formatBankLabel(s.bank)), s.phoneNumber || '', u(s.enteredBy || ''),
+      u(s.payerName || ''), u(formatBankLabel(bankAccounts, s.bank)), s.phoneNumber || '', u(s.enteredBy || ''),
     ])
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -993,7 +997,7 @@ function SalesLedgerDashboard() {
                           <TableCell className="text-right font-semibold text-accent whitespace-nowrap text-xs">{toNum(sale.paymentAmount) > 0 ? fmt(toNum(sale.paymentAmount)) : '—'}</TableCell>
                           <TableCell className="text-muted-foreground whitespace-nowrap text-xs">{sale.payerName || '—'}</TableCell>
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                            {formatBankLabel(sale.bank) || '—'}
+                            {formatBankLabel(bankAccounts, sale.bank) || '—'}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{sale.enteredBy || '—'}</TableCell>
                         </TableRow>

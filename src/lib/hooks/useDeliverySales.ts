@@ -78,6 +78,42 @@ export function useUpdateDeliverySale() {
   })
 }
 
+/**
+ * Confirm or un-confirm a hand-recorded deposit.
+ *
+ * Its own endpoint because the general update route deliberately refuses
+ * depositStatus — it strips the field rather than erroring, which is why the
+ * old toggle reported success while the status never moved.
+ *
+ * No toast of its own: the callers already report, and a toggle that fires
+ * two notifications for one click reads as two things having happened.
+ */
+export function useSetDepositStatus() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({
+      id,
+      depositStatus,
+    }: {
+      id: string
+      depositStatus: 'pending' | 'paid' | 'partial'
+    }) => {
+      const res = await api.patch(`/delivery-sales/${id}/deposit-status`, { depositStatus })
+      return res.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+    },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err))
+    },
+  })
+}
+
 export function useDeleteDeliverySale() {
   const queryClient = useQueryClient()
   const toast = useToast()

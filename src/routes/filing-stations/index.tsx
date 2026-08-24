@@ -15,7 +15,7 @@ import {
   Fuel, Plus, Search, Download, Trash2, Pencil,
   Truck, Wallet, TrendingUp, Banknote, MapPin, Users,
   Filter, Tag, Receipt, ArrowRightLeft, ChevronRight, ChevronDown,
-  Calendar as CalendarIcon, X, Eye, Loader2,
+  Calendar as CalendarIcon, X, Eye, Loader2, FileSpreadsheet, FileText,
 } from 'lucide-react'
 import {
   format, parseISO, startOfDay, endOfDay, startOfWeek, endOfWeek,
@@ -23,10 +23,10 @@ import {
 } from 'date-fns'
 import { useFilingStations } from '#/lib/hooks/useFilingStations'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
-import { useDeliverySalesList, useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale } from '#/lib/hooks/useDeliverySales'
+import { useDeliverySalesList, useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale, useSetDepositStatus } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
-import { cn, toNum } from '#/lib/utils'
+import { cn, toNum, getErrorMessage } from '#/lib/utils'
 import type { FilingStation, DeliverySale, DeliveryCustomer, AccountEntry } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -35,7 +35,12 @@ export const Route = createFileRoute('/filing-stations/')({
   component: FilingStationsDashboard,
 })
 
-import { BANK_ACCOUNTS } from '#/components/sales-ledger/SalesLedgerDialogs'
+import { useBankAccountPicker, bankAccountToString } from '#/lib/bank-accounts'
+import {
+  DepositChannelPicker, BankAccountSelect, BankChargesPanel, RemittanceAmountField,
+} from '#/components/filing-stations/RemittanceChannelFields'
+import { sumByChannel, type DepositChannel } from '#/lib/deposit-channel'
+import { exportStationLedgerExcel, exportStationLedgerPdf } from './-station-ledger-export'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -154,7 +159,8 @@ interface QuickPaymentForm {
   payer_name: string
   phone_number: string
   bank_account_id: string
-  deposit_status: 'pending' | 'confirmed'
+  deposit_channel: DepositChannel
+  deposit_status: 'pending' | 'paid'
   remarks: string
 }
 
@@ -227,9 +233,21 @@ function FilingStationsDashboard() {
     payer_name: '',
     phone_number: '',
     bank_account_id: '',
-    deposit_status: 'confirmed',
+    deposit_channel: 'bank_deposit',
+    deposit_status: 'paid',
     remarks: '',
   })
+
+  // Every account, active or not — an entry recorded into an account since
+  // retired still has to resolve to a name.
+  const { accounts: bankAccounts, byId: bankAccountsById } = useBankAccountPicker()
+
+  // The cycle's running POS/deposit split, so the charges panel can show the
+  // pair rather than only the figure being typed.
+  const quickPaymentChannelTotals = useMemo(
+    () => sumByChannel(quickPaymentTarget?.payments || []),
+    [quickPaymentTarget],
+  )
   const [quickPaymentSaving, setQuickPaymentSaving] = useState(false)
 
   // ── Edit Entry Dialog ─────────────────────────────────────────────
@@ -246,7 +264,8 @@ function FilingStationsDashboard() {
     expenses_amount: string
     payer_name: string
     bank: string
-    deposit_status: 'pending' | 'confirmed'
+    deposit_channel: DepositChannel
+  deposit_status: 'pending' | 'paid'
     phone_number: string
     remarks: string
     location: string
@@ -283,6 +302,7 @@ function FilingStationsDashboard() {
 
   const createSaleMutation = useCreateDeliverySale()
   const updateSaleMutation = useUpdateDeliverySale()
+  const setDepositStatusMutation = useSetDepositStatus()
   const deleteSaleMutation = useDeleteDeliverySale()
   const updateInventoryMutation = useUpdateDeliveryInventory()
   const deleteInventoryMutation = useDeleteDeliveryInventory()
@@ -707,7 +727,8 @@ function FilingStationsDashboard() {
       payer_name: group?.stationName || '',
       phone_number: '',
       bank_account_id: '1',
-      deposit_status: 'confirmed',
+      deposit_channel: 'bank_deposit',
+    deposit_status: 'paid',
       remarks: '',
     })
   }
@@ -751,13 +772,21 @@ function FilingStationsDashboard() {
         toast.error('Enter deposit amount')
         return
       }
-      const bankAcc = BANK_ACCOUNTS.find(b => String(b.id) === quickPaymentForm.bank_account_id)
+      if (!quickPaymentForm.bank_account_id) {
+        toast.error('Select a bank account')
+        return
+      }
+      const bankAcc = bankAccountsById.get(quickPaymentForm.bank_account_id)
       payload.paymentAmount = amt
       payload.payerName = quickPaymentForm.payer_name
       payload.phoneNumber = quickPaymentForm.phone_number
-      payload.bank = bankAcc ? `${bankAcc.account_name} · ${bankAcc.bank_name}` : 'Bank Deposit'
+      // Account NUMBER first. This wrote the account NAME, which carries no
+      // number at all, so nothing recorded from this page could ever be
+      // resolved back to an account the way every report does it.
+      payload.bank = bankAcc ? bankAccountToString(bankAcc) : 'Bank Deposit'
+      payload.bankAccountId = bankAcc ? Number(bankAcc.id) : undefined
+      payload.depositChannel = quickPaymentForm.deposit_channel
       payload.dateOfPayment = quickPaymentForm.date_of_payment
-      payload.depositStatus = quickPaymentForm.deposit_status
       payload.quantity = 0
     } else if (activeEntryTab === 'expense') {
       const expAmt = toNum(quickPaymentForm.payment_amount)
@@ -782,7 +811,7 @@ function FilingStationsDashboard() {
     } finally {
       setQuickPaymentSaving(false)
     }
-  }, [quickPaymentTarget, activeEntryTab, quickPaymentForm, createSaleMutation, toast])
+  }, [quickPaymentTarget, activeEntryTab, quickPaymentForm, bankAccountsById, createSaleMutation, toast])
 
   const openEditDialog = (entry: DeliverySale, group: LedgerGroup) => {
     setEditTarget({ entry, group })
@@ -795,7 +824,8 @@ function FilingStationsDashboard() {
       expenses_amount: entry.expensesAmount ? String(entry.expensesAmount) : '',
       payer_name: entry.payerName || '',
       bank: entry.bank || '',
-      deposit_status: (entry.depositStatus as any) || 'confirmed',
+      deposit_channel: (entry.depositChannel as DepositChannel) || 'bank_deposit',
+      deposit_status: entry.depositStatus === 'paid' ? 'paid' : 'pending',
       phone_number: entry.phoneNumber || '',
       remarks: entry.remarks || '',
       location: entry.location || '',
@@ -820,7 +850,9 @@ function FilingStationsDashboard() {
       expensesAmount: toNum(editForm.expenses_amount),
       payerName: editForm.payer_name,
       bank: editForm.bank,
-      depositStatus: editForm.deposit_status,
+      // Only on rows that move money — a pump sale or an expense tagged with
+      // a channel would be pulled into the bank-charges pair.
+      depositChannel: toNum(editForm.payment_amount) > 0 ? editForm.deposit_channel : null,
       phoneNumber: editForm.phone_number,
       remarks: editForm.remarks,
       location: editForm.location,
@@ -829,12 +861,17 @@ function FilingStationsDashboard() {
     setEditSaving(true)
     try {
       await updateSaleMutation.mutateAsync({ id: entryId, data: payload })
+      // depositStatus travels on its own route — the update route strips it.
+      const current = editTarget.entry.depositStatus === 'paid' ? 'paid' : 'pending'
+      if (editForm.deposit_status !== current) {
+        await setDepositStatusMutation.mutateAsync({ id: entryId, depositStatus: editForm.deposit_status })
+      }
       setEditTarget(null)
       setEditForm(null)
     } finally {
       setEditSaving(false)
     }
-  }, [editTarget, editForm, updateSaleMutation])
+  }, [editTarget, editForm, updateSaleMutation, setDepositStatusMutation])
 
   const openCodeEditDialog = (group: LedgerGroup) => {
     setCodeEditTarget(group)
@@ -883,44 +920,60 @@ function FilingStationsDashboard() {
   // ── Deposit Status Quick Toggle ───────────────────────────────────
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null)
 
+  // 'paid' is the enum's confirmed state. This used to send 'confirmed',
+  // which is not one of the three the column accepts — and it sent it on the
+  // update route, which strips depositStatus outright. So the toggle flipped
+  // nothing at all while reporting that it had.
   const handleToggleDepositStatus = useCallback(async (entry: DeliverySale) => {
     const entryId = String(entry._id || entry.id || '')
     if (!entryId) return
-    const nextStatus = entry.depositStatus === 'confirmed' ? 'pending' : 'confirmed'
+    const nextStatus = entry.depositStatus === 'paid' ? 'pending' : 'paid'
     setUpdatingStatusId(entryId)
     try {
-      await updateSaleMutation.mutateAsync({ id: entryId, data: { depositStatus: nextStatus } })
-      toast.success(`Deposit status changed to ${nextStatus}`)
+      await setDepositStatusMutation.mutateAsync({ id: entryId, depositStatus: nextStatus })
+      toast.success(nextStatus === 'paid' ? 'Deposit confirmed' : 'Deposit set back to pending')
     } catch {
       toast.error('Failed to update status')
     } finally {
       setUpdatingStatusId(null)
     }
-  }, [updateSaleMutation, toast])
+  }, [setDepositStatusMutation, toast])
 
   const periodLabel = timePreset === 'custom'
     ? `${customFrom || '?'} – ${customTo || '?'}`
     : timePreset === 'all' ? 'All Time' : timePreset.charAt(0).toUpperCase() + timePreset.slice(1)
 
-  // ── CSV Export ─────────────────────────────────────────────────────
-  const exportCSV = useCallback(() => {
+  // ── Exports ────────────────────────────────────────────────────────
+  //
+  // This used to be a CSV writing one line per cycle with a single
+  // `Deposited` column holding the SUM of that cycle's remittances — five
+  // separate deposits on different days into different banks came out as one
+  // number with no way back to the entries. Each remittance is now its own
+  // row under its cycle. See -station-ledger-export.ts.
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
+
+  const runExport = useCallback(async (kind: 'excel' | 'pdf') => {
     if (!filteredLedgerGroups.length) return
-    const headers = ['Station', 'Truck', 'Cycle', 'Allocation Code', 'Date Loaded', 'Qty Allocated (L)', 'Qty Sold (L)', 'Expected (₦)', 'Deposited (₦)', 'Expenses (₦)', 'Balance (₦)', 'Location', 'Depot']
-    const rows = filteredLedgerGroups.map(g => [
-      g.stationName, g.truckNumber, g.cycleNum ? `Cycle ${g.cycleNum}` : '—', g.code || '—',
-      g.dateLoaded ? (() => { try { return format(parseISO(g.dateLoaded), 'dd/MM/yyyy') } catch { return g.dateLoaded } })() : '—',
-      g.quantity, g.totalQtySold, g.expected, g.totalPaid, g.totalExpenses, g.balance,
-      g.location, g.depot,
-    ])
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `FILLING-STATION-LEDGER-${periodLabel.replace(/\s/g, '-')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [filteredLedgerGroups, periodLabel])
+    const filters = {
+      periodLabel,
+      stationName: stationFilter === 'all'
+        ? 'All stations'
+        : (stations.find(st => String(st._id) === stationFilter)?.name || 'All stations'),
+      search: searchQuery,
+    }
+    setExporting(kind)
+    try {
+      if (kind === 'excel') {
+        await exportStationLedgerExcel(filteredLedgerGroups, filters, bankAccounts)
+      } else {
+        await exportStationLedgerPdf(filteredLedgerGroups, filters, bankAccounts)
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err))
+    } finally {
+      setExporting(null)
+    }
+  }, [filteredLedgerGroups, periodLabel, stationFilter, stations, searchQuery, bankAccounts, toast])
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
@@ -946,8 +999,25 @@ function FilingStationsDashboard() {
  >
               <Plus className="size-4 mr-1.5" />Record Entry
             </Button>
-            <Button variant="outline" size="sm" className="cursor-pointer" onClick={exportCSV} disabled={filteredLedgerGroups.length === 0}>
-              <Download className="size-3.5 mr-1.5" /> Export CSV
+            <Button
+              variant="outline" size="sm" className="cursor-pointer"
+              onClick={() => runExport('excel')}
+              disabled={filteredLedgerGroups.length === 0 || exporting !== null}
+            >
+              {exporting === 'excel'
+                ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                : <FileSpreadsheet className="size-3.5 mr-1.5" />}
+              Export Excel
+            </Button>
+            <Button
+              variant="outline" size="sm" className="cursor-pointer"
+              onClick={() => runExport('pdf')}
+              disabled={filteredLedgerGroups.length === 0 || exporting !== null}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                : <FileText className="size-3.5 mr-1.5" />}
+              Export PDF
             </Button>
           </>
         }
@@ -1301,7 +1371,7 @@ function FilingStationsDashboard() {
                                   const depositAmt = toNum(entry.paymentAmount)
                                   const expenseAmt = toNum(entry.expensesAmount ?? 0)
                                   const isSale = saleQty > 0 && saleQty < group.quantity
-                                  const isConfirmed = entry.depositStatus === 'confirmed'
+                                  const isConfirmed = entry.depositStatus === 'paid'
                                   const entryDate = entry.dateOfPayment || entry.dateLoaded || ''
 
                                   return (
@@ -1477,15 +1547,23 @@ function FilingStationsDashboard() {
 
             {activeEntryTab === 'deposit' && (
               <>
-                <div className="space-y-1">
-                  <Label className="text-xs">Deposit Amount (₦)</Label>
-                  <Input
-                    type="text"
-                    placeholder="e.g. 2,500,000"
-                    value={formatWithCommas(quickPaymentForm.payment_amount)}
-                    onChange={e => setQuickPaymentForm(f => ({ ...f, payment_amount: stripCommas(e.target.value) }))}
- />
-                </div>
+                <DepositChannelPicker
+                  value={quickPaymentForm.deposit_channel}
+                  onChange={c => setQuickPaymentForm(f => ({ ...f, deposit_channel: c }))}
+                />
+
+                <BankChargesPanel
+                  totals={quickPaymentChannelTotals}
+                  pending={toNum(quickPaymentForm.payment_amount) || 0}
+                  pendingChannel={quickPaymentForm.deposit_channel}
+                />
+
+                <RemittanceAmountField
+                  channel={quickPaymentForm.deposit_channel}
+                  value={formatWithCommas(quickPaymentForm.payment_amount)}
+                  onChange={v => setQuickPaymentForm(f => ({ ...f, payment_amount: stripCommas(v) }))}
+                />
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs">Depositor Name</Label>
@@ -1495,18 +1573,10 @@ function FilingStationsDashboard() {
                       onChange={e => setQuickPaymentForm(f => ({ ...f, payer_name: e.target.value }))}
  />
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Target Bank Account</Label>
-                    <select
-                      value={quickPaymentForm.bank_account_id}
-                      onChange={e => setQuickPaymentForm(f => ({ ...f, bank_account_id: e.target.value }))}
-                      className="h-8 w-full rounded-lg border border-border bg-background text-foreground px-2 text-xs"
- >
-                      {BANK_ACCOUNTS.map(b => (
-                        <option key={b.id} value={b.id}>{b.bank_name} - {b.account_number} ({b.account_name})</option>
-                      ))}
-                    </select>
-                  </div>
+                  <BankAccountSelect
+                    value={quickPaymentForm.bank_account_id}
+                    onChange={id => setQuickPaymentForm(f => ({ ...f, bank_account_id: id }))}
+                  />
                 </div>
               </>
             )}

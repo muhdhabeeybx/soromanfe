@@ -492,6 +492,9 @@ export interface DeliveryCustomer {
   updatedAt?: string
 }
 
+/** Re-exported so DeliverySale can name it without importing across modules. */
+export type DepositChannel = 'pos' | 'bank_deposit'
+
 export interface DeliverySale {
   _id: string
   id?: string
@@ -508,7 +511,12 @@ export interface DeliverySale {
   expensesAmount?: string | number
   balance: string | number
   payerName: string
+  /** Free text as recorded — "1311924986 · Zenith Bank". Still the only bank record older rows have. */
   bank: string
+  /** The managed account, on entries written since the ledger started linking them. */
+  bankAccountId?: number | null
+  /** How the money reached the bank. Null on every row that predates the split, and on rows that are not remittances. */
+  depositChannel?: DepositChannel | null
   dateOfPayment: string | null
   depositStatus?: 'pending' | 'partial' | 'paid' | string
   phoneNumber: string
