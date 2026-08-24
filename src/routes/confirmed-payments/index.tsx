@@ -228,18 +228,18 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
 
         <div className="divide-y divide-foreground/10">
           <div className="pb-3">
-            <p className={cn(MICRO, 'pb-1 text-muted-foreground')}>Order</p>
+            {/* <p className={cn(MICRO, 'pb-1 text-muted-foreground')}>Order</p> */}
             <div className="grid gap-3 sm:grid-cols-2">
               <Row label="Reference" value={order.reference} />
-              <Row label="Status" value={order.status} />
-              <Row label="Confirmed" value={order.paymentConfirmedAt ? format(new Date(order.paymentConfirmedAt), 'd MMM yyyy, HH:mm') : undefined} />
+              {/* <Row label="Status" value={order.status} /> */}
+              <Row label="Date Confirmed" value={order.paymentConfirmedAt ? format(new Date(order.paymentConfirmedAt), 'd MMM yyyy, HH:mm') : undefined} />
               <Row label="Location" value={order.depotName} />
               <Row label="PFI" value={order.pfiNumber} />
-              <Row label="PFI location" value={order.pfiLocationName} />
+              {/* <Row label="PFI location" value={order.pfiLocationName} /> */}
               <Row label="Product" value={order.productName} />
               <Row label="Quantity" value={order.quantity ? `${Number(order.quantity).toLocaleString()} L` : undefined} />
-              <Row label="Delivery type" value={order.deliveryType} />
-              <Row label="Order DVA" value={[order.virtualAccountBank, order.virtualAccountNumber].filter(Boolean).join(' · ')} />
+              {/* <Row label="Delivery type" value={order.deliveryType} /> */}
+              {/* <Row label="Order DVA" value={[order.virtualAccountBank, order.virtualAccountNumber].filter(Boolean).join(' · ')} /> */}
             </div>
           </div>
 

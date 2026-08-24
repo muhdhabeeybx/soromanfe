@@ -360,7 +360,7 @@ function RouteComponent() {
         </Card>
 
         {/* PFI Source Information */}
-        {order.pfiId && (
+        {/* {order.pfiId && (
           <Card>
             <CardHeader className="border-b border-border">
               <div className="flex items-center gap-2">
@@ -402,7 +402,7 @@ function RouteComponent() {
               </div>
             </CardContent>
           </Card>
-        )}
+        )} */}
       </div>
 
       {/* Payment Information */}
@@ -415,7 +415,7 @@ function RouteComponent() {
               </div>
               <div>
                 <CardTitle className="text-sm">Payment Information</CardTitle>
-                <CardDescription className="text-xs">Dedicated virtual account and payment status</CardDescription>
+                <CardDescription className="text-xs">Bank paid into and payment status</CardDescription>
               </div>
             </div>
           </CardHeader>
