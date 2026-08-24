@@ -193,8 +193,25 @@ export function PfiDetailDialog({
               )} */}
 
               <Section title="Stock Details">
-                <Row label="Total Quantity Sold" value={litres(f.sold)} />
+                {/* Sold means paid for, not loaded out — the same rule the
+                    finance report uses, so the two always agree. */}
+                <Row
+                  label="Total Quantity Sold"
+                  hint="Orders with payment confirmed"
+                  value={litres(f.sold)}
+                  emphasis
+                />
                 <Row label="Quantity Remaining" value={litres(f.remaining)} />
+                {/* Only worth showing when loading is behind payment, which
+                    is the case the two figures exist to tell apart. */}
+                {f.movementQty > 0 && f.sold - f.movementQty > 0 && (
+                  <Row
+                    label="— still to load"
+                    hint="Paid for but not yet ticketed out"
+                    value={litres(f.sold - f.movementQty)}
+                    tone="text-warning"
+                  />
+                )}
                 <div className="py-2.5">
                   <p className="mb-1.5 text-sm text-muted-foreground">Sales Progress</p>
                   <SellThroughBar value={f.sellThrough} />

@@ -210,13 +210,19 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       ],
     },
     {
+      // Sold means payment confirmed, not loaded out — the same rule the
+      // finance report uses, so Total Sold here and the Confirmed Orders
+      // sheet's Total Quantity are the same number by construction.
+      // "Still to load" names the gap where the trucks are behind the money.
       title: 'STOCK MOVEMENT',
       pairs: [
         { label: 'Initial Stock (Litres)', value: f.tankQtyLitres, fmt: QTY },
-        { label: 'Total Sold (Litres)', value: f.sold, fmt: QTY },
+        { label: 'Total Sold (Litres)', value: f.sold, fmt: QTY, bold: true },
         { label: 'Remaining (Litres)', value: f.remaining, fmt: QTY, bold: true },
         { label: 'Percentage Sold', value: f.sellThrough ?? '—', fmt: f.sellThrough != null ? PCT : undefined },
-        { label: 'Orders', value: pfi.orderCount ?? 0, fmt: '#,##0' },
+        { label: 'Orders (Paid)', value: pfi.orderCount ?? 0, fmt: '#,##0' },
+        { label: 'Ticketed Out (Litres)', value: f.movementQty, fmt: QTY },
+        { label: 'Still To Load (Litres)', value: Math.max(0, f.sold - f.movementQty), fmt: QTY, tone: f.sold - f.movementQty > 0 ? 'bad' : 'plain' },
         { label: 'Delivery Allocated (Litres)', value: f.allocationQty, fmt: QTY },
       ],
     },
