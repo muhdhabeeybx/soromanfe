@@ -89,16 +89,16 @@ function QuantityPair({ f }: { f: PfiFinancials }) {
       <div className={cn(PANEL, 'p-3')}>
         <p className={cn(MICRO, 'text-muted-foreground')}>BL quantity</p>
         <p className="mt-1 text-lg font-semibold">{litres(f.blQtyLitres)}</p>
-        <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
+        {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
           From the shipping papers — what you pay for
-        </p>
+        </p> */}
       </div>
       <div className={cn(PANEL, 'p-3')}>
         <p className={cn(MICRO, 'text-muted-foreground')}>Tank quantity</p>
         <p className="mt-1 text-lg font-semibold">{litres(f.tankQtyLitres)}</p>
-        <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
+        {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
           Measured on discharge — what you sell from
-        </p>
+        </p> */}
       </div>
     </div>
   )
@@ -206,8 +206,8 @@ export function PfiDetailDialog({
                     is the case the two figures exist to tell apart. */}
                 {f.movementQty > 0 && f.sold - f.movementQty > 0 && (
                   <Row
-                    label="— still to load"
-                    hint="Paid for but not yet ticketed out"
+                    label="Sold but Unloaded"
+                    hint="Paid for but not yet ticketed"
                     value={litres(f.sold - f.movementQty)}
                     tone="text-warning"
                   />
@@ -233,8 +233,8 @@ export function PfiDetailDialog({
                 />
                 {f.pendingExpenses > 0 && (
                   <Row
-                    label="Awaiting approval"
-                    hint="Committed, not yet spent — outside the cost above"
+                    label="Pending Expenses"
+                    hint="Outside the cost above"
                     value={naira(f.pendingExpenses)}
                     tone="text-warning"
                   />
@@ -256,14 +256,14 @@ export function PfiDetailDialog({
                   </>
                 )}
                 <Row
-                  label="Landing cost / litre"
+                  label="Landing cost/litre"
                   hint="Grand total cost ÷ BL quantity"
                   value={naira(f.landingCostPerLitre)}
                   emphasis
                 />
                 {/* Only worth showing when the two bases actually differ —
                     which is exactly when there was a discharge shortage. */}
-                {f.landingCostPerLitreTank != null
+                {/* {f.landingCostPerLitreTank != null
                   && f.landingCostPerLitre != null
                   && Math.abs(f.landingCostPerLitreTank - f.landingCostPerLitre) >= 0.01 && (
                   <Row
@@ -272,7 +272,7 @@ export function PfiDetailDialog({
                     value={naira(f.landingCostPerLitreTank)}
                     tone="text-warning"
                   />
-                )}
+                )} */}
                 <Row
                   label={`Total Revenue`}
                   // label={`Total Revenue (${pfi.orderCount} order${pfi.orderCount === 1 ? '' : 's'})`}

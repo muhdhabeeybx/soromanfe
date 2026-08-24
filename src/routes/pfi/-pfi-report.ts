@@ -201,7 +201,7 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
         { label: 'Tank Quantity (Litres)', value: f.tankQtyLitres, fmt: QTY },
         // Signed on purpose: a shortage is red, an over-discharge green, and
         // the reading beside it says which in words for a monochrome print.
-        { label: 'Surplus/Deficit (Litres)', value: deficit ?? '—', fmt: deficit != null ? '#,##0 "L";[Red](#,##0 "L")' : undefined, tone: deficit != null ? 'signed' : 'plain' },
+        { label: 'Surplus/Deficit (Litres)', value: deficit ?? '—', fmt: deficit != null ? '#,##0 "L";[Red] #,##0 "L"' : undefined, tone: deficit != null ? 'signed' : 'plain' },
         {
           label: 'Reading',
           value: deficit == null ? '—' : deficit < 0 ? 'DEFICIT' : deficit > 0 ? 'SURPLUS' : 'EXACT',
@@ -218,28 +218,28 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       pairs: [
         { label: 'Initial Stock (Litres)', value: f.tankQtyLitres, fmt: QTY },
         { label: 'Total Sold (Litres)', value: f.sold, fmt: QTY, bold: true },
-        { label: 'Remaining (Litres)', value: f.remaining, fmt: QTY, bold: true },
+        { label: 'Tank Balance (Litres)', value: f.remaining, fmt: QTY, bold: true },
         { label: 'Percentage Sold', value: f.sellThrough ?? '—', fmt: f.sellThrough != null ? PCT : undefined },
-        { label: 'Orders (Paid)', value: pfi.orderCount ?? 0, fmt: '#,##0' },
-        { label: 'Ticketed Out (Litres)', value: f.movementQty, fmt: QTY },
-        { label: 'Still To Load (Litres)', value: Math.max(0, f.sold - f.movementQty), fmt: QTY, tone: f.sold - f.movementQty > 0 ? 'bad' : 'plain' },
-        { label: 'Delivery Allocated (Litres)', value: f.allocationQty, fmt: QTY },
+        // { label: 'Orders (Paid)', value: pfi.orderCount ?? 0, fmt: '#,##0' },
+        { label: 'Loaded Quantity (Litres)', value: f.movementQty, fmt: QTY },
+        { label: 'Unloaded Quantity (Litres)', value: Math.max(0, f.sold - f.movementQty), fmt: QTY, tone: f.sold - f.movementQty > 0 ? 'bad' : 'plain' },
+        // { label: 'Delivery Allocated (Litres)', value: f.allocationQty, fmt: QTY },
       ],
     },
     {
       title: 'FINANCIAL SUMMARY',
       pairs: [
         { label: 'PFI (Cargo) Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined },
-        { label: 'Total Expenses (Approved)', value: expensesApproved, fmt: NGN },
-        { label: 'Awaiting Approval', value: awaiting, fmt: NGN, tone: awaiting > 0 ? 'bad' : 'plain' },
+        { label: 'Total Expenses', value: expensesApproved, fmt: NGN },
+        { label: 'Pending Expenses', value: awaiting, fmt: NGN, tone: awaiting > 0 ? 'bad' : 'plain' },
         { label: 'Total Cost', value: f.totalCost ?? '—', fmt: f.totalCost != null ? NGN : undefined },
         // Grand total cost ÷ BL litres — what the batch cost per litre the
         // papers say was bought.
-        { label: 'Landing Cost / Litre', value: f.landingCostPerLitre ?? '—', fmt: f.landingCostPerLitre != null ? NGN : undefined, bold: true },
+        { label: 'Landing Cost/Litre', value: f.landingCostPerLitre ?? '—', fmt: f.landingCostPerLitre != null ? NGN : undefined, bold: true },
         { label: 'Revenue', value: f.revenue, fmt: NGN, tone: 'good' },
         // A credit reduces what the batch cost, so it reads as a gain.
-        { label: 'Credit', value: f.creditBalance || 0, fmt: NGN, tone: f.creditBalance > 0 ? 'good' : 'plain' },
-        { label: 'Profit', value: f.profitLoss ?? '—', fmt: f.profitLoss != null ? NGN_SIGNED : undefined, tone: f.profitLoss != null ? 'signed' : 'plain' },
+        { label: 'Credit Note', value: f.creditBalance || 0, fmt: NGN, tone: f.creditBalance > 0 ? 'good' : 'plain' },
+        { label: 'Balance', value: f.profitLoss ?? '—', fmt: f.profitLoss != null ? NGN_SIGNED : undefined, tone: f.profitLoss != null ? 'signed' : 'plain' },
         { label: 'Margin', value: f.margin != null ? f.margin / 100 : '—', fmt: f.margin != null ? PCT : undefined, tone: f.margin != null && f.margin < 0 ? 'bad' : 'plain' },
       ],
     },
@@ -274,7 +274,7 @@ function expenseEnteredBy(x: PfiExpense): string {
 const EXPENSE_COLUMNS = [
   { header: 'Date', key: 'date', width: 13, fmt: DATE_FMT },
   { header: 'Reference', key: 'ref', width: 16 },
-  { header: 'Category', key: 'cat', width: 26 },
+  { header: 'PFI/Category', key: 'cat', width: 26 },
   { header: 'Vendor', key: 'vendor', width: 24 },
   { header: 'Description', key: 'desc', width: 38 },
   { header: 'Bank Paid From', key: 'bank', width: 20 },
@@ -341,7 +341,7 @@ export async function downloadPfiReport(pfiId: number) {
   if (f.deficitCost != null) {
     const warn = s.getRow(cursor)
     warn.getCell(1).value = 'DEFICIT'
-    warn.getCell(2).value = `${Math.abs(f.surplusDeficitLitres ?? 0).toLocaleString()} L was paid for but never landed, worth ${f.deficitCost.toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })}. Landing cost against the tank quantity is ${(f as { landingCostPerLitreTank?: number | null }).landingCostPerLitreTank?.toLocaleString('en-NG', { style: 'currency', currency: 'NGN' }) ?? '—'} per litre.`
+    warn.getCell(2).value = `${Math.abs(f.surplusDeficitLitres ?? 0).toLocaleString()} Litres was paid for but never landed, worth ${f.deficitCost.toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })}. Landing cost against the tank quantity is ${(f as { landingCostPerLitreTank?: number | null }).landingCostPerLitreTank?.toLocaleString('en-NG', { style: 'currency', currency: 'NGN' }) ?? '—'} per litre.`
     warn.getCell(1).font = { bold: true, color: { argb: XL.loss } }
     warn.getCell(2).alignment = { wrapText: true, vertical: 'top' }
     s.mergeCells(cursor, 2, cursor, SECTION_SPAN)
@@ -694,20 +694,20 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
     { header: 'Surplus/Deficit', key: 'gap', width: 16, fmt: '#,##0 "L";[Red](#,##0 "L")', signed: true },
     { header: 'Sold', key: 'sold', width: 16, fmt: QTY },
     { header: 'Remaining', key: 'rem', width: 16, fmt: QTY },
-    { header: 'Sell-through', key: 'through', width: 14, fmt: PCT },
-    { header: 'Cargo Value', key: 'cargo', width: 18, fmt: NGN },
-    { header: 'Expenses', key: 'exp', width: 18, fmt: NGN },
+    { header: 'Sales Progress', key: 'through', width: 14, fmt: PCT },
+    { header: 'PFI (Cargo) Value', key: 'cargo', width: 18, fmt: NGN },
+    { header: 'Total Expenses', key: 'exp', width: 18, fmt: NGN },
     { header: 'Total Cost', key: 'cost', width: 18, fmt: NGN },
-    { header: 'Landing Cost / L', key: 'landing', width: 16, fmt: NGN },
+    { header: 'Landing Cost per Litre', key: 'landing', width: 16, fmt: NGN },
     { header: 'Revenue', key: 'rev', width: 18, fmt: NGN },
-    { header: 'Profit / Loss', key: 'profit', width: 18, fmt: NGN_SIGNED, signed: true },
+    { header: 'Balance', key: 'profit', width: 18, fmt: NGN_SIGNED, signed: true },
     { header: 'Profit Meaningful?', key: 'meaningful', width: 20 },
   ]
   ws.columns = COLUMNS.map((c) => ({ key: c.key, width: c.width }))
 
   const title = ws.getRow(1)
   title.height = 30
-  title.getCell(1).value = 'SOROMAN — PFI PORTFOLIO'
+  title.getCell(1).value = 'PFI SUMMARY'
   ws.mergeCells(1, 1, 1, COLUMNS.length)
   for (let i = 1; i <= COLUMNS.length; i++) {
     const cell = title.getCell(i)
@@ -808,6 +808,6 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
   const buf = await wb.xlsx.writeBuffer()
   triggerDownload(
     new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
-    `PFI Portfolio ${format(new Date(), 'dd-MM-yy')}.xlsx`,
+    `PFI Summary ${format(new Date(), 'dd-MM-yy')}.xlsx`,
   )
 }
