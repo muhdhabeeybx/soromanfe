@@ -28,7 +28,7 @@ import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-or
 import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
-  orderPaidInto, orderCompany, orderDifferential,
+  orderPaidInto, orderCompany, orderDifferential, orderPaymentSources,
   walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
@@ -414,14 +414,19 @@ function FinanceReportPage() {
   // would count that payment twice (~₦125m over a single week of live data),
   // so the column reads as what genuinely arrived while the total still
   // reconciles to the bank.
+  //
+  // Through orderPaymentSources rather than o.funding directly: an order paid
+  // from wallet balance has no allocation entry to walk, so walking only that
+  // left every such order out of the total while its statement line sat
+  // printed in the column above.
   const totalAmountPaid = useMemo(() => {
     const seen = new Set<number>()
     let sum = 0
     for (const o of rows) {
-      for (const f of o.funding) {
-        if (seen.has(f.depositId)) continue
-        seen.add(f.depositId)
-        sum += fundingAmount(f)
+      for (const s of orderPaymentSources(o)) {
+        if (seen.has(s.depositId)) continue
+        seen.add(s.depositId)
+        sum += s.amount
       }
     }
     return sum

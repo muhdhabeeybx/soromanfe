@@ -274,6 +274,40 @@ export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
 }
 
 /**
+ * Every credit behind an order as a (deposit, amount) pair — whichever way it
+ * was paid.
+ *
+ * The Amount Paid column is filled from two different places depending on the
+ * order: a tracked order lists its allocation entries, and a wallet-funded one
+ * with no allocation row lists the statement credits traced behind its hold.
+ * The report's Amount Paid total only ever walked the first of those, so an
+ * order paid entirely from wallet balance — no allocation row, by definition —
+ * added nothing to it. DI11332 is the case in point: ₦62.4m paid, its statement
+ * line printed under it in the table, and a total of ₦0 above.
+ *
+ * Returning both through one function keeps the total equal to the sum of the
+ * column it totals. It mirrors walletStatementRows deliberately: if that
+ * decides a credit is worth printing, this counts it, and they cannot drift.
+ *
+ * The deposit id rides along because the caller has to count each payment once
+ * however many orders it appears under.
+ */
+export function orderPaymentSources(order: FinanceReportOrder): Array<{ depositId: number; amount: number }> {
+  if (order.fundingTracked) {
+    return order.funding.map((f) => ({ depositId: f.depositId, amount: fundingAmount(f) }))
+  }
+  const sources: Array<{ depositId: number; amount: number }> = []
+  for (const w of order.walletSource ?? []) {
+    if (w.statementSources.length > 0) {
+      for (const s of w.statementSources) sources.push({ depositId: s.depositId, amount: s.amount })
+      continue
+    }
+    sources.push({ depositId: w.depositId, amount: w.amount })
+  }
+  return sources
+}
+
+/**
  * The payer's name out of a bank narration.
  *
  * Statement text is machine-written, long, and shaped differently by each
