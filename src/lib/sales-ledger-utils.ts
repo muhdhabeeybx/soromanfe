@@ -39,8 +39,22 @@ export const normalizeCycleDate = (dateValue: string | undefined | null): string
   try { return format(parseISO(raw), 'yyyy-MM-dd') } catch { return raw.split('T')[0] || raw }
 }
 
+/**
+ * The key a truck cycle is grouped by. Plates go through normalizePlate so a
+ * loading written "BWR 826 XB" and its sale written "BWR826XB" land in the
+ * same cycle instead of splitting into a loading with no payments and a
+ * payment with no loading.
+ */
 export const getCycleKey = (truckNum: string, dateLoaded: string | undefined | null): string =>
-  `${(truckNum || '').trim().toUpperCase()}||${normalizeCycleDate(dateLoaded)}`
+  `${normalizePlate(truckNum)}||${normalizeCycleDate(dateLoaded)}`
+
+/**
+ * Plates are written both ways across the system — "BWR 826 XB" on some rows,
+ * "BWR826XB" on others, and the fleet register has no spaces at all. Every
+ * comparison of one plate against another goes through here.
+ */
+export const normalizePlate = (v: string | null | undefined): string =>
+  (v || '').replace(/\s+/g, '').toUpperCase()
 
 /** The shape of a truck allocation, as far as matching sales to it needs. */
 export interface LoadingRef {
@@ -61,10 +75,10 @@ export interface LoadingRef {
  * June trip is never read as its July one.
  */
 export const salesForLoading = (sales: DeliverySale[], loading: LoadingRef): DeliverySale[] => {
-  const plate = (loading.truckNumber || '').trim().toUpperCase()
+  const plate = normalizePlate(loading.truckNumber)
   if (!plate) return []
 
-  const onTruck = sales.filter(s => (s.truckNumber || '').trim().toUpperCase() === plate)
+  const onTruck = sales.filter(s => normalizePlate(s.truckNumber) === plate)
   if (onTruck.length === 0) return []
 
   const loadDate = normalizeCycleDate(loading.dateAllocated)

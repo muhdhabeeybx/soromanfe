@@ -29,6 +29,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { cn, toNum } from '#/lib/utils'
 import type { FilingStation, DeliverySale, AccountEntry } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
+import { normalizePlate } from '#/lib/sales-ledger-utils'
 
 export const Route = createFileRoute('/filing-stations/details')({
   beforeLoad: () => routeGuard('/filing-stations'),
@@ -238,7 +239,7 @@ function FilingStationDetailsView() {
     const getObjId = (obj: any) => String(obj?._id || obj?.id || '')
 
     stationSales.forEach(sale => {
-      const key = `${(sale.truckNumber || '').toUpperCase()}||${normalizeCycleDate(sale.dateLoaded)}`
+      const key = `${normalizePlate(sale.truckNumber)}||${normalizeCycleDate(sale.dateLoaded)}`
       const arr = salesByTruckDate.get(key) ?? []
       arr.push(sale)
       salesByTruckDate.set(key, arr)
@@ -252,7 +253,7 @@ function FilingStationDetailsView() {
 
     stationLoadings.forEach(loading => {
       const loadingId = getObjId(loading)
-      const truckKey = `${(loading.truckNumber || '').toUpperCase()}||${normalizeCycleDate(loading.dateAllocated)}`
+      const truckKey = `${normalizePlate(loading.truckNumber)}||${normalizeCycleDate(loading.dateAllocated)}`
       const cycleSales = salesByTruckDate.get(truckKey) || []
       let payments = cycleSales.filter(s => !matchedIds.has(getObjId(s)))
       payments = sortPayments(payments)

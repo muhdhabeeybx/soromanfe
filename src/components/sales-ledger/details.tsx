@@ -24,7 +24,7 @@ import {
   RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, EditEntryDialog, DeleteConfirmDialog,
   type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate } from '#/lib/sales-ledger-utils'
+import { toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate, normalizePlate } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 
 export function SalesLedgerDetails() {
@@ -104,8 +104,10 @@ export function SalesLedgerDetails() {
       if (found) return found
     }
     if (truckNumber) {
-      const normalizedTruck = truckNumber.trim().toUpperCase()
-      const matches = ledgerGroups.filter(g => (g.truckNumber || '').trim().toUpperCase() === normalizedTruck)
+      // normalizePlate, not trim/upper: arriving here from a row whose plate
+      // is spelt with spaces would otherwise find nothing and show "not found".
+      const normalizedTruck = normalizePlate(truckNumber)
+      const matches = ledgerGroups.filter(g => normalizePlate(g.truckNumber) === normalizedTruck)
       if (customerId) {
         const custMatch = matches.find(g => g.customerId === customerId)
         if (custMatch) return custMatch
@@ -416,7 +418,13 @@ export function SalesLedgerDetails() {
                   { icon: <Building2 className="size-4 text-warning shrink-0" />, label: 'Depot', value: targetGroup.depot || '—' },
                   { icon: <MapPin className="size-4 text-muted-foreground shrink-0" />, label: 'Destination', value: targetGroup.location || '—' },
                   { icon: <Tag className="size-4 text-muted-foreground shrink-0" />, label: 'Allocation Code', value: targetGroup.code || 'None' },
-                  { icon: <FileText className="size-4 text-muted-foreground shrink-0" />, label: 'PFI Reference', value: targetGroup.pfiNumber || '—' },
+                  // Allocations no longer carry a PFI; the code is what the
+                  // batch is actually called, so it stands in rather than a dash.
+                  {
+                    icon: <FileText className="size-4 text-muted-foreground shrink-0" />,
+                    label: targetGroup.pfiNumber ? 'PFI Reference' : 'Allocation Code',
+                    value: targetGroup.pfiNumber || targetGroup.allocationCode || '—',
+                  },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-3 p-3 bg-muted/60 rounded-xl border border-border">
                     {item.icon}

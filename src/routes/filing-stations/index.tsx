@@ -29,6 +29,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { cn, toNum, getErrorMessage } from '#/lib/utils'
 import type { FilingStation, DeliverySale, DeliveryCustomer, AccountEntry } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
+import { normalizePlate } from '#/lib/sales-ledger-utils'
 
 export const Route = createFileRoute('/filing-stations/')({
   beforeLoad: () => routeGuard('/filing-stations'),
@@ -349,7 +350,7 @@ function FilingStationsDashboard() {
     const truckDatesMap = new Map<string, Set<string>>()
 
     stationLoadings.forEach(l => {
-      const truck = (l.truckNumber || '').trim().toUpperCase()
+      const truck = normalizePlate(l.truckNumber)
       const date = normalizeCycleDate(l.dateAllocated || '')
       if (!truck || !date) return
       if (!truckDatesMap.has(truck)) truckDatesMap.set(truck, new Set())
@@ -357,7 +358,7 @@ function FilingStationsDashboard() {
     })
 
     stationSales.forEach(s => {
-      const truck = (s.truckNumber || '').trim().toUpperCase()
+      const truck = normalizePlate(s.truckNumber)
       const date = normalizeCycleDate(s.dateLoaded || '')
       if (!truck || !date) return
       if (!truckDatesMap.has(truck)) truckDatesMap.set(truck, new Set())

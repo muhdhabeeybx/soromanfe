@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from 'react'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, isFillingStation, getCycleKey, normalizeText } from '#/lib/sales-ledger-utils'
+import { toNum, isFillingStation, getCycleKey, normalizeText, normalizePlate } from '#/lib/sales-ledger-utils'
 
 interface UseLedgerGroupsParams {
   allSales: DeliverySale[]
@@ -32,7 +32,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
       const existing = salesByCycle.get(cycleKey) ?? []
       existing.push(sale)
       salesByCycle.set(cycleKey, existing)
-      const truckKey = (sale.truckNumber || '').trim().toUpperCase()
+      const truckKey = normalizePlate(sale.truckNumber)
       const byTruck = salesByTruck.get(truckKey) ?? []
       byTruck.push(sale)
       salesByTruck.set(truckKey, byTruck)
@@ -59,7 +59,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
       let payments = cycleSales.filter(s => { const sid = String(s._id ?? s.id ?? ''); return !matchedSaleIds.has(sid) })
 
       if (payments.length === 0 && !loading.dateAllocated) {
-        const truckKey = (loading.truckNumber || '').trim().toUpperCase()
+        const truckKey = normalizePlate(loading.truckNumber)
         const truckSales = salesByTruck.get(truckKey) || []
         payments = truckSales.filter(s => { const sid = String(s._id ?? s.id ?? ''); return !matchedSaleIds.has(sid) })
       }

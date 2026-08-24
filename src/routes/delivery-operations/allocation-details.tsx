@@ -21,7 +21,10 @@ import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useToast } from '#/lib/hooks/useToast'
 import { cn } from '#/lib/utils'
-import { salesForLoading } from '#/lib/sales-ledger-utils'
+import {
+  buildTruckIndex, matchSalesByRecord, resolveLoading, STATUS_DISPLAY,
+  type ResolvedLoading,
+} from '#/lib/delivery-records'
 import type { DeliveryInventory, DeliverySale, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
@@ -67,20 +70,21 @@ const getCodeTheme = (code: string) => {
   return CODE_PALETTE[hash % CODE_PALETTE.length]
 }
 
-const statusBadge: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
-  loaded: { label: 'In Transit', cls: 'bg-warning/10 text-warning border-warning/40', icon: Truck },
-  offloaded: { label: 'Sold', cls: 'bg-accent/10 text-accent border-accent/40', icon: CheckCircle2 },
+/** Icon per status; labels and colours come from the shared STATUS_DISPLAY. */
+const STATUS_ICON: Record<string, typeof CheckCircle2> = {
+  loaded: Truck,
+  offloaded: CheckCircle2,
+  empty: Droplets,
+  unknown: Droplets,
 }
 
-interface TruckRecord extends DeliveryInventory {
-  status: 'loaded' | 'offloaded'
-  truckPlate: string
-  driverName: string
-  destination: string
+// The resolved values win wherever they share a name with the raw row — that
+// is the whole point of resolving them.
+interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, ResolvedLoading {
+  /** Aliases the table has always used for the resolved fields. */
   depotDisplay: string
   custName: string
   pfiLabel: string
-  product: string
   unitLabel: string
   qty: number
   code: string
@@ -147,14 +151,7 @@ function AllocationDetailsPage() {
   const deleteSale = useDeleteDeliverySale()
 
   // ── Lookup Maps ─────────────────────────────────────────────────────────
-  const truckMap = useMemo(() => {
-    const m = new Map<string | number, any>()
-    allTrucks.forEach((t: any) => {
-      if (t.id != null) { m.set(t.id, t); m.set(Number(t.id), t); m.set(String(t.id), t) }
-      if (t._id != null) { m.set(t._id, t); m.set(String(t._id), t) }
-    })
-    return m
-  }, [allTrucks])
+  const truckIndex = useMemo(() => buildTruckIndex(allTrucks), [allTrucks])
 
   const customerMap = useMemo(() => {
     const m = new Map<string | number, DeliveryCustomer>()
@@ -182,32 +179,34 @@ function AllocationDetailsPage() {
   // ── Enrich entries for this allocation code ─────────────────────────────
   const normalizedCode = (code || '').trim().toUpperCase()
 
+  const codeEntries = useMemo((): DeliveryInventory[] => (
+    allEntries.filter(e => {
+      if (!(e.truckId || e.truckNumber || e.loadingStatus)) return false
+      const entryCode = (e.allocationCode || (e as any).allocation_code || '').trim().toUpperCase()
+      if (normalizedCode) return entryCode === normalizedCode
+      return !entryCode
+    })
+  ), [allEntries, normalizedCode])
+
+  /** Each allocation's sales, claimed once — see matchSalesByRecord. */
+  const salesByRecord = useMemo(
+    () => matchSalesByRecord(codeEntries, allSales), [codeEntries, allSales])
+
   const truckRecords = useMemo((): TruckRecord[] => {
-    return allEntries
-      .filter(e => {
-        if (!(e.truckId || e.truckNumber || e.loadingStatus)) return false
-        const entryCode = (e.allocationCode || (e as any).allocation_code || '').trim().toUpperCase()
-        if (normalizedCode) return entryCode === normalizedCode
-        return !entryCode
-      })
+    return codeEntries
       .map(entry => {
-        const truck = entry.truckId ? (truckMap.get(entry.truckId) || truckMap.get(Number(entry.truckId)) || truckMap.get(String(entry.truckId))) : null
+        const truck = truckIndex.find(entry)
         const customer = entry.customerId ? (customerMap.get(entry.customerId) || customerMap.get(Number(entry.customerId)) || customerMap.get(String(entry.customerId))) : null
         const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
-        const loadingStatus = (entry.loadingStatus || 'loaded') as 'loaded' | 'offloaded'
+        const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
+        const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
 
         return {
           ...entry,
-          status: loadingStatus,
-          truckPlate: entry.truckNumber || truck?.plateNumber || '—',
-          driverName: truck?.driverName || truck?.driver || '',
-          destination: isFillingStation(customer)
-            ? (customer?.name || entry.customerName || '')
-            : (entry.location || ''),
-          depotDisplay: entry.depot || entry.pfiLocation || pfi?.locationName || '',
-          custName: entry.customerName || customer?.name || '',
-          pfiLabel: entry.pfiNumber || pfi?.pfiNumber || '',
-          product: entry.pfiProduct || pfi?.productName || '',
+          ...resolved,
+          depotDisplay: resolved.depot,
+          custName: resolved.customerName,
+          pfiLabel: resolved.batchLabel,
           unitLabel: pfi?.productUnit || 'Litres',
           qty: toNum(entry.quantityAllocated ?? (entry as any).quantity_allocated ?? (entry as any).quantity),
           code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
@@ -216,11 +215,11 @@ function AllocationDetailsPage() {
         }
       })
       .sort((a, b) => {
-        const dateA = a.dateOffloaded || a.dateAllocated || ''
-        const dateB = b.dateOffloaded || b.dateAllocated || ''
+        const dateA = a.dateOffloaded || a.dateLoaded || ''
+        const dateB = b.dateOffloaded || b.dateLoaded || ''
         return dateB.localeCompare(dateA)
       })
-  }, [allEntries, normalizedCode, truckMap, customerMap, pfiMap])
+  }, [codeEntries, truckIndex, customerMap, pfiMap, salesByRecord])
 
   // ── Match sales to trucks ───────────────────────────────────────────────
   //
@@ -230,20 +229,8 @@ function AllocationDetailsPage() {
   const truckSalesMap = useMemo(() => {
     const map = new Map<string, { customerId: string; customerName: string; qty: number; rates: Set<number>; location: string }[]>()
 
-    const matchedSaleIds = new Set<string>()
-    const ordered = [
-      ...truckRecords.filter(r => !!r.dateAllocated),
-      ...truckRecords.filter(r => !r.dateAllocated),
-    ]
-
-    ordered.forEach(loading => {
-      const payments = salesForLoading(allSales, {
-        truckNumber: loading.truckNumber || loading.truckPlate,
-        dateAllocated: loading.dateAllocated,
-        allocationCode: loading.code,
-      }).filter(sale => !matchedSaleIds.has(sale._id || sale.id || ''))
-
-      payments.forEach(p => matchedSaleIds.add(p._id || p.id || ''))
+    truckRecords.forEach(loading => {
+      const payments = salesByRecord.get(loading._id || loading.id || '') ?? []
 
       const customerGroups: { customerId: string; customerName: string; qty: number; rates: Set<number>; location: string }[] = []
       payments.forEach(s => {
@@ -274,7 +261,7 @@ function AllocationDetailsPage() {
     })
 
     return map
-  }, [allSales, truckRecords, customerMap])
+  }, [salesByRecord, truckRecords, customerMap])
 
   // ── All matched sales for this allocation ───────────────────────────────
   const allocationSales = useMemo((): DeliverySale[] => {
@@ -294,12 +281,17 @@ function AllocationDetailsPage() {
   // ── Summary Stats ───────────────────────────────────────────────────────
   const stats = useMemo(() => {
     let totalQty = 0, loadedCount = 0, loadedQty = 0, soldCount = 0, soldQty = 0
+    let otherCount = 0, otherQty = 0
     truckRecords.forEach(r => {
       totalQty += r.qty
-      if (r.status === 'loaded') { loadedCount++; loadedQty += r.qty }
-      else { soldCount++; soldQty += r.qty }
+      // Anything that is neither loaded nor offloaded gets its own bucket.
+      // It used to fall into "sold", which quietly reported 36 rows carrying
+      // the status `empty` as revenue-bearing deliveries.
+      if (r.status.key === 'loaded') { loadedCount++; loadedQty += r.qty }
+      else if (r.status.key === 'offloaded') { soldCount++; soldQty += r.qty }
+      else { otherCount++; otherQty += r.qty }
     })
-    return { totalQty, loadedCount, loadedQty, soldCount, soldQty, truckCount: truckRecords.length }
+    return { totalQty, loadedCount, loadedQty, soldCount, soldQty, otherCount, otherQty, truckCount: truckRecords.length }
   }, [truckRecords])
 
   // ── PFI Breakdown ───────────────────────────────────────────────────────
@@ -541,17 +533,22 @@ function AllocationDetailsPage() {
 
   const exportCSV = useCallback(() => {
     if (!truckRecords.length) return
-    const headers = ['S/N', 'Truck', 'PFI', 'Product', 'Depot', 'Destination', 'Quantity', 'Status', 'Date Loaded', 'Date Sold']
+    // Same resolved fields the table shows — an export that reads "—" where
+    // the screen above it shows a driver and a rate is worse than no export.
+    const headers = ['S/N', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
     const rows = truckRecords.map((r, idx) => [
       idx + 1,
       r.truckPlate,
+      r.driverName || '—',
       r.pfiLabel || '—',
       r.product || '—',
       r.depotDisplay || '—',
+      r.custName || '—',
       r.destination || '—',
       r.qty,
-      statusBadge[r.status]?.label || r.status,
-      r.dateAllocated ? (() => { try { return format(parseISO(r.dateAllocated), 'dd/MM/yyyy') } catch { return r.dateAllocated } })() : '',
+      r.rate > 0 ? r.rate : '—',
+      r.status.label,
+      r.dateLoaded ? (() => { try { return format(parseISO(r.dateLoaded), 'dd/MM/yyyy') } catch { return r.dateLoaded } })() : '',
       r.dateOffloaded ? (() => { try { return format(parseISO(r.dateOffloaded), 'dd/MM/yyyy') } catch { return r.dateOffloaded } })() : '',
     ])
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -831,7 +828,7 @@ function AllocationDetailsPage() {
                 Truck Records ({truckRecords.length})
               </CardTitle>
               <span className="text-xs text-muted-foreground font-normal">
-                {stats.loadedCount} in transit · {stats.soldCount} sold
+                {stats.loadedCount} in transit · {stats.soldCount} sold{stats.otherCount > 0 ? ` · ${stats.otherCount} ${STATUS_DISPLAY.empty.label.toLowerCase()}` : ''}
               </span>
             </div>
           </CardHeader>
@@ -868,8 +865,8 @@ function AllocationDetailsPage() {
                 </TableHeader>
                 <TableBody>
                   {truckRecords.map((r, idx) => {
-                    const badge = statusBadge[r.status]
-                    const Icon = badge?.icon
+                    const badge = r.status
+                    const Icon = STATUS_ICON[badge.key] ?? Droplets
                     const salesEntries = truckSalesMap.get(r._id || r.id || '')
                     const recordId = r._id || r.id || ''
 
@@ -992,16 +989,16 @@ function AllocationDetailsPage() {
 
                         {/* Status Badge */}
                         <TableCell>
-                          {badge && Icon ? (
-                            <span className={cn('inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border', badge.cls)}>
-                              <Icon className="size-3" /> {badge.label}
-                            </span>
-                          ) : '—'}
+                          <span className={cn('inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border', badge.cls)}>
+                            <Icon className="size-3" /> {badge.label}
+                          </span>
                         </TableCell>
 
                         {/* Date Loaded */}
                         <TableCell className="whitespace-nowrap text-foreground text-xs font-normal">
-                          {r.dateAllocated ? (() => { try { return format(parseISO(r.dateAllocated), 'dd MMM yyyy') } catch { return r.dateAllocated } })() : '—'}
+                          {r.dateLoaded
+                            ? (() => { try { return format(parseISO(r.dateLoaded), 'dd MMM yyyy') } catch { return r.dateLoaded } })()
+                            : '—'}
                         </TableCell>
 
                         {/* Date Sold */}
@@ -1012,7 +1009,7 @@ function AllocationDetailsPage() {
                         {/* Actions */}
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {r.status === 'loaded' && (
+                            {r.status.key !== 'offloaded' && (
                               <Button
                                 size="sm"
                                 className="h-7 text-xs gap-1 bg-accent hover:bg-accent/80 text-accent-foreground px-2.5 cursor-pointer font-semibold"

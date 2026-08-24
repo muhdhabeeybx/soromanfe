@@ -10,17 +10,20 @@ import {
 import {
   ArrowLeft, Truck, Package, MapPin, Calendar, CheckCircle2,
   Trash2, Loader2, ShieldAlert, FileText, Building2, DollarSign,
+  User, Users, Tag,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { useDeliveryInventoryList, useDeleteDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
+import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { usePfiList } from '#/lib/hooks/usePfis'
 import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useToast } from '#/lib/hooks/useToast'
-import type { DeliveryInventory, DeliverySale } from '#/lib/types'
+import type { DeliveryInventory, DeliverySale, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 import { routeGuard } from '#/lib/route-guard'
 import { salesForLoading, rateFromSales } from '#/lib/sales-ledger-utils'
+import { buildTruckIndex, resolveLoading } from '#/lib/delivery-records'
 
 export const Route = createFileRoute('/delivery-operations/details')({
   beforeLoad: () => routeGuard('/delivery-operations'),
@@ -39,9 +42,12 @@ const toNum = (v: string | number | undefined | null): number => {
 const fmtQty = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 })
 const fmtMoney = (n: number) => `₦${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-const statusBadge: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
-  loaded: { label: 'In Transit', cls: 'bg-warning/10 text-warning border-warning/20', icon: Truck },
-  offloaded: { label: 'Sold', cls: 'bg-accent/10 text-accent border-accent/20', icon: CheckCircle2 },
+/** Icon per status; the labels and colours come from STATUS_DISPLAY. */
+const STATUS_ICON: Record<string, typeof CheckCircle2> = {
+  loaded: Truck,
+  offloaded: CheckCircle2,
+  empty: Package,
+  unknown: Package,
 }
 
 function DeliveryOperationDetailsView() {
@@ -58,11 +64,17 @@ function DeliveryOperationDetailsView() {
   const { data: allSales = [] } = useDeliverySalesList()
   const { data: pfisData } = usePfiList()
   const { data: trucksData } = useAllocatableTrucks()
+  const { data: customersData = [] } = useDeliveryCustomerList()
 
   const allEntries = useMemo((): DeliveryInventory[] => {
     if (!rawInventory) return []
     return Array.isArray(rawInventory) ? rawInventory : []
   }, [rawInventory])
+
+  const allCustomers: DeliveryCustomer[] = useMemo(() => {
+    if (!customersData) return []
+    return Array.isArray(customersData) ? customersData : (customersData.customers || [])
+  }, [customersData])
 
   const allPfis: Pfi[] = useMemo(() => {
     if (!pfisData) return []
@@ -77,11 +89,7 @@ function DeliveryOperationDetailsView() {
   const targetId = searchParams.inventoryId || state.inventoryItem?._id || state.inventoryItem?.id || ''
   const inventoryItem = state.inventoryItem || allEntries.find(e => (e._id || e.id) === targetId)
 
-  const truckMap = useMemo(() => {
-    const m = new Map<string, any>()
-    allTrucks.forEach((t: any) => m.set(t._id || t.id, t))
-    return m
-  }, [allTrucks])
+  const truckIndex = useMemo(() => buildTruckIndex(allTrucks), [allTrucks])
 
   const pfiMap = useMemo(() => {
     const m = new Map<string, Pfi>()
@@ -89,53 +97,53 @@ function DeliveryOperationDetailsView() {
     return m
   }, [allPfis])
 
-  // Enriched record
-  const record = useMemo(() => {
-    if (!inventoryItem) return null
-    const truck = inventoryItem.truckId ? truckMap.get(String(inventoryItem.truckId)) : null
-    const pfi = inventoryItem.pfiId ? pfiMap.get(String(inventoryItem.pfiId)) : null
-    return {
-      ...inventoryItem,
-      truckPlate: inventoryItem.truckNumber || truck?.plateNumber || '—',
-      driverName: truck?.driverName || '',
-      pfiLabel: inventoryItem.pfiNumber || pfi?.pfiNumber || '',
-      product: inventoryItem.pfiProduct || pfi?.productName || '',
-      unitLabel: pfi?.productUnit || 'Litres',
-      depotDisplay: inventoryItem.depot || inventoryItem.pfiLocation || pfi?.locationName || '',
-      qty: toNum(inventoryItem.quantityAllocated),
-      status: (inventoryItem.loadingStatus || 'loaded') as 'loaded' | 'offloaded',
-      code: (inventoryItem.allocationCode || '').trim().toUpperCase(),
-      notes: inventoryItem.notes || '',
-    }
-  }, [inventoryItem, truckMap, pfiMap])
+  const customerMap = useMemo(() => {
+    const m = new Map<string, DeliveryCustomer>()
+    allCustomers.forEach(c => {
+      if (c.id != null) m.set(String(c.id), c)
+      if (c._id != null) m.set(String(c._id), c)
+    })
+    return m
+  }, [allCustomers])
 
   // Matched sales.
   //
   // This used to take every sale sharing the allocation code, which on a code
   // covering twenty trucks put all twenty trucks' payments on one truck's
-  // page. It matches on the truck now — see salesForLoading.
+  // page. It matches on the truck now — see salesForLoading. It is also
+  // computed before the record rather than from it, because the record's own
+  // rate, date and destination are read back out of these entries.
   const matchedSales = useMemo((): DeliverySale[] => {
-    if (!record) return []
+    if (!inventoryItem) return []
     return salesForLoading(allSales, {
-      truckNumber: record.truckPlate || record.truckNumber,
-      dateAllocated: record.dateAllocated,
-      allocationCode: record.code,
+      truckNumber: inventoryItem.truckNumber,
+      dateAllocated: inventoryItem.dateAllocated,
+      allocationCode: inventoryItem.allocationCode,
     }).sort((a, b) => (a.dateOfPayment || a.dateLoaded || '').localeCompare(b.dateOfPayment || b.dateLoaded || ''))
-  }, [allSales, record])
+  }, [allSales, inventoryItem])
 
-  /**
-   * The rate this truck sold at.
-   *
-   * The allocation record's own `rate` is only ever set by hand on the edit
-   * dialog and is 0 on effectively every row, which is why this card read "—"
-   * on trucks that had sold at a perfectly well-known price. The sales ledger
-   * is where a rate is actually entered, so that is where it is read from,
-   * falling back to the stored one.
-   */
-  const effectiveRate = useMemo(() => {
-    const fromSales = rateFromSales(matchedSales)
-    return fromSales > 0 ? fromSales : toNum(record?.rate)
-  }, [matchedSales, record])
+  // Enriched record — every field through the shared resolvers, so this page
+  // cannot fall a fallback short of what the list pages show.
+  const record = useMemo(() => {
+    if (!inventoryItem) return null
+    const truck = truckIndex.find(inventoryItem)
+    const pfi = inventoryItem.pfiId ? pfiMap.get(String(inventoryItem.pfiId)) : null
+    const customer = inventoryItem.customerId
+      ? customerMap.get(String(inventoryItem.customerId)) || null
+      : null
+    const resolved = resolveLoading(inventoryItem, { truck, pfi, customer, sales: matchedSales })
+    return {
+      ...inventoryItem,
+      ...resolved,
+      unitLabel: pfi?.productUnit || 'Litres',
+      qty: toNum(inventoryItem.quantityAllocated),
+      code: (inventoryItem.allocationCode || '').trim().toUpperCase(),
+      notes: inventoryItem.notes || '',
+    }
+  }, [inventoryItem, truckIndex, pfiMap, customerMap, matchedSales])
+
+  /** True when the figure on screen came from the ledger, not the allocation. */
+  const rateFromLedger = rateFromSales(matchedSales) > 0
 
   const salesSummary = useMemo(() => {
     let totalQty = 0, totalValue = 0, totalPaid = 0, totalExpenses = 0
@@ -145,11 +153,11 @@ function DeliveryOperationDetailsView() {
       totalPaid += toNum(s.paymentAmount)
       totalExpenses += toNum(s.expensesAmount ?? 0)
     })
-    if (totalValue === 0 && record && effectiveRate > 0) {
-      totalValue = effectiveRate * record.qty
+    if (totalValue === 0 && record && record.rate > 0) {
+      totalValue = record.rate * record.qty
     }
     return { totalQty, totalValue, totalPaid, totalExpenses, balance: totalValue - (totalPaid + totalExpenses) }
-  }, [matchedSales, record, effectiveRate])
+  }, [matchedSales, record])
 
   const handleDelete = async () => {
     if (!inventoryItem) return
@@ -183,8 +191,8 @@ function DeliveryOperationDetailsView() {
     )
   }
 
-  const badge = statusBadge[record.status]
-  const Icon = badge?.icon
+  const badge = record.status
+  const Icon = STATUS_ICON[badge.key] ?? Package
 
   return (
     <div className="space-y-6 pb-12 animate-fade-in">
@@ -205,7 +213,7 @@ function DeliveryOperationDetailsView() {
       actions={
         <>
           <p className="text-muted-foreground text-sm mt-0.5">
-          {record.product || 'N/A'} · {record.depotDisplay || 'N/A'}
+          {record.product || 'N/A'} · {record.depot || 'N/A'}
           </p>
         </>
       }
@@ -243,9 +251,11 @@ function DeliveryOperationDetailsView() {
         <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <div className="text-xs text-muted-foreground font-normal">PFI Number</div>
+              <div className="text-xs text-muted-foreground font-normal">
+                {record.pfiNumber ? 'PFI Number' : 'Allocation Code'}
+              </div>
               <div className="text-lg font-semibold text-foreground mt-0.5 truncate max-w-[140px]">
-                {record.pfiLabel || '—'}
+                {record.batchLabel || '—'}
               </div>
             </div>
             <div className="p-2.5 rounded-xl bg-muted/10 text-muted-foreground">
@@ -259,11 +269,11 @@ function DeliveryOperationDetailsView() {
             <div>
               <div className="text-xs text-muted-foreground font-normal">Rate (per litre)</div>
               <div className="text-xl font-semibold text-foreground mt-0.5">
-                {effectiveRate > 0 ? `₦${effectiveRate.toLocaleString()}` : '—'}
+                {record.rate > 0 ? `₦${record.rate.toLocaleString()}` : '—'}
               </div>
-              {effectiveRate > 0 && (
+              {record.rate > 0 && (
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  {rateFromSales(matchedSales) > 0 ? 'From sales ledger' : 'Recorded on allocation'}
+                  {rateFromLedger ? 'From sales ledger' : 'Recorded on allocation'}
                 </div>
               )}
             </div>
@@ -278,8 +288,13 @@ function DeliveryOperationDetailsView() {
             <div>
               <div className="text-xs text-muted-foreground font-normal">Date Loaded</div>
               <div className="text-sm font-semibold text-foreground mt-0.5">
-                {record.dateAllocated ? (() => { try { return format(parseISO(record.dateAllocated), 'dd MMM yyyy') } catch { return record.dateAllocated } })() : '—'}
+                {record.dateLoaded
+                  ? (() => { try { return format(parseISO(record.dateLoaded), 'dd MMM yyyy') } catch { return record.dateLoaded } })()
+                  : '—'}
               </div>
+              {record.dateLoaded && !record.dateAllocated && (
+                <div className="text-xs text-muted-foreground mt-0.5">From sales ledger</div>
+              )}
             </div>
             <div className="p-2.5 rounded-xl bg-muted text-muted-foreground">
               <Calendar className="size-5" />
@@ -292,10 +307,10 @@ function DeliveryOperationDetailsView() {
             <div>
               <div className="text-xs text-muted-foreground font-normal">Status</div>
               <div className="text-sm font-semibold text-foreground mt-0.5">
-                {badge?.label || '—'}
+                {badge.label}
               </div>
             </div>
-            <div className={`p-2.5 rounded-xl ${record.status === 'loaded' ? 'bg-warning/10 text-warning' : 'bg-accent/10 text-accent'}`}>
+            <div className={`p-2.5 rounded-xl border ${badge.cls}`}>
               {Icon ? <Icon className="size-5" /> : <Truck className="size-5" />}
             </div>
           </CardContent>
@@ -330,16 +345,43 @@ function DeliveryOperationDetailsView() {
                   <Building2 className="size-5 text-warning shrink-0" />
                   <div>
                     <div className="text-xs text-muted-foreground font-normal">Depot</div>
-                    <div className="font-semibold">{record.depotDisplay || 'N/A'}</div>
+                    <div className="font-semibold">{record.depot || 'N/A'}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
                   <MapPin className="size-5 text-muted-foreground shrink-0" />
                   <div>
                     <div className="text-xs text-muted-foreground font-normal">Destination</div>
-                    <div className="font-semibold">{record.location || 'N/A'}</div>
+                    <div className="font-semibold">{record.destination || 'N/A'}</div>
                   </div>
                 </div>
+                {/* Driver and customer were both resolved on this page and
+                    then never rendered — the fleet register has a driver for
+                    every truck, and the ledger names the customer even where
+                    the allocation itself does not. */}
+                <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
+                  <User className="size-5 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-xs text-muted-foreground font-normal">Driver</div>
+                    <div className="font-semibold">{record.driverName || 'N/A'}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
+                  <Users className="size-5 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-xs text-muted-foreground font-normal">Customer</div>
+                    <div className="font-semibold capitalize">{record.customerName || 'N/A'}</div>
+                  </div>
+                </div>
+                {record.code && (
+                  <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
+                    <Tag className="size-5 text-muted-foreground shrink-0" />
+                    <div>
+                      <div className="text-xs text-muted-foreground font-normal">Allocation Code</div>
+                      <div className="font-semibold">{record.code}</div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {record.dateOffloaded && (

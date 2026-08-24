@@ -297,7 +297,7 @@ function SalesLedgerDashboard() {
     ledgerGroups.forEach(group => {
       const matchesDate = !dateRange.from && !dateRange.to ? true : true // already filtered
       if (!matchesDate) return
-      const cycleKey = `${(group.truckNumber || '').trim().toUpperCase()}||${(group.dateLoaded || '').split('T')[0]}`
+      const cycleKey = getCycleKey(group.truckNumber, group.dateLoaded)
       const isOrphan = group.key.startsWith('sale:')
       const alreadyCounted = isOrphan && qtyCountedCycles.has(cycleKey)
       const qty = (!isOrphan || !alreadyCounted) ? Math.max(0, toNum(group.quantity)) : 0

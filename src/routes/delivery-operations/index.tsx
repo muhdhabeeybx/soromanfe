@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
 import { PageHeader } from '#/components/PageHeader'
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
 import { Button } from '#/components/ui/button'
@@ -13,11 +12,16 @@ import {
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
+import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { usePfiList } from '#/lib/hooks/usePfis'
 import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useToast } from '#/lib/hooks/useToast'
 import { cn } from '#/lib/utils'
+import {
+  buildTruckIndex, matchSalesByRecord, resolveLoading, STATUS_DISPLAY,
+  type ResolvedLoading,
+} from '#/lib/delivery-records'
 import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
@@ -61,22 +65,14 @@ const getCodeTheme = (code: string) => {
   return CODE_PALETTE[hash % CODE_PALETTE.length]
 }
 
-const statusBadge: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
-  loaded: { label: 'In Transit', cls: 'bg-warning/10 text-warning border-warning/40', icon: Truck },
-  offloaded: { label: 'Sold', cls: 'bg-accent/10 text-accent border-accent/40', icon: CheckCircle2 },
-}
+// 'other' is every row whose status is neither loaded nor offloaded — the
+// `empty` rows had no filter that could reach them before.
+type StatusFilter = 'all' | 'active' | 'delivered' | 'other'
 
-type StatusFilter = 'all' | 'active' | 'delivered'
-
-interface TruckRecord extends DeliveryInventory {
-  status: 'loaded' | 'offloaded'
-  truckPlate: string
-  driverName: string
-  destination: string
+interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, ResolvedLoading {
   depotDisplay: string
   custName: string
   pfiLabel: string
-  product: string
   unitLabel: string
   qty: number
   code: string
@@ -89,11 +85,13 @@ interface TruckRecord extends DeliveryInventory {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function DeliveryOperationsPage() {
-  const qc = useQueryClient()
   const toast = useToast()
 
   // ── Queries ─────────────────────────────────────────────────────────────
   const { data: rawInventory = [], isLoading: isLoadingInventory } = useDeliveryInventoryList()
+  // The cards read dates and destinations that only the ledger records for
+  // allocations imported without them.
+  const { data: allSales = [] } = useDeliverySalesList()
   const { data: pfisData } = usePfiList()
   const { data: trucksData } = useAllocatableTrucks()
   const { data: customersData = [] } = useDeliveryCustomerList()
@@ -160,14 +158,7 @@ function DeliveryOperationsPage() {
   // Lookup Maps
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const truckMap = useMemo(() => {
-    const m = new Map<string | number, any>()
-    allTrucks.forEach((t: any) => {
-      if (t.id != null) { m.set(t.id, t); m.set(Number(t.id), t); m.set(String(t.id), t) }
-      if (t._id != null) { m.set(t._id, t); m.set(String(t._id), t) }
-    })
-    return m
-  }, [allTrucks])
+  const truckIndex = useMemo(() => buildTruckIndex(allTrucks), [allTrucks])
 
   const customerMap = useMemo(() => {
     const m = new Map<string | number, DeliveryCustomer>()
@@ -196,35 +187,36 @@ function DeliveryOperationsPage() {
   // Enrich entries into TruckRecord[]
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const truckRecords = useMemo((): TruckRecord[] => {
-    return allEntries
-      .filter(e => !!(e.truckId || e.truckNumber || e.loadingStatus))
-      .map(entry => {
-        const truck = entry.truckId ? (truckMap.get(entry.truckId) || truckMap.get(Number(entry.truckId)) || truckMap.get(String(entry.truckId))) : null
-        const customer = entry.customerId ? (customerMap.get(entry.customerId) || customerMap.get(Number(entry.customerId)) || customerMap.get(String(entry.customerId))) : null
-        const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
-        const loadingStatus = (entry.loadingStatus || 'loaded') as 'loaded' | 'offloaded'
+  const truckEntries = useMemo(
+    () => allEntries.filter(e => !!(e.truckId || e.truckNumber || e.loadingStatus)),
+    [allEntries])
 
-        return {
-          ...entry,
-          status: loadingStatus,
-          truckPlate: entry.truckNumber || truck?.plateNumber || '—',
-          driverName: truck?.driverName || truck?.driver || '',
-          destination: isFillingStation(customer)
-            ? (customer?.name || entry.customerName || '')
-            : (entry.location || ''),
-          depotDisplay: entry.depot || entry.pfiLocation || pfi?.locationName || '',
-          custName: entry.customerName || customer?.name || '',
-          pfiLabel: entry.pfiNumber || pfi?.pfiNumber || '',
-          product: entry.pfiProduct || pfi?.productName || '',
-          unitLabel: pfi?.productUnit || 'Litres',
-          qty: toNum(entry.quantityAllocated ?? (entry as any).quantity_allocated ?? (entry as any).quantity),
-          code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
-          isFillingStation: isFillingStation(customer),
-          notes: entry.notes || '',
-        }
-      })
-  }, [allEntries, truckMap, customerMap, pfiMap])
+  const salesByRecord = useMemo(
+    () => matchSalesByRecord(truckEntries, allSales), [truckEntries, allSales])
+
+  const truckRecords = useMemo((): TruckRecord[] => {
+    return truckEntries.map(entry => {
+      const truck = truckIndex.find(entry)
+      const customer = entry.customerId ? (customerMap.get(entry.customerId) || customerMap.get(Number(entry.customerId)) || customerMap.get(String(entry.customerId))) : null
+      const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
+      const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
+      const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
+
+      return {
+        ...entry,
+        ...resolved,
+        truckPlate: resolved.truckPlate || '—',
+        depotDisplay: resolved.depot,
+        custName: resolved.customerName,
+        pfiLabel: resolved.batchLabel,
+        unitLabel: pfi?.productUnit || 'Litres',
+        qty: toNum(entry.quantityAllocated ?? (entry as any).quantity_allocated ?? (entry as any).quantity),
+        code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
+        isFillingStation: isFillingStation(customer),
+        notes: entry.notes || '',
+      }
+    })
+  }, [truckEntries, truckIndex, customerMap, pfiMap, salesByRecord])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Filtering & Sorting
@@ -236,8 +228,9 @@ function DeliveryOperationsPage() {
   const filtered = useMemo(() => {
     let list = [...truckRecords]
 
-    if (statusFilter === 'active') list = list.filter(r => r.status === 'loaded')
-    if (statusFilter === 'delivered') list = list.filter(r => r.status === 'offloaded')
+    if (statusFilter === 'active') list = list.filter(r => r.status.key === 'loaded')
+    if (statusFilter === 'delivered') list = list.filter(r => r.status.key === 'offloaded')
+    if (statusFilter === 'other') list = list.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
     if (pfiFilter) list = list.filter(r => String(r.pfiId) === pfiFilter)
     if (customerFilter) list = list.filter(r => String(r.customerId) === customerFilter)
     if (codeFilter) list = list.filter(r => r.code === codeFilter)
@@ -248,7 +241,10 @@ function DeliveryOperationsPage() {
 
     if (dateFrom || dateTo) {
       list = list.filter(r => {
-        const dateStr = r.dateOffloaded || r.dateAllocated
+        // dateLoaded is resolved from the ledger where the allocation itself
+        // carries none; using the raw column dropped those rows from every
+        // date range silently.
+        const dateStr = r.dateOffloaded || r.dateLoaded
         if (!dateStr) return false
         try {
           const d = startOfDay(parseISO(dateStr))
@@ -276,8 +272,8 @@ function DeliveryOperationsPage() {
     }
 
     return list.sort((a, b) => {
-      const dateA = a.dateOffloaded || a.dateAllocated || ''
-      const dateB = b.dateOffloaded || b.dateAllocated || ''
+      const dateA = a.dateOffloaded || a.dateLoaded || ''
+      const dateB = b.dateOffloaded || b.dateLoaded || ''
       return dateB.localeCompare(dateA)
     })
   }, [truckRecords, statusFilter, pfiFilter, customerFilter, truckFilter, codeFilter, dateFrom, dateTo, searchQuery, customerTypeFilter])
@@ -294,19 +290,19 @@ function DeliveryOperationsPage() {
 
     map.forEach(records => {
       records.sort((x, y) => {
-        const dateX = x.dateOffloaded || x.dateAllocated || ''
-        const dateY = y.dateOffloaded || y.dateAllocated || ''
+        const dateX = x.dateOffloaded || x.dateLoaded || ''
+        const dateY = y.dateOffloaded || y.dateLoaded || ''
         return dateY.localeCompare(dateX)
       })
     })
 
     return [...map.entries()].sort(([, recordsA], [, recordsB]) => {
       const maxDateA = recordsA.reduce((max, r) => {
-        const d = r.dateOffloaded || r.dateAllocated || ''
+        const d = r.dateOffloaded || r.dateLoaded || ''
         return d > max ? d : max
       }, '')
       const maxDateB = recordsB.reduce((max, r) => {
-        const d = r.dateOffloaded || r.dateAllocated || ''
+        const d = r.dateOffloaded || r.dateLoaded || ''
         return d > max ? d : max
       }, '')
       return maxDateB.localeCompare(maxDateA)
@@ -319,11 +315,13 @@ function DeliveryOperationsPage() {
 
   const totals = useMemo(() => {
     let activeCount = 0, totalInTransit = 0, totalDelivered = 0, deliveredTrips = 0
+    let otherCount = 0, otherQty = 0
     filtered.forEach(r => {
-      if (r.status === 'loaded') { activeCount++; totalInTransit += r.qty }
-      else if (r.status === 'offloaded') { totalDelivered += r.qty; deliveredTrips++ }
+      if (r.status.key === 'loaded') { activeCount++; totalInTransit += r.qty }
+      else if (r.status.key === 'offloaded') { totalDelivered += r.qty; deliveredTrips++ }
+      else { otherCount++; otherQty += r.qty }
     })
-    return { activeCount, totalInTransit, totalDelivered, deliveredTrips }
+    return { activeCount, totalInTransit, totalDelivered, deliveredTrips, otherCount, otherQty }
   }, [filtered])
 
   const summaryCards = useMemo((): SummaryCard[] => [
@@ -375,13 +373,6 @@ function DeliveryOperationsPage() {
   // Handlers
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const invalidateAll = useCallback(() => {
-    qc.invalidateQueries({ queryKey: ['delivery-inventory'] })
-    qc.invalidateQueries({ queryKey: ['delivery-sales'] })
-    qc.invalidateQueries({ queryKey: ['pfis'] })
-    qc.invalidateQueries({ queryKey: ['trucks'] })
-  }, [qc])
-
   const clearAllFilters = () => {
     setSearchQuery('')
     setDateFrom('')
@@ -396,18 +387,21 @@ function DeliveryOperationsPage() {
 
   const exportCSV = useCallback(() => {
     if (!filtered.length) return
-    const headers = ['S/N', 'Code', 'Truck', 'PFI', 'Product', 'Depot', 'Destination', 'Quantity', 'Status', 'Date Loaded', 'Date Sold']
+    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
     const rows = filtered.map((r, idx) => [
       idx + 1,
       r.code || '—',
       r.truckPlate,
+      r.driverName || '—',
       r.pfiLabel || '—',
       r.product || '—',
       r.depotDisplay || '—',
+      r.custName || '—',
       r.destination || '—',
       r.qty,
-      statusBadge[r.status]?.label || r.status,
-      r.dateAllocated ? (() => { try { return format(parseISO(r.dateAllocated), 'dd/MM/yyyy') } catch { return r.dateAllocated } })() : '',
+      r.rate > 0 ? r.rate : '—',
+      r.status.label,
+      r.dateLoaded ? (() => { try { return format(parseISO(r.dateLoaded), 'dd/MM/yyyy') } catch { return r.dateLoaded } })() : '',
       r.dateOffloaded ? (() => { try { return format(parseISO(r.dateOffloaded), 'dd/MM/yyyy') } catch { return r.dateOffloaded } })() : '',
     ])
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -475,6 +469,7 @@ function DeliveryOperationsPage() {
               <option value="all">All Statuses</option>
               <option value="active">In Transit</option>
               <option value="delivered">Sold</option>
+              <option value="other">{STATUS_DISPLAY.empty.label}</option>
             </select>
           </div>
 
@@ -528,7 +523,7 @@ function DeliveryOperationsPage() {
 
         {/* Active Filter Chips */}
         {[
-          statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : 'Sold'}`, clear: () => setStatusFilter('all') },
+          statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`, clear: () => setStatusFilter('all') },
           truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
           customerFilter && { label: `Customer: ${distinctCustomers.find(([id]) => id === customerFilter)?.[1] || customerFilter}`, clear: () => setCustomerFilter('') },
           customerTypeFilter !== 'all' && { label: `Type: ${customerTypeFilter === 'filling_station' ? 'Filling Station' : 'Normal'}`, clear: () => setCustomerTypeFilter('all') },
@@ -538,7 +533,7 @@ function DeliveryOperationsPage() {
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border">
               <span className="text-xs text-muted-foreground shrink-0">Filtering:</span>
               {[
-                statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : 'Sold'}`, clear: () => setStatusFilter('all') },
+                statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`, clear: () => setStatusFilter('all') },
                 truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
                 customerFilter && { label: `Customer: ${distinctCustomers.find(([id]) => id === customerFilter)?.[1] || customerFilter}`, clear: () => setCustomerFilter('') },
                 customerTypeFilter !== 'all' && { label: `Type: ${customerTypeFilter === 'filling_station' ? 'Filling Station' : 'Normal'}`, clear: () => setCustomerTypeFilter('all') },
@@ -587,10 +582,14 @@ function DeliveryOperationsPage() {
             {grouped.map(([code, records]) => {
               const theme = code ? getCodeTheme(code) : null
               const totalQty = records.reduce((s, r) => s + r.qty, 0)
-              const loadedCount = records.filter(r => r.status === 'loaded').length
-              const soldCount = records.filter(r => r.status === 'offloaded').length
-              const loadedQty = records.filter(r => r.status === 'loaded').reduce((s, r) => s + r.qty, 0)
-              const soldQty = records.filter(r => r.status === 'offloaded').reduce((s, r) => s + r.qty, 0)
+              const loadedCount = records.filter(r => r.status.key === 'loaded').length
+              const soldCount = records.filter(r => r.status.key === 'offloaded').length
+              const loadedQty = records.filter(r => r.status.key === 'loaded').reduce((s, r) => s + r.qty, 0)
+              const soldQty = records.filter(r => r.status.key === 'offloaded').reduce((s, r) => s + r.qty, 0)
+              // Neither loaded nor sold. Without this chip a card could read
+              // "36 trucks" over two chips that counted none of them.
+              const otherRecords = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
+              const otherQty = otherRecords.reduce((s, r) => s + r.qty, 0)
               const unit = records[0]?.unitLabel || 'Litres'
 
               const distinctPfis = [...new Set(records.map(r => r.pfiLabel).filter(Boolean))]
@@ -599,7 +598,7 @@ function DeliveryOperationsPage() {
               const distinctDestinations = [...new Set(records.map(r => r.destination).filter(Boolean))]
 
               const latestDate = records.reduce((max, r) => {
-                const d = r.dateOffloaded || r.dateAllocated || ''
+                const d = r.dateOffloaded || r.dateLoaded || ''
                 return d > max ? d : max
               }, '')
 
@@ -686,6 +685,11 @@ function DeliveryOperationsPage() {
                       {soldCount > 0 && (
                         <span className="text-xs font-normal text-accent bg-accent/10 px-2 py-0.5 rounded-full border border-accent/40 dark:border-accent/20">
                           {soldCount} sold ({fmtQty(soldQty)} L)
+                        </span>
+                      )}
+                      {otherRecords.length > 0 && (
+                        <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full border border-border">
+                          {otherRecords.length} {STATUS_DISPLAY.empty.label.toLowerCase()} ({fmtQty(otherQty)} L)
                         </span>
                       )}
                     </div>

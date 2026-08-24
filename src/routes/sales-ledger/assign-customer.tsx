@@ -15,7 +15,7 @@ import { useLedgerGroups } from '#/lib/hooks/useLedgerGroups'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliveryInventory, DeliveryCustomer, DeliverySale } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, formatWithCommas, stripCommas, isFillingStation, safeFormatDate, normalizeCycleDate } from '#/lib/sales-ledger-utils'
+import { toNum, formatWithCommas, stripCommas, isFillingStation, safeFormatDate, normalizeCycleDate, normalizePlate } from '#/lib/sales-ledger-utils'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/sales-ledger/assign-customer')({
@@ -133,8 +133,8 @@ function AssignCustomerPage() {
       if (found) return found
     }
     if (searchParams.truckNumber) {
-      const normalizedTruck = searchParams.truckNumber.trim().toUpperCase()
-      const matches = allLoadings.filter(l => (l.truckNumber || '').trim().toUpperCase() === normalizedTruck)
+      const normalizedTruck = normalizePlate(searchParams.truckNumber)
+      const matches = allLoadings.filter(l => normalizePlate(l.truckNumber) === normalizedTruck)
       if (searchParams.dateLoaded) {
         const dateMatch = matches.find(l => (l.dateAllocated || '').split('T')[0] === searchParams.dateLoaded?.split('T')[0])
         if (dateMatch) return dateMatch
@@ -162,11 +162,11 @@ function AssignCustomerPage() {
       }
     }
 
-    const targetTruck = (paramTruck || selectedLoading?.truckNumber || '').trim().toUpperCase()
+    const targetTruck = normalizePlate(paramTruck || selectedLoading?.truckNumber)
     if (!targetTruck) return []
 
     return ledgerGroups.filter(g => {
-      const gTruck = (g.truckNumber || '').trim().toUpperCase()
+      const gTruck = normalizePlate(g.truckNumber)
       if (gTruck !== targetTruck) return false
 
       const targetDate = paramDate || selectedLoading?.dateAllocated
