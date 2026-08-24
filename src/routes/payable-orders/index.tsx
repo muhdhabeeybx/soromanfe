@@ -8,7 +8,7 @@ import { Card, CardContent } from '#/components/ui/card'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
-import { Building2, Package, Search, X, Wallet, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Building2, Package, Search, X, Wallet, CheckCircle2, AlertTriangle, MapPin } from 'lucide-react'
 import { useAllOrders } from '#/lib/hooks/useOrders'
 import { ConfirmOrderPaymentDialog } from '#/components/ConfirmOrderPaymentDialog'
 import { PageLoader } from '#/components/PageLoader'
@@ -205,6 +205,12 @@ function PendingOrdersPage() {
                     <TableRow>
                       <TableHead>Order No.</TableHead>
                       <TableHead>Customer / Company</TableHead>
+                      {/* Location and PFI were filterable from the bar above
+                          but nowhere on the row, so a filtered list gave no
+                          way to see which depot or PFI a given order was
+                          actually against. */}
+                      <TableHead>Location</TableHead>
+                      <TableHead>PFI</TableHead>
                       <TableHead>Product</TableHead>
                       <TableHead>Quantity</TableHead>
                       <TableHead>Total Amount</TableHead>
@@ -240,6 +246,15 @@ function PendingOrdersPage() {
                                 </div>
                               )}
                             </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                              <MapPin className="size-3.5" />
+                              <span>{order.depotName || order.state || '—'}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                            {order.pfiNumber || '—'}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1.5 text-sm font-normal">
