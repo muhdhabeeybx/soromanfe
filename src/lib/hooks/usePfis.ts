@@ -376,6 +376,8 @@ export type ExpenseFilters = {
   group?: string
   pfi?: string
   bank?: string
+  /** Staff id of whoever raised the expense — see `submitters` on the response. */
+  submitter?: string
   type?: 'pfi' | 'general' | ''
   status?: string
   month?: string
@@ -401,6 +403,12 @@ export function useExpenses(filters?: ExpenseFilters) {
         /** Deliberately ignores the status filter, so the tabs keep their counts. */
         statusCounts: Record<string, number>
         banks: string[]
+        /**
+         * Everyone who has raised an expense in view, for the "added by"
+         * filter. Built ignoring that filter, so picking someone does not
+         * reduce the list to just them.
+         */
+        submitters: Array<{ id: number; name: string }>
         /** 'own' when the viewer is outside the oversight roles. */
         scope: 'own' | 'all'
         can_review: boolean

@@ -68,7 +68,7 @@ function ExpensesPage() {
       'Amount-Ex VAT', `${(vatRate * 100).toFixed(1)}%`, 'Invoice Amount',
       'WHT rate %', 'WHT deduction', 'Amount requested', 'Amount paid',
       /* 'GL code', */ 'Category', /* 'Bank code', */ 'Bank Name', 'Paid from',
-      'PFI', 'Status',
+      'Added by', 'PFI', 'Status',
     ]
     const body = rows.map((e, i) => [
       String(i + 1),
@@ -90,6 +90,7 @@ function ExpensesPage() {
       // e.bank_code || '',
       e.payee_bank_name || '',
       e.bank_paid_from || '',
+      e.submitted_by_name || '',
       e.pfi_number || '',
       e.status_label,
     ])
@@ -231,6 +232,15 @@ function ExpensesPage() {
         <option value="">All banks</option>
         {data?.banks.map((b) => <option key={b} value={b}>{b}</option>)}
         </NativeSelect>
+        {/* Only the people who have actually raised something in view are
+            offered — the whole staff list would mostly be names that filter
+            to nothing. */}
+        <NativeSelect className="w-44" value={filters.submitter || ''} onChange={(e) => set('submitter', e.target.value)}>
+        <option value="">Added by anyone</option>
+        {(data?.submitters || []).map((sub) => (
+        <option key={sub.id} value={String(sub.id)}>{sub.name}</option>
+        ))}
+        </NativeSelect>
         <Input
         type="date" className="w-36" value={filters.dateFrom || ''}
         onChange={(e) => set('dateFrom', e.target.value)}
@@ -282,6 +292,9 @@ function ExpensesPage() {
                   {/* <TableHead>Bank code</TableHead> */}
                   <TableHead>Bank name</TableHead>
                   <TableHead>Paid from</TableHead>
+                  {/* The filter above is unreadable without this: you pick a
+                      name and then cannot tell which rows are theirs. */}
+                  <TableHead>Added by</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -332,6 +345,9 @@ function ExpensesPage() {
                     </TableCell>
                     <TableCell className="max-w-[10rem] truncate text-muted-foreground">
                       {e.bank_paid_from || '—'}
+                    </TableCell>
+                    <TableCell className="max-w-[10rem] truncate whitespace-nowrap text-muted-foreground">
+                      {e.submitted_by_name || '—'}
                     </TableCell>
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>
