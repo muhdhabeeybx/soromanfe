@@ -21,6 +21,7 @@ import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useToast } from '#/lib/hooks/useToast'
 import { cn } from '#/lib/utils'
+import { salesForLoading } from '#/lib/sales-ledger-utils'
 import type { DeliveryInventory, DeliverySale, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
@@ -222,27 +223,25 @@ function AllocationDetailsPage() {
   }, [allEntries, normalizedCode, truckMap, customerMap, pfiMap])
 
   // ── Match sales to trucks ───────────────────────────────────────────────
+  //
+  // Dated allocations are matched first so that a truck's undated row cannot
+  // swallow the payments belonging to a dated one — the same ordering
+  // useLedgerGroups uses.
   const truckSalesMap = useMemo(() => {
     const map = new Map<string, { customerId: string; customerName: string; qty: number; rates: Set<number>; location: string }[]>()
 
-    const salesByTruckDate = new Map<string, DeliverySale[]>()
-    allSales.forEach(sale => {
-      const key = `${(sale.truckNumber || '').toUpperCase()}||${(sale.dateLoaded || '').split('T')[0]}`
-      const arr = salesByTruckDate.get(key) ?? []
-      arr.push(sale)
-      salesByTruckDate.set(key, arr)
-    })
-
     const matchedSaleIds = new Set<string>()
+    const ordered = [
+      ...truckRecords.filter(r => !!r.dateAllocated),
+      ...truckRecords.filter(r => !r.dateAllocated),
+    ]
 
-    truckRecords.forEach(loading => {
-      const truckKey = `${(loading.truckNumber || '').toUpperCase()}||${(loading.dateAllocated || '').split('T')[0]}`
-      const cycleSales = salesByTruckDate.get(truckKey) || []
-      let payments = cycleSales.filter(sale => !matchedSaleIds.has(sale._id || sale.id || ''))
-
-      if (payments.length === 0 && loading.customerId) {
-        payments = cycleSales.filter(sale => !matchedSaleIds.has(sale._id || sale.id || '') && sale.customerId === loading.customerId)
-      }
+    ordered.forEach(loading => {
+      const payments = salesForLoading(allSales, {
+        truckNumber: loading.truckNumber || loading.truckPlate,
+        dateAllocated: loading.dateAllocated,
+        allocationCode: loading.code,
+      }).filter(sale => !matchedSaleIds.has(sale._id || sale.id || ''))
 
       payments.forEach(p => matchedSaleIds.add(p._id || p.id || ''))
 

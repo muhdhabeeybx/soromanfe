@@ -1,6 +1,6 @@
 import { format, parseISO, startOfDay, endOfDay, startOfWeek, endOfWeek,
   startOfMonth, endOfMonth, startOfYear, endOfYear, subDays, isWithinInterval } from 'date-fns'
-import type { DeliveryCustomer } from '#/lib/types'
+import type { DeliveryCustomer, DeliverySale } from '#/lib/types'
 
 export const toNum = (v: string | number | undefined | null): number => {
   if (v === undefined || v === null || v === '') return 0
@@ -41,6 +41,50 @@ export const normalizeCycleDate = (dateValue: string | undefined | null): string
 
 export const getCycleKey = (truckNum: string, dateLoaded: string | undefined | null): string =>
   `${(truckNum || '').trim().toUpperCase()}||${normalizeCycleDate(dateLoaded)}`
+
+/** The shape of a truck allocation, as far as matching sales to it needs. */
+export interface LoadingRef {
+  truckNumber?: string | null
+  dateAllocated?: string | null
+  allocationCode?: string | null
+}
+
+/**
+ * The sales-ledger entries belonging to one truck allocation.
+ *
+ * A cycle is keyed on truck + load date, so that is the first rule. But an
+ * allocation carrying no date — every row that came over from the old system
+ * has an empty `date_allocated` — matched nothing under that rule alone, and
+ * the screens that read a rate off these entries showed a dash on rows that
+ * plainly had sales against them. When there is no date, the truck decides,
+ * narrowed to the allocation code when both sides carry one so a truck's
+ * June trip is never read as its July one.
+ */
+export const salesForLoading = (sales: DeliverySale[], loading: LoadingRef): DeliverySale[] => {
+  const plate = (loading.truckNumber || '').trim().toUpperCase()
+  if (!plate) return []
+
+  const onTruck = sales.filter(s => (s.truckNumber || '').trim().toUpperCase() === plate)
+  if (onTruck.length === 0) return []
+
+  const loadDate = normalizeCycleDate(loading.dateAllocated)
+  if (loadDate) return onTruck.filter(s => normalizeCycleDate(s.dateLoaded) === loadDate)
+
+  const code = (loading.allocationCode || '').trim().toUpperCase()
+  if (!code) return onTruck
+  const sameCode = onTruck.filter(s => (s.allocationCode || '').trim().toUpperCase() === code)
+  return sameCode.length > 0 ? sameCode : onTruck
+}
+
+/**
+ * The rate a cycle sold at, read off its sales entries.
+ *
+ * The highest rate on the cycle rather than the first: partial entries are
+ * often saved with the rate left at zero and filled in later, and the same
+ * rule already decides the rate the sales ledger itself displays.
+ */
+export const rateFromSales = (sales: DeliverySale[]): number =>
+  sales.reduce((mx, s) => Math.max(mx, toNum(s.rate)), 0)
 
 export const safeFormatDate = (d: string | null | undefined, fmtStr = 'dd MMM yyyy'): string => {
   if (!d) return '—'

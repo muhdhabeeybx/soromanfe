@@ -20,6 +20,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import type { DeliveryInventory, DeliverySale } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 import { routeGuard } from '#/lib/route-guard'
+import { salesForLoading, rateFromSales } from '#/lib/sales-ledger-utils'
 
 export const Route = createFileRoute('/delivery-operations/details')({
   beforeLoad: () => routeGuard('/delivery-operations'),
@@ -108,18 +109,33 @@ function DeliveryOperationDetailsView() {
     }
   }, [inventoryItem, truckMap, pfiMap])
 
-  // Matched sales
+  // Matched sales.
+  //
+  // This used to take every sale sharing the allocation code, which on a code
+  // covering twenty trucks put all twenty trucks' payments on one truck's
+  // page. It matches on the truck now — see salesForLoading.
   const matchedSales = useMemo((): DeliverySale[] => {
     if (!record) return []
-    return allSales.filter(s => {
-      if (s.allocationCode && record.code && s.allocationCode.toUpperCase() === record.code) return true
-      const sTruck = (s.truckNumber || '').toUpperCase()
-      const iTruck = (record.truckPlate || record.truckNumber || '').toUpperCase()
-      const sDate = (s.dateLoaded || '').split('T')[0]
-      const iDate = (record.dateAllocated || '').split('T')[0]
-      return sTruck && iTruck && sTruck === iTruck && sDate === iDate
+    return salesForLoading(allSales, {
+      truckNumber: record.truckPlate || record.truckNumber,
+      dateAllocated: record.dateAllocated,
+      allocationCode: record.code,
     }).sort((a, b) => (a.dateOfPayment || a.dateLoaded || '').localeCompare(b.dateOfPayment || b.dateLoaded || ''))
   }, [allSales, record])
+
+  /**
+   * The rate this truck sold at.
+   *
+   * The allocation record's own `rate` is only ever set by hand on the edit
+   * dialog and is 0 on effectively every row, which is why this card read "—"
+   * on trucks that had sold at a perfectly well-known price. The sales ledger
+   * is where a rate is actually entered, so that is where it is read from,
+   * falling back to the stored one.
+   */
+  const effectiveRate = useMemo(() => {
+    const fromSales = rateFromSales(matchedSales)
+    return fromSales > 0 ? fromSales : toNum(record?.rate)
+  }, [matchedSales, record])
 
   const salesSummary = useMemo(() => {
     let totalQty = 0, totalValue = 0, totalPaid = 0, totalExpenses = 0
@@ -129,12 +145,11 @@ function DeliveryOperationDetailsView() {
       totalPaid += toNum(s.paymentAmount)
       totalExpenses += toNum(s.expensesAmount ?? 0)
     })
-    if (totalValue === 0 && record) {
-      const rate = toNum(record.rate)
-      if (rate > 0) totalValue = rate * record.qty
+    if (totalValue === 0 && record && effectiveRate > 0) {
+      totalValue = effectiveRate * record.qty
     }
     return { totalQty, totalValue, totalPaid, totalExpenses, balance: totalValue - (totalPaid + totalExpenses) }
-  }, [matchedSales, record])
+  }, [matchedSales, record, effectiveRate])
 
   const handleDelete = async () => {
     if (!inventoryItem) return
@@ -244,8 +259,13 @@ function DeliveryOperationDetailsView() {
             <div>
               <div className="text-xs text-muted-foreground font-normal">Rate (per litre)</div>
               <div className="text-xl font-semibold text-foreground mt-0.5">
-                {toNum(record.rate) > 0 ? `₦${toNum(record.rate).toLocaleString()}` : '—'}
+                {effectiveRate > 0 ? `₦${effectiveRate.toLocaleString()}` : '—'}
               </div>
+              {effectiveRate > 0 && (
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {rateFromSales(matchedSales) > 0 ? 'From sales ledger' : 'Recorded on allocation'}
+                </div>
+              )}
             </div>
             <div className="p-2.5 rounded-xl bg-accent/10 text-accent">
               <DollarSign className="size-5" />

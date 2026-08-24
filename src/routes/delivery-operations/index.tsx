@@ -12,8 +12,8 @@ import {
   Loader2,
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
-import { useDeliveryInventoryList, useCreateDeliveryInventory, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
-import { usePfiList, useUpdatePfi } from '#/lib/hooks/usePfis'
+import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
+import { usePfiList } from '#/lib/hooks/usePfis'
 import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useToast } from '#/lib/hooks/useToast'
@@ -21,7 +21,6 @@ import { cn } from '#/lib/utils'
 import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
-import { AllocateTrucksDialog } from '#/components/delivery-operations/AllocateTrucksDialog'
 import { ManageCodesDialog } from '#/components/delivery-operations/ManageCodesDialog'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -120,9 +119,7 @@ function DeliveryOperationsPage() {
   }, [customersData])
 
   // ── Mutations ───────────────────────────────────────────────────────────
-  const createInventory = useCreateDeliveryInventory()
   const updateInventory = useUpdateDeliveryInventory()
-  const updatePfi = useUpdatePfi()
 
   // ── Filters & Search ────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
@@ -140,20 +137,6 @@ function DeliveryOperationsPage() {
     try { return JSON.parse(localStorage.getItem('dsl_trip_codes') || '[]') } catch { return [] }
   })
   const [manageCodesOpen, setManageCodesOpen] = useState(false)
-
-
-
-  // ── Allocate Trucks Dialog state ────────────────────────────────────────
-  const [loadDialogOpen, setLoadDialogOpen] = useState(false)
-  const [loadPfi, setLoadPfi] = useState('')
-  const [loadCode, setLoadCode] = useState('')
-  const [loadDepot, setLoadDepot] = useState('')
-  const [dateAllocated, setDateAllocated] = useState(format(new Date(), 'yyyy-MM-dd'))
-  const [selectedTruckIds, setSelectedTruckIds] = useState<Set<string>>(new Set())
-  const [truckSearch, setTruckSearch] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [showNewCodeInput, setShowNewCodeInput] = useState(false)
-  const [newCodeInput, setNewCodeInput] = useState('')
 
   // Persist codes
   useEffect(() => {
@@ -334,8 +317,6 @@ function DeliveryOperationsPage() {
   // Derived / Summaries
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const activeRecords = useMemo(() => truckRecords.filter(r => r.status === 'loaded'), [truckRecords])
-
   const totals = useMemo(() => {
     let activeCount = 0, totalInTransit = 0, totalDelivered = 0, deliveredTrips = 0
     filtered.forEach(r => {
@@ -344,17 +325,6 @@ function DeliveryOperationsPage() {
     })
     return { activeCount, totalInTransit, totalDelivered, deliveredTrips }
   }, [filtered])
-
-  const loadedTruckPlates = useMemo(() => {
-    const set = new Set<string>()
-    activeRecords.forEach(r => set.add(r.truckPlate))
-    return set
-  }, [activeRecords])
-
-  const availableTrucks = useMemo(
-    () => allTrucks.filter((t: any) => !loadedTruckPlates.has(t.plateNumber)),
-    [allTrucks, loadedTruckPlates]
-  )
 
   const summaryCards = useMemo((): SummaryCard[] => [
     {
@@ -376,36 +346,6 @@ function DeliveryOperationsPage() {
       tone: 'green',
     },
   ], [totals])
-
-  const activePfiOptions = useMemo(() =>
-    allPfis
-      .filter(p => p.status === 'active')
-      .sort((a, b) => a.pfiNumber.localeCompare(b.pfiNumber))
-      .map(p => ({
-        id: String((p as any).id ?? p._id),
-        label: `${p.pfiNumber} — ${p.productName || 'N/A'} · ${p.locationName || 'N/A'}`,
-      })),
-    [allPfis])
-
-  const selectedPfi = useMemo(() => (loadPfi ? pfiMap.get(loadPfi) || null : null), [loadPfi, pfiMap])
-
-  const autoSumCapacity = useMemo(() => {
-    let total = 0
-    selectedTruckIds.forEach(id => {
-      const t = allTrucks.find((t: any) => (t._id || t.id) === id)
-      if (t?.capacity_litres || t?.capacity) total += toNum(t.capacity_litres || t.capacity)
-    })
-    return total
-  }, [selectedTruckIds, allTrucks])
-
-  const trucksWithNoCapacity = useMemo(() => {
-    const result: string[] = []
-    selectedTruckIds.forEach(id => {
-      const t = allTrucks.find((t: any) => (t._id || t.id) === id)
-      if (t && !toNum(t.capacity_litres || t.capacity)) result.push(t.plateNumber)
-    })
-    return result
-  }, [selectedTruckIds, allTrucks])
 
   const distinctTruckPlates = useMemo(() => {
     const set = new Set<string>()
@@ -441,83 +381,6 @@ function DeliveryOperationsPage() {
     qc.invalidateQueries({ queryKey: ['pfis'] })
     qc.invalidateQueries({ queryKey: ['trucks'] })
   }, [qc])
-
-  const toggleTruck = (truckId: string) => {
-    setSelectedTruckIds(prev => {
-      const next = new Set(prev)
-      next.has(truckId) ? next.delete(truckId) : next.add(truckId)
-      return next
-    })
-  }
-
-  const addNewCode = () => {
-    const normalized = newCodeInput.trim().toUpperCase().replace(/\s+/g, '-')
-    if (!normalized) return
-    if (deliveryCodes.includes(normalized)) {
-      toast.error(`Code "${normalized}" already exists`)
-      return
-    }
-    setDeliveryCodes(prev => [...prev, normalized].sort())
-    setLoadCode(normalized)
-    setNewCodeInput('')
-    setShowNewCodeInput(false)
-    toast.success(`Code "${normalized}" created and selected`)
-  }
-
-  const handleLoadSave = useCallback(async () => {
-    if (selectedTruckIds.size === 0) { toast.error('Select at least one truck'); return }
-    if (!loadPfi) { toast.error('Select a PFI source'); return }
-
-    setSaving(true)
-    try {
-      const depot = loadDepot || selectedPfi?.locationName || ''
-      const normalizedCode = loadCode ? loadCode.trim().toUpperCase().replace(/\s+/g, '-') : null
-      const promises: Promise<any>[] = []
-
-      for (const truckId of selectedTruckIds) {
-        const truckObj = allTrucks.find((t: any) => String(t._id || t.id) === String(truckId))
-        const truckCapacity = toNum(truckObj?.capacity_litres || truckObj?.capacity)
-        promises.push(
-          createInventory.mutateAsync({
-            pfi: loadPfi,
-            pfiId: Number(loadPfi) || undefined,
-            allocation_code: normalizedCode || undefined,
-            allocationCode: normalizedCode || undefined,
-            truck: truckId,
-            truckId: Number(truckId) || undefined,
-            truck_number: truckObj?.plateNumber || '',
-            truckNumber: truckObj?.plateNumber || '',
-            depot: depot || selectedPfi?.locationName || undefined,
-            quantity_allocated: truckCapacity,
-            quantityAllocated: truckCapacity,
-            date_allocated: dateAllocated,
-            dateAllocated: dateAllocated,
-            loading_status: 'loaded',
-            loadingStatus: 'loaded',
-          } as any)
-        )
-      }
-
-      await Promise.all(promises)
-
-      // Update PFI soldQtyLitres
-      if (selectedPfi && autoSumCapacity > 0) {
-        const currentSold = toNum(selectedPfi.soldQtyLitres)
-        await updatePfi.mutateAsync({
-          id: loadPfi,
-          data: { soldQtyLitres: currentSold + autoSumCapacity },
-        })
-      }
-
-      toast.success(`${selectedTruckIds.size} truck${selectedTruckIds.size > 1 ? 's' : ''} allocated${normalizedCode ? ` under ${normalizedCode}` : ''}`)
-      setLoadDialogOpen(false)
-      invalidateAll()
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to save')
-    } finally {
-      setSaving(false)
-    }
-  }, [selectedTruckIds, loadCode, loadPfi, loadDepot, dateAllocated, selectedPfi, allTrucks, autoSumCapacity, invalidateAll])
 
   const clearAllFilters = () => {
     setSearchQuery('')
@@ -855,36 +718,6 @@ function DeliveryOperationsPage() {
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* Dialogs */}
-      <AllocateTrucksDialog
-        open={loadDialogOpen}
-        onOpenChange={setLoadDialogOpen}
-        activePfiOptions={activePfiOptions}
-        selectedPfi={selectedPfi}
-        deliveryCodes={deliveryCodes}
-        availableTrucks={availableTrucks}
-        selectedTruckIds={selectedTruckIds}
-        autoSumCapacity={autoSumCapacity}
-        trucksWithNoCapacity={trucksWithNoCapacity}
-        saving={saving}
-        loadPfi={loadPfi}
-        loadCode={loadCode}
-        dateAllocated={dateAllocated}
-        truckSearch={truckSearch}
-        showNewCodeInput={showNewCodeInput}
-        newCodeInput={newCodeInput}
-        setLoadPfi={setLoadPfi}
-        setLoadCode={setLoadCode}
-        setDateAllocated={setDateAllocated}
-        setTruckSearch={setTruckSearch}
-        setShowNewCodeInput={setShowNewCodeInput}
-        setNewCodeInput={setNewCodeInput}
-        setLoadDepot={setLoadDepot}
-        toggleTruck={toggleTruck}
-        addNewCode={addNewCode}
-        handleLoadSave={handleLoadSave}
-        pfiMap={pfiMap}
-      />
-
       <ManageCodesDialog
         open={manageCodesOpen}
         onOpenChange={setManageCodesOpen}

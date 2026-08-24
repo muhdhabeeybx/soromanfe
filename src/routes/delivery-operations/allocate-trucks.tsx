@@ -2,7 +2,6 @@ import { useState, useMemo, useCallback } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { format } from 'date-fns'
-import { usePfiList, useUpdatePfi, type Pfi } from '#/lib/hooks/usePfis'
 import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useDeliveryInventoryList, useCreateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
@@ -11,6 +10,18 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Truck, Plus, Search, Loader2, CheckCircle2, Droplets, Building2, Calendar, Tag, AlertCircle, X } from 'lucide-react'
 import { routeGuard } from '#/lib/route-guard'
+
+/**
+ * Allocating trucks here is a record of our own movements, nothing more.
+ *
+ * It used to require a PFI and, on save, add the selected capacity to that
+ * PFI's sold quantity — so a delivery-operations entry silently drew down
+ * batch stock that the PFI module is the real owner of, and the same litres
+ * were counted twice. There is no PFI on this screen any more and nothing
+ * here writes to one. A truck can also be listed again while an earlier
+ * allocation of it is still open; the previous rule hid any truck that had
+ * not been marked sold, which made a second trip impossible to record.
+ */
 
 export const Route = createFileRoute('/delivery-operations/allocate-trucks')({
   beforeLoad: () => routeGuard('/delivery-operations'),
@@ -30,14 +41,8 @@ function AllocateTrucksPage() {
   const toast = useToast()
 
   // Queries
-  const { data: pfisData } = usePfiList()
   const { data: trucksData } = useAllocatableTrucks()
   const { data: rawInventory = [] } = useDeliveryInventoryList()
-
-  const allPfis: Pfi[] = useMemo(() => {
-    if (!pfisData) return []
-    return Array.isArray(pfisData) ? pfisData : (pfisData.pfis || [])
-  }, [pfisData])
 
   const allTrucks = useMemo(() => {
     if (!trucksData) return []
@@ -51,12 +56,11 @@ function AllocateTrucksPage() {
 
   // Mutations
   const createInventory = useCreateDeliveryInventory()
-  const updatePfi = useUpdatePfi()
 
   // Form State
-  const [loadPfi, setLoadPfi] = useState('')
   const [loadCode, setLoadCode] = useState('')
   const [loadDepot, setLoadDepot] = useState('')
+  const [loadProduct, setLoadProduct] = useState('')
   const [dateAllocated, setDateAllocated] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [selectedTruckIds, setSelectedTruckIds] = useState<Set<string>>(new Set())
   const [truckSearch, setTruckSearch] = useState('')
@@ -74,51 +78,33 @@ function AllocateTrucksPage() {
     return combined
   }, [allEntries, customCodes])
 
-  // Lookup Maps
-  const pfiMap = useMemo(() => {
-    const m = new Map<string, Pfi>()
-    allPfis.forEach((p: Pfi) => m.set(p._id, p))
-    return m
-  }, [allPfis])
-
-  // Active PFI options
-  const activePfiOptions = useMemo(() => {
-    return allPfis
-      .filter((p: Pfi) => p.status === 'active')
-      .sort((a: Pfi, b: Pfi) => a.pfiNumber.localeCompare(b.pfiNumber))
-  }, [allPfis])
-
-  const selectedPfi = useMemo(() => (loadPfi ? pfiMap.get(loadPfi) || null : null), [loadPfi, pfiMap])
-
-  // Loaded truck plates to prevent double allocation
-  const loadedTruckPlates = useMemo(() => {
-    const set = new Set<string>()
+  // How many times each plate has been allocated already, and whether any of
+  // those allocations is still open. Shown against the truck, never used to
+  // remove it from the list — a truck can run a second trip before the first
+  // is marked sold, and the ledger has to be able to say so.
+  const truckHistory = useMemo(() => {
+    const m = new Map<string, { total: number; open: number }>()
     allEntries.forEach(r => {
-      if (r.loadingStatus === 'loaded' && (r.truckNumber || (r as any).truckPlate)) {
-        set.add((r.truckNumber || (r as any).truckPlate || '').toUpperCase())
-      }
+      const plate = (r.truckNumber || (r as any).truckPlate || '').trim().toUpperCase()
+      if (!plate) return
+      const entry = m.get(plate) ?? { total: 0, open: 0 }
+      entry.total += 1
+      if (r.loadingStatus === 'loaded') entry.open += 1
+      m.set(plate, entry)
     })
-    return set
+    return m
   }, [allEntries])
-
-  // Available trucks (not currently in transit)
-  const availableTrucks = useMemo(() => {
-    return allTrucks.filter((t: any) => {
-      const plate = (t.plateNumber || '').toUpperCase()
-      return !loadedTruckPlates.has(plate)
-    })
-  }, [allTrucks, loadedTruckPlates])
 
   // Filtered trucks by search
   const filteredTrucks = useMemo(() => {
-    if (!truckSearch.trim()) return availableTrucks
+    if (!truckSearch.trim()) return allTrucks
     const q = truckSearch.trim().toLowerCase()
-    return availableTrucks.filter((t: any) =>
+    return allTrucks.filter((t: any) =>
       (t.plateNumber || '').toLowerCase().includes(q) ||
       (t.driver || t.driver_name || '').toLowerCase().includes(q) ||
       (t.model || '').toLowerCase().includes(q)
     )
-  }, [availableTrucks, truckSearch])
+  }, [allTrucks, truckSearch])
 
   // Capacity calculations
   const autoSumCapacity = useMemo(() => {
@@ -179,14 +165,9 @@ function AllocateTrucksPage() {
       toast.error('Select at least one truck')
       return
     }
-    if (!loadPfi) {
-      toast.error('Select a PFI source')
-      return
-    }
 
     setSaving(true)
     try {
-      const depot = loadDepot || selectedPfi?.locationName || ''
       const normalizedCode = loadCode ? loadCode.trim().toUpperCase().replace(/\s+/g, '-') : null
       const promises: Promise<any>[] = []
 
@@ -195,15 +176,15 @@ function AllocateTrucksPage() {
         const truckCapacity = toNum(truckObj?.capacity_litres || truckObj?.capacity)
         promises.push(
           createInventory.mutateAsync({
-            pfi: loadPfi,
-            pfiId: Number(loadPfi) || undefined,
             allocation_code: normalizedCode || undefined,
             allocationCode: normalizedCode || undefined,
             truck: truckId,
             truckId: Number(truckId) || undefined,
             truck_number: truckObj?.plateNumber || '',
             truckNumber: truckObj?.plateNumber || '',
-            depot: depot || selectedPfi?.locationName || undefined,
+            depot: loadDepot.trim() || undefined,
+            pfi_product: loadProduct.trim() || undefined,
+            pfiProduct: loadProduct.trim() || undefined,
             quantity_allocated: truckCapacity,
             quantityAllocated: truckCapacity,
             date_allocated: dateAllocated,
@@ -215,15 +196,6 @@ function AllocateTrucksPage() {
       }
 
       await Promise.all(promises)
-
-      // Update PFI sold_qty_litres
-      if (selectedPfi && autoSumCapacity > 0) {
-        const currentSold = toNum(selectedPfi.soldQtyLitres)
-        await updatePfi.mutateAsync({
-          id: loadPfi,
-          data: { soldQtyLitres: currentSold + autoSumCapacity },
-        })
-      }
 
       toast.success(
         `${selectedTruckIds.size} truck${selectedTruckIds.size > 1 ? 's' : ''} allocated${normalizedCode ? ` under ${normalizedCode}` : ''
@@ -239,14 +211,11 @@ function AllocateTrucksPage() {
   }, [
     selectedTruckIds,
     loadCode,
-    loadPfi,
     loadDepot,
+    loadProduct,
     dateAllocated,
-    selectedPfi,
     allTrucks,
-    autoSumCapacity,
     createInventory,
-    updatePfi,
     toast,
     navigate,
   ])
@@ -257,8 +226,8 @@ function AllocateTrucksPage() {
       <div className="flex items-center justify-between border-b border-border pb-4">
         <PageHeader
       eyebrow="Truck Sales"
-      title="Allocate Trucks to PFI"
-      description="Select an active PFI source, specify allocation code, and assign trucks for loading."
+      title="Allocate Trucks"
+      description="Record trucks loaded under an allocation code. This is an internal movement record — it does not draw down PFI stock."
     />
 
         <div className="flex items-center gap-2">
@@ -271,7 +240,7 @@ function AllocateTrucksPage() {
             size="sm"
             className="bg-accent hover:bg-accent/80 text-accent-foreground gap-2 cursor-pointer font-normal"
             onClick={handleSave}
-            disabled={saving || selectedTruckIds.size === 0 || !loadPfi}
+            disabled={saving || selectedTruckIds.size === 0}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
             {saving ? 'Saving...' : `Confirm & Allocate ${selectedTruckIds.size} Truck${selectedTruckIds.size !== 1 ? 's' : ''}`}
@@ -282,68 +251,10 @@ function AllocateTrucksPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Form Details */}
         <div className="lg:col-span-1 space-y-5">
-          {/* Step 1: PFI Selection */}
+          {/* Step 1: Allocation Code & Date */}
           <div className="bg-card p-5 rounded-xl border border-border space-y-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <span className="flex items-center justify-center size-6 rounded-full bg-accent/20 text-accent text-xs font-semibold">1</span>
-              Select PFI Source <span className="text-destructive">*</span>
-            </div>
-
-            <div className="space-y-2">
-              <select
-                aria-label="Select PFI Source"
-                value={loadPfi}
-                onChange={e => {
-                  setLoadPfi(e.target.value)
-                  const pfi = pfiMap.get(e.target.value)
-                  if (pfi?.locationName) setLoadDepot(pfi.locationName)
-                }}
-                className="h-8 w-full rounded-lg border border-border bg-background text-foreground px-2.5 text-base md:text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 font-normal"
-              >
-                <option value="">Select a PFI...</option>
-                {activePfiOptions.map(p => (
-                  <option key={p._id} value={p._id}>
-                    {p.pfiNumber} — {p.productName || 'N/A'} ({p.locationName || 'Depot'})
-                  </option>
-                ))}
-              </select>
-
-              {selectedPfi ? (
-                <div className="p-3.5 bg-accent/10 border border-accent/20 rounded-lg text-xs space-y-1.5">
-                  <div className="flex justify-between font-semibold text-accent">
-                    <span>{selectedPfi.pfiNumber}</span>
-                    <span className="bg-accent/20 text-accent px-2 py-0.5 rounded text-xs uppercase font-semibold">Active</span>
-                  </div>
-                  <div className="text-accent space-y-1">
-                    <p className="flex items-center gap-1.5">
-                      <Droplets className="size-3.5" />
-                      Product: <strong>{selectedPfi.productName || 'N/A'}</strong>
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <Building2 className="size-3.5" />
-                      Depot: <strong>{selectedPfi.locationName || 'N/A'}</strong>
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <Truck className="size-3.5" />
-                      Available Volume:{' '}
-                      <strong>
-                        {(toNum(selectedPfi.startingQtyLitres) - toNum(selectedPfi.soldQtyLitres)).toLocaleString()} L
-                      </strong>
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Choose a PFI from the dropdown to view available litres and depot details.
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Step 2: Allocation Code & Date */}
-          <div className="bg-card p-5 rounded-xl border border-border space-y-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <span className="flex items-center justify-center size-6 rounded-full bg-accent/20 text-accent text-xs font-semibold">2</span>
               Allocation Details
             </div>
 
@@ -396,7 +307,7 @@ function AllocateTrucksPage() {
                 )}
               </div>
 
-              {/* Depot Override */}
+              {/* Depot */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1">
                   <Building2 className="size-3.5" /> Depot Location
@@ -405,6 +316,20 @@ function AllocateTrucksPage() {
                   placeholder="Depot name..."
                   value={loadDepot}
                   onChange={e => setLoadDepot(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+
+              {/* Product — typed, not inherited from a PFI, so the operations
+                  tables still have something to show in the Product column. */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1">
+                  <Droplets className="size-3.5" /> Product
+                </Label>
+                <Input
+                  placeholder="e.g. PMS, AGO"
+                  value={loadProduct}
+                  onChange={e => setLoadProduct(e.target.value.toUpperCase())}
                   className="h-9 text-sm"
                 />
               </div>
@@ -464,11 +389,11 @@ function AllocateTrucksPage() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border pb-3">
             <div>
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                <span className="flex items-center justify-center size-6 rounded-full bg-accent/20 text-accent text-xs font-semibold">3</span>
+                <span className="flex items-center justify-center size-6 rounded-full bg-accent/20 text-accent text-xs font-semibold">2</span>
                 Select Fleet Trucks <span className="text-destructive">*</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                {selectedTruckIds.size} selected of {availableTrucks.length} available trucks
+                {selectedTruckIds.size} selected of {allTrucks.length} trucks — a truck already in transit can be allocated again
               </p>
             </div>
 
@@ -512,12 +437,14 @@ function AllocateTrucksPage() {
               <div className="p-12 text-center border-2 border-dashed border-border rounded-xl">
                 <Truck className="size-9 mx-auto text-muted-foreground/40 mb-2" />
                 <p className="text-sm font-normal text-muted-foreground">
-                  {availableTrucks.length === 0
-                    ? 'All registered trucks are currently loaded in transit.'
-                    : 'No available trucks match your search query.'}
+                  {allTrucks.length === 0
+                    ? 'No trucks registered in the fleet yet.'
+                    : 'No trucks match your search query.'}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Offload active trucks on the Delivery Operations screen to make them available again.
+                  {allTrucks.length === 0
+                    ? 'Add trucks under Fleet before allocating.'
+                    : 'Clear the search to see the full fleet.'}
                 </p>
               </div>
             ) : (
@@ -527,6 +454,7 @@ function AllocateTrucksPage() {
                   const isSelected = selectedTruckIds.has(truckId)
                   const capacity = toNum(truck.capacity_litres || truck.capacity)
                   const driverName = truck.driver || truck.driver_name || 'Unassigned'
+                  const history = truckHistory.get((truck.plateNumber || '').trim().toUpperCase())
 
                   return (
                     <div
@@ -568,6 +496,21 @@ function AllocateTrucksPage() {
                             Model: {truck.model}
                           </p>
                         )}
+
+                        {/* History, not a gate. An open allocation is worth
+                            knowing about; it no longer stops a second one. */}
+                        {history && history.total > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            {history.open > 0 && (
+                              <span className="inline-flex items-center gap-1 text-xs font-semibold px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/40">
+                                <Truck className="size-2.5" /> {history.open} in transit
+                              </span>
+                            )}
+                            <span className="text-xs text-muted-foreground">
+                              {history.total} previous allocation{history.total === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
@@ -585,7 +528,7 @@ function AllocateTrucksPage() {
             <Button
               className="bg-accent hover:bg-accent/80 text-accent-foreground gap-2 cursor-pointer px-6"
               onClick={handleSave}
-              disabled={saving || selectedTruckIds.size === 0 || !loadPfi}
+              disabled={saving || selectedTruckIds.size === 0}
             >
               {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
               {saving ? 'Processing...' : 'Confirm Allocation'}
