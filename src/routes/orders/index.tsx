@@ -27,7 +27,7 @@ import { useAllOrders } from '#/lib/hooks/useOrders'
 import { routeGuard } from '#/lib/route-guard'
 
 import {
-  DATE_PRESETS, resolveRange, toNumber, formatNaira, formatQty, isPaid, groupByDay,
+  DATE_PRESETS, resolveRange, toNumber, formatNaira, formatQty, isPaid, isVoidOrder, groupByDay,
   type DatePreset,
 } from './-orders-utils'
 import { OrderStatusBadge } from './-order-status'
@@ -149,12 +149,17 @@ function OrdersDashboard() {
     )
     const loading = filtered.filter((o) => String(o.status) === 'Loading')
     const expired = filtered.filter((o) => String(o.status) === 'Expired')
+    // Cancelled and expired orders are dead — their litres were never going
+    // to move, so counting them inflated "total qty ordered" against a
+    // volume that no depot will ever release.
+    const live = filtered.filter((o) => !isVoidOrder(o))
     return {
       count: filtered.length,
       paidCount: paid.length,
       unpaidCount: filtered.length - paid.length,
       expiredCount: expired.length,
-      qty: filtered.reduce((s, o) => s + toNumber(o.quantity), 0),
+      voidCount: filtered.length - live.length,
+      qty: live.reduce((s, o) => s + toNumber(o.quantity), 0),
       amount: filtered.reduce((s, o) => s + toNumber(o.totalAmount), 0),
       amountPaid: paid.reduce((s, o) => s + toNumber(o.totalAmount), 0),
       releasedCount: released.length,
@@ -265,6 +270,11 @@ function OrdersDashboard() {
                   <span className="ml-1 text-base font-normal text-muted-foreground">L</span>
                 </>
               }
+              // Says so on the card rather than leaving a reader to wonder why
+              // the litres do not add up to the rows on screen.
+              description={totals.voidCount > 0
+                ? `Excludes ${formatQty(totals.voidCount)} cancelled/expired`
+                : undefined}
             />
             <StatCard
               icon={<DollarSign />} label="Total revenue" value={formatNaira(totals.amount)}

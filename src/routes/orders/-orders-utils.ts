@@ -56,6 +56,17 @@ export const formatQty = (qty: number) => qty.toLocaleString('en-NG', { maximumF
 export const isPaid = (o: any) => String(o?.paymentStatus || '').toLowerCase() === 'paid'
 
 /**
+ * An order that will never move product: cancelled by someone, or expired
+ * unpaid. It stays in the list and keeps its own count card, but its litres
+ * are not litres anybody ordered in the sense the volume figures mean.
+ *
+ * Both spellings of cancelled are matched — the enum says "Cancelled" and
+ * parts of the UI have long said "Canceled".
+ */
+export const isVoidOrder = (o: { status?: string | null } | null | undefined): boolean =>
+  ['cancelled', 'canceled', 'expired'].includes(String(o?.status || '').toLowerCase())
+
+/**
  * An order is payable (ready to be paid from wallet balance) when:
  * 1. It is pending and unpaid
  * 2. It has not expired
