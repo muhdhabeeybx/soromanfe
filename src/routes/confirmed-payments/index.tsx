@@ -456,37 +456,47 @@ function FinanceReportPage() {
   // by hand after the order was already paid.
   const totalOutstanding = summary.totalSalesValue - summary.totalAmountPaid
 
-  // Every active PFI, period-sold worked out from these same filtered rows
-  // rather than a separate query — the two figures can never disagree about
-  // what counts as "sold" this way. A row whose PFI has since finished (and
-  // so isn't in the active list) still counts toward the reconciliation
-  // note below, just not as its own line in the block.
+  // Which PFIs the Stock Summary block covers.
+  //
+  // With one selected, that one alone: a report filtered to a single PFI was
+  // still carrying a stock table for every other active PFI, which on export
+  // reads as pages of figures the report is not about. It is listed whether
+  // or not it is still active — having asked for it by name is reason enough
+  // to see it, and an inactive one would otherwise leave the block empty.
+  //
+  // With none selected, every active PFI, exactly as before.
+  const listedPfis = useMemo(
+    () => (selectedPfi ? [selectedPfi] : pfis.filter((p) => p.status === 'active')),
+    [pfis, selectedPfi],
+  )
+
+  // Period-sold is worked out from these same filtered rows rather than a
+  // separate query — the two figures can never disagree about what counts as
+  // "sold" this way. A row whose PFI isn't listed still counts toward the
+  // reconciliation note below, just not as its own line in the block.
   const pfiStock: PfiStockRow[] = useMemo(() => {
     const soldByPfi = new Map<number, number>()
     for (const o of rows) {
       if (o.pfiId == null) continue
       soldByPfi.set(o.pfiId, (soldByPfi.get(o.pfiId) || 0) + Number(o.quantity || 0))
     }
-    return pfis
-      .filter((p) => p.status === 'active')
-      .map((p) => ({
-        pfiNumber: p.pfiNumber,
-        locationName: p.locationName || '—',
-        productName: p.productName || '—',
-        initialStock: p.startingQtyLitres ?? 0,
-        volumeSoldPeriod: soldByPfi.get(Number(p.id ?? p._id)) || 0,
-        volumeSoldAllTime: p.financials?.sold ?? 0,
-        volumeRemaining: p.financials?.remaining ?? 0,
-        revenue: p.financials?.revenue ?? 0,
-      }))
-  }, [pfis, rows])
+    return listedPfis.map((p) => ({
+      pfiNumber: p.pfiNumber,
+      locationName: p.locationName || '—',
+      productName: p.productName || '—',
+      initialStock: p.startingQtyLitres ?? 0,
+      volumeSoldPeriod: soldByPfi.get(Number(p.id ?? p._id)) || 0,
+      volumeSoldAllTime: p.financials?.sold ?? 0,
+      volumeRemaining: p.financials?.remaining ?? 0,
+      revenue: p.financials?.revenue ?? 0,
+    }))
+  }, [listedPfis, rows])
 
   // Reconciles the Stock Summary block against the Total Quantity card: the
-  // period-sold column only covers active PFIs, so litres sold on a PFI
-  // that has since finished (or was otherwise dropped from the active list)
-  // have to be added back separately to land on the same number.
+  // period-sold column only covers the PFIs listed, so litres sold on any
+  // other one have to be added back separately to land on the same number.
   const reconciliationNote = useMemo(() => {
-    const listedPfiIds = new Set(pfis.filter((p) => p.status === 'active').map((p) => Number(p.id ?? p._id)))
+    const listedPfiIds = new Set(listedPfis.map((p) => Number(p.id ?? p._id)))
     const qtyOnUnlistedPfis = rows.reduce((sum, o) => {
       if (o.pfiId == null || listedPfiIds.has(o.pfiId)) return sum
       return sum + Number(o.quantity || 0)
@@ -495,10 +505,16 @@ function FinanceReportPage() {
     if (search || productId) {
       return 'A search or product filter is active, so the period-sold total above and the Total Quantity card are not expected to match right now.'
     }
+    // Filtered to one PFI, the block is about that PFI and the old wording —
+    // "every PFI listed", "still active" — describes a list that is no longer
+    // there. Both figures are stated so they can be read against each other.
+    if (selectedPfi) {
+      return `Filtered to ${selectedPfi.pfiNumber}, so this block covers that PFI alone — ${periodSoldOnListed.toLocaleString()} L sold this period, against the ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card.`
+    }
     return qtyOnUnlistedPfis > 0
       ? `Period sold on the PFIs listed (${periodSoldOnListed.toLocaleString()} L) plus ${qtyOnUnlistedPfis.toLocaleString()} L on PFIs no longer active accounts for the ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card.`
       : `Period sold across every PFI listed accounts for the full ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card — every order in view this period belongs to a PFI still active.`
-  }, [pfis, rows, pfiStock, search, productId, summary.totalQuantity])
+  }, [listedPfis, selectedPfi, rows, pfiStock, search, productId, summary.totalQuantity])
 
   const exportFilters: FinanceReportFilters = {
     periodLabel,

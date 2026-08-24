@@ -123,6 +123,13 @@ export const TOTAL_COLUMN_COUNT = COLUMNS.length
 /** Exported text reads upper-cased throughout — the on-screen table doesn't. */
 const up = (v: string) => v.toUpperCase()
 
+/**
+ * The Stock Summary's total label. Filtering to a single PFI is now the
+ * common case, and the count was unconditionally pluralised — "Total (1
+ * PFIs)" on the one report most likely to be printed and sent on.
+ */
+const stockTotalLabel = (n: number) => `Total (${n} PFI${n === 1 ? '' : 's'})`
+
 function rowValues(o: FinanceReportOrder, i: number) {
   const qty = Number(o.quantity || 0)
   const rate = Number(o.price || 0)
@@ -492,7 +499,7 @@ export async function exportFinanceReportExcel(
     // are per-PFI positions in mixed batches, and summing them across PFIs
     // would not mean anything.
     const stockTotalRow = ws.getRow(cursor)
-    stockTotalRow.getCell(1).value = `Total (${pfiStock.length} PFIs)`
+    stockTotalRow.getCell(1).value = stockTotalLabel(pfiStock.length)
     stockTotalRow.getCell(5).value = periodTotal
     stockTotalRow.getCell(5).numFmt = QTY
     stockTotalRow.height = ROW_HEIGHT.total
@@ -524,10 +531,10 @@ export async function exportFinanceReportPdf(
   const doc = new jsPDF({ orientation: 'landscape' })
   const startY = drawPdfHeader(
     doc,
-    'Soroman — Finance Report',
+    'Payments Report',
     [
-      `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`,
-      `Period: ${filters.periodLabel}`,
+      // `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`,
+      `For ${filters.periodLabel}`,
       `Location: ${filters.locationName}`,
       `PFI: ${filters.pfiNumber}`,
     ].join('   ·   '),
@@ -710,7 +717,7 @@ export async function exportFinanceReportPdf(
       // Only the period-sold column is totalled — initial stock and
       // remaining are per-PFI positions in mixed batches, summing them
       // across PFIs would not mean anything.
-      foot: [['', '', `Total (${pfiStock.length} PFIs)`, '', periodTotal.toLocaleString(), '', '', '']],
+      foot: [['', '', stockTotalLabel(pfiStock.length), '', periodTotal.toLocaleString(), '', '', '']],
       styles: { ...pdfStyles.body, fontSize: 7 },
       headStyles: pdfStyles.head,
       footStyles: pdfStyles.foot,
