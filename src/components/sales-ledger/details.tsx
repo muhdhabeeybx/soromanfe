@@ -21,10 +21,10 @@ import { useLedgerGroups } from '#/lib/hooks/useLedgerGroups'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
-  RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, EditEntryDialog, DeleteConfirmDialog,
+  QuickPaymentDialog, RowSetupDialog, EditEntryDialog, DeleteConfirmDialog,
   type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate, normalizePlate } from '#/lib/sales-ledger-utils'
+import { toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate, normalizePlate, idKey, entityId } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 
 export function SalesLedgerDetails() {
@@ -64,20 +64,25 @@ export function SalesLedgerDetails() {
   }, [rawPfis])
 
   // ── Maps ────────────────────────────────────────────────────────────────
+  // String-keyed under both spellings of the id — see the same map in the
+  // sales-ledger index for why the raw value never matched.
   const customerMap = useMemo(() => {
     const m = new Map<string, DeliveryCustomer>()
-    customers.forEach(c => m.set(c._id || c.id || '', c))
+    customers.forEach(c => {
+      if (c._id != null) m.set(idKey(c._id), c)
+      if (c.id != null) m.set(idKey(c.id), c)
+    })
     return m
   }, [customers])
 
   const pfiMap = useMemo(() => {
     const m = new Map<string, Pfi>()
-    pfis.forEach(p => m.set(p._id, p))
+    pfis.forEach(p => m.set(idKey(p._id), p))
     return m
   }, [pfis])
 
   // ── Ledger Groups (shared computation) ──────────────────────────────────
-  const { ledgerGroups, cycleCustomerRateMap } = useLedgerGroups({
+  const { ledgerGroups } = useLedgerGroups({
     allSales, allLoadings, customerMap, pfiMap,
   })
 
@@ -100,7 +105,7 @@ export function SalesLedgerDetails() {
       if (found) return found
     }
     if (loadingId) {
-      const found = ledgerGroups.find(g => String(g.loadingId) === String(loadingId))
+      const found = ledgerGroups.find(g => idKey(g.loadingId) === idKey(loadingId))
       if (found) return found
     }
     if (truckNumber) {
@@ -131,20 +136,12 @@ export function SalesLedgerDetails() {
     return ledgerGroups.filter(g => getCycleKey(g.truckNumber, g.dateLoaded) === targetCycleKey)
   }, [ledgerGroups, targetGroup])
 
-  // ── Loaded Trucks for Record Payment Dialog ──────────────────────────────
-  const loadedTrucks = useMemo(() => {
-    return allLoadings.filter(t => !!(t.truckNumber || t.truckId)).sort((a, b) => {
-      const truckA = (a.truckNumber || '').toUpperCase()
-      const truckB = (b.truckNumber || '').toUpperCase()
-      if (truckA !== truckB) return truckA.localeCompare(truckB)
-      return normalizeCycleDate(b.dateAllocated || '').localeCompare(normalizeCycleDate(a.dateAllocated || ''))
-    })
-  }, [allLoadings])
-
   // ── Dialog States ───────────────────────────────────────────────────────
-  const [recordDialogOpen, setRecordDialogOpen] = useState(false)
-  const [assignMode, setAssignMode] = useState(false)
-
+  //
+  // No Record Payment dialog here: this page already reaches every part of a
+  // row through Add Payment, Row Setup and New Customer, and the one path
+  // that opened it — the incomplete-row fallback above — now opens Row Setup
+  // on the actual row instead of a truck picker starting from nothing.
   const [quickPaymentOpen, setQuickPaymentOpen] = useState(false)
   const [quickPaymentTarget, setQuickPaymentTarget] = useState<LedgerGroup | null>(null)
 
@@ -159,14 +156,18 @@ export function SalesLedgerDetails() {
 
   const openQuickPayment = () => {
     if (!targetGroup) return
-    if (!targetGroup.customerId || !targetGroup.location || (!targetGroup.expected && !targetGroup.isFillingStation)) {
-      if (targetGroup.loadingId) {
-        setAssignMode(false)
-        setRecordDialogOpen(true)
-        toast.warning('Complete the first entry details first')
-      } else {
-        toast.error('This row needs a full setup first')
-      }
+    // A row still missing its customer, destination or rate opens Row Setup —
+    // prefilled with this very row — instead of the blank Record Payment
+    // dialog it used to open, which named no truck and left the fix nowhere
+    // to be made.
+    const missing = [
+      !targetGroup.customerId && 'a customer',
+      !targetGroup.location && 'a destination',
+      !targetGroup.expected && !targetGroup.isFillingStation && 'a rate',
+    ].filter(Boolean) as string[]
+    if (missing.length > 0) {
+      toast.warning(`This row still needs ${missing.join(' and ')} — fill it in here first.`)
+      openSetup()
       return
     }
     setQuickPaymentTarget(targetGroup)
@@ -524,7 +525,7 @@ export function SalesLedgerDetails() {
                                   <Button size="sm" variant="outline" className="h-7 text-xs px-2 gap-1 border-border" title="Edit entry" onClick={() => openEdit(payment)}>
                                     <Pencil className="size-3" /> Edit
                                   </Button>
-                                  <Button size="sm" variant="outline" className="h-7 text-xs px-2 gap-1 border-destructive/30 text-destructive hover:bg-destructive/10" title="Delete entry" onClick={() => { setDeleteTarget({ ids: [payment._id || payment.id || ''], mode: 'entry', label: `${targetGroup.truckNumber} — ${fmt(toNum(payment.paymentAmount))}` }); setDeleteOpen(true) }}>
+                                  <Button size="sm" variant="outline" className="h-7 text-xs px-2 gap-1 border-destructive/30 text-destructive hover:bg-destructive/10" title="Delete entry" onClick={() => { setDeleteTarget({ ids: [entityId(payment)], mode: 'entry', label: `${targetGroup.truckNumber} — ${fmt(toNum(payment.paymentAmount))}` }); setDeleteOpen(true) }}>
                                     <Trash2 className="size-3" />
                                   </Button>
                                 </div>
@@ -660,24 +661,10 @@ export function SalesLedgerDetails() {
       </div>
 
       {/* ═══ DIALOGS ═══ */}
-      <RecordPaymentDialog
-        open={recordDialogOpen}
-        onOpenChange={setRecordDialogOpen}
-        trucks={loadedTrucks}
-        customers={customers}
-        customerMap={customerMap}
-        tripCodes={tripCodes}
-        cycleCustomerRateMap={cycleCustomerRateMap}
-        getCycleKey={getCycleKey}
-        normalizeCycleDate={normalizeCycleDate}
-        assignMode={assignMode}
-      />
-
       <QuickPaymentDialog
         open={quickPaymentOpen}
         onOpenChange={setQuickPaymentOpen}
         target={quickPaymentTarget}
-        customerMap={customerMap}
       />
 
       <RowSetupDialog
@@ -694,9 +681,6 @@ export function SalesLedgerDetails() {
         onOpenChange={setEditOpen}
         target={editTarget}
         tripCodes={tripCodes}
-        allSales={allSales}
-        getCycleKey={getCycleKey}
-        customerMap={customerMap}
       />
 
       <DeleteConfirmDialog

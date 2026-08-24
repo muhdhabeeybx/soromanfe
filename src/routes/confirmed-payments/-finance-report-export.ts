@@ -108,12 +108,12 @@ const COLUMNS: Array<{
   { header: 'Rate', key: 'rate', width: 14, fmt: NGN, scope: 'order' },
   { header: 'Sales Value', key: 'salesValue', width: 16, fmt: NGN, scope: 'order' },
   { header: 'Deposit Date', key: 'depositDate', width: 13, scope: 'funding' },
-  { header: 'Depositor / Payer', key: 'depositor', width: 22, scope: 'funding' },
-  { header: 'Deposit Reference', key: 'depositRef', width: 20, scope: 'funding' },
+  { header: 'Depositor', key: 'depositor', width: 22, scope: 'funding' },
+  { header: 'Payment Reference', key: 'depositRef', width: 20, scope: 'funding' },
   { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
-  { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
+  // { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
 
 /** The columns, in order, with whether each is filled on an order row or a funding sub-row. */

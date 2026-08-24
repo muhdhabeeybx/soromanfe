@@ -28,6 +28,29 @@ export const stripCommas = (v: string): string => v.replace(/,/g, '')
 export const normalizeText = (v: string | undefined | null): string =>
   (v || '').trim().toLowerCase()
 
+/**
+ * An id as a string, always.
+ *
+ * Every id in this system is a Postgres serial — a number — and the axios
+ * layer mirrors it onto `_id` unchanged, so `_id` is a number too however
+ * much the types here claim otherwise. A `<select>` hands its value back as
+ * a string, and `42 === "42"` is false: that one comparison decided whether
+ * picking a truck found its loading and whether a customer id found its
+ * customer, and both said no. Selecting a truck cleared the form instead of
+ * filling it, so the customer rows — gated on a truck being chosen — never
+ * appeared and no payment could be entered at all.
+ *
+ * Every id that is compared against another, or used as a map key, goes
+ * through here first.
+ */
+export const idKey = (v: string | number | null | undefined): string =>
+  v === null || v === undefined ? '' : String(v)
+
+/** The id of a record, from whichever of the two spellings carries it. */
+export const entityId = (
+  e: { _id?: string | number | null; id?: string | number | null } | null | undefined,
+): string => idKey(e?._id ?? e?.id)
+
 export const isFillingStation = (c: DeliveryCustomer | undefined | null): boolean =>
   c?.customerType === 'filling_station'
 

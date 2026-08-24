@@ -15,7 +15,7 @@ import { useLedgerGroups } from '#/lib/hooks/useLedgerGroups'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliveryInventory, DeliveryCustomer, DeliverySale } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, formatWithCommas, stripCommas, isFillingStation, safeFormatDate, normalizeCycleDate, normalizePlate } from '#/lib/sales-ledger-utils'
+import { toNum, formatWithCommas, stripCommas, isFillingStation, safeFormatDate, normalizeCycleDate, normalizePlate, idKey, entityId } from '#/lib/sales-ledger-utils'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/sales-ledger/assign-customer')({
@@ -99,15 +99,15 @@ function AssignCustomerPage() {
 
   const pfiMap = useMemo(() => {
     const m = new Map<string, Pfi>()
-    pfis.forEach(p => m.set(p._id, p))
+    pfis.forEach(p => m.set(idKey(p._id), p))
     return m
   }, [pfis])
 
   const customerMap = useMemo(() => {
     const m = new Map<string, DeliveryCustomer>()
     customers.forEach(c => {
-      if (c._id != null) m.set(String(c._id), c)
-      if (c.id != null) m.set(String(c.id), c)
+      if (c._id != null) m.set(idKey(c._id), c)
+      if (c.id != null) m.set(idKey(c.id), c)
     })
     return m
   }, [customers])
@@ -129,7 +129,7 @@ function AssignCustomerPage() {
 
   const selectedLoading = useMemo(() => {
     if (searchParams.loadingId) {
-      const found = allLoadings.find(l => String(l._id || l.id) === String(searchParams.loadingId))
+      const found = allLoadings.find(l => entityId(l) === idKey(searchParams.loadingId))
       if (found) return found
     }
     if (searchParams.truckNumber) {
@@ -155,9 +155,9 @@ function AssignCustomerPage() {
     const { loadingId, truckNumber: paramTruck, dateLoaded: paramDate, code: paramCode } = searchParams
 
     if (loadingId || selectedLoading) {
-      const targetId = String(loadingId || selectedLoading?._id || selectedLoading?.id || '')
+      const targetId = idKey(loadingId) || entityId(selectedLoading)
       if (targetId) {
-        const matches = ledgerGroups.filter(g => String(g.loadingId || '') === targetId)
+        const matches = ledgerGroups.filter(g => idKey(g.loadingId) === targetId)
         if (matches.length > 0) return matches
       }
     }
@@ -189,9 +189,9 @@ function AssignCustomerPage() {
 
     targetCycleGroups.forEach(g => {
       const name = g.customerName || ''
-      const rawCid = g.customerId ? String(g.customerId) : ''
+      const rawCid = idKey(g.customerId)
       const customerObj = (rawCid ? customerMap.get(rawCid) : null) || (name ? customerByNameMap.get(name.trim().toLowerCase()) : null)
-      const resolvedCid = rawCid || (customerObj ? String(customerObj._id || customerObj.id || '') : '')
+      const resolvedCid = rawCid || entityId(customerObj)
 
       if (!name && !resolvedCid) return
 
@@ -281,8 +281,11 @@ function AssignCustomerPage() {
   const availableCustomers = useMemo(() => {
     // Also exclude customers already selected in other form rows
     const selectedInForm = new Set(saleRows.filter(r => r.customer).map(r => r.customer))
+    // entityId, not the raw id: the assigned set holds strings, so a number
+    // key matched nothing there and a customer already on this cycle was
+    // offered again as if free.
     return customers.filter(c => {
-      const id = c._id || c.id || ''
+      const id = entityId(c)
       return !assignedCustomerIds.has(id) || selectedInForm.has(id)
     })
   }, [customers, assignedCustomerIds, saleRows])
@@ -351,7 +354,7 @@ function AssignCustomerPage() {
 
       await Promise.all(promises)
 
-      const loadingId = searchParams.loadingId || (selectedLoading ? String(selectedLoading._id || selectedLoading.id) : '')
+      const loadingId = idKey(searchParams.loadingId) || entityId(selectedLoading)
       if (loadingId) {
         try {
           const firstRow = filledRows[0]
@@ -667,7 +670,7 @@ function AssignCustomerPage() {
                     >
                       <option value="">Select customer...</option>
                       {availableCustomers.map(c => {
-                        const cid = c._id || c.id || ''
+                        const cid = entityId(c)
                         const isAssigned = assignedCustomerIds.has(cid)
                         return (
                           <option key={cid} value={cid}>

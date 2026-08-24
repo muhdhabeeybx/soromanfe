@@ -15,7 +15,7 @@ import { useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale } f
 import { useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
-import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation } from '#/lib/sales-ledger-utils'
+import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation, idKey, entityId } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, bankAccountToString } from '#/lib/bank-accounts'
 
 // Bank accounts come from the managed table via #/lib/bank-accounts — they
@@ -120,7 +120,10 @@ export function RecordPaymentDialog({
 
   const handleTruckSelect = useCallback((loadingId: string) => {
     setTruckLoadingId(loadingId)
-    const loading = trucks.find(t => (t._id || t.id) === loadingId)
+    setRowErrors({})
+    // idKey on both sides: the option's value arrives as a string, the
+    // loading's id is a number. See idKey in sales-ledger-utils.
+    const loading = trucks.find(t => entityId(t) === loadingId)
     if (!loading) {
       setTruckNumber(''); setDateLoaded(''); setDepot(''); setSaleRows([makeSaleRow()])
       return
@@ -130,7 +133,7 @@ export function RecordPaymentDialog({
     setDateLoaded(loading.dateAllocated || '')
     setDepot(dep)
 
-    const custId = loading.customerId != null ? String(loading.customerId) : ''
+    const custId = idKey(loading.customerId)
     const custObj = custId ? customerMap.get(custId) : null
     const custName = loading.customerName || custObj?.name || ''
     const destination = isFillingStation(custObj) ? custName : (loading.location || '')
@@ -182,6 +185,10 @@ export function RecordPaymentDialog({
         const cycleRates = cycleCustomerRateMap.get(cycleKey)
         const priorRate = value ? cycleRates?.get(value) : undefined
         const selectedCustomer = value ? customerMap.get(value) : null
+        // The name travels with the id rather than in a second update call:
+        // clearing the customer back to "none" has to clear the name too,
+        // otherwise the row saves under whoever was picked before.
+        updated.customer_name = selectedCustomer?.name || ''
         if (priorRate && !isFillingStation(selectedCustomer)) {
           updated.rate = priorRate
           updated.rateLocked = true
@@ -208,7 +215,23 @@ export function RecordPaymentDialog({
   }, [rowErrors, truckNumber, dateLoaded, getCycleKey, cycleCustomerRateMap, customerMap])
 
   const addSaleRow = () => setSaleRows(prev => [...prev, makeSaleRow()])
-  const removeSaleRow = (uid: string) => setSaleRows(prev => prev.length > 1 ? prev.filter(r => r.uid !== uid) : prev)
+  const removeSaleRow = (uid: string) => setSaleRows(prev => {
+    if (prev.length <= 1) return prev
+    setRowErrors(errs => { const next = { ...errs }; delete next[uid]; return next })
+    return prev.filter(r => r.uid !== uid)
+  })
+
+  // Closing keeps nothing. Reopening used to show the truck, rows and
+  // validation errors from the entry before, so the next payment was keyed
+  // on top of stale figures. Every close goes through here — the footer, the
+  // overlay, Escape, and the save below — so there is no path that skips it.
+  const closeDialog = useCallback((next: boolean) => {
+    if (!next) {
+      setTruckLoadingId(''); setTruckNumber(''); setDateLoaded(''); setDepot('')
+      setDialogTripCode(''); setSaleRows([makeSaleRow()]); setRowErrors({})
+    }
+    onOpenChange(next)
+  }, [onOpenChange])
 
   const handleSave = useCallback(async () => {
     if (!truckNumber.trim()) { toast.error('Please select a truck'); return }
@@ -234,7 +257,7 @@ export function RecordPaymentDialog({
 
     try {
       const currentUser = localStorage.getItem('fullname') || 'Unknown'
-      const selectedLoading = truckLoadingId ? trucks.find(l => (l._id || l.id) === truckLoadingId) : undefined
+      const selectedLoading = truckLoadingId ? trucks.find(l => entityId(l) === truckLoadingId) : undefined
       const dialogAllocationCode = selectedLoading?.allocationCode || undefined
 
       const promises = filledRows.map(row => {
@@ -279,16 +302,16 @@ export function RecordPaymentDialog({
       toast.success(assignMode
         ? `${filledRows.length} customer${filledRows.length > 1 ? 's' : ''} assigned`
         : `${filledRows.length} entr${filledRows.length > 1 ? 'ies' : 'y'} recorded`)
-      onOpenChange(false)
+      closeDialog(false)
     } catch (err: any) {
       toast.error(err?.message || 'Failed to save')
     } finally {
       setSaving(false)
     }
-  }, [truckNumber, dateLoaded, depot, truckLoadingId, dialogTripCode, saleRows, customerMap, assignMode, trucks, createSale, updateInventory, toast, onOpenChange])
+  }, [truckNumber, dateLoaded, depot, truckLoadingId, dialogTripCode, saleRows, customerMap, assignMode, trucks, createSale, updateInventory, toast, closeDialog])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent className="sm:max-w-[900px] max-h-[90svh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
@@ -324,7 +347,7 @@ export function RecordPaymentDialog({
             >
               <option value="">Select a truck…</option>
               {trucks.map(t => {
-                const id = t._id || t.id || ''
+                const id = entityId(t)
                 const plate = t.truckNumber || `Truck #${t.truckId}`
                 const custName = t.customerName || ''
                 const qty = toNum(t.quantityAllocated)
@@ -415,18 +438,14 @@ export function RecordPaymentDialog({
                         <select
                           aria-label={`Customer for row ${idx + 1}`}
                           value={row.customer}
-                          onChange={e => {
-                            const custId = e.target.value
-                            const cust = custId ? customerMap.get(custId) : null
-                            updateSaleRow(row.uid, 'customer', custId)
-                            if (cust) updateSaleRow(row.uid, 'customer_name', cust.name)
-                          }}
+                          onChange={e => updateSaleRow(row.uid, 'customer', e.target.value)}
                           className={`h-9 w-full rounded-md border bg-background px-3 py-2 text-sm ${rowErrors[row.uid]?.customer ? 'border-destructive bg-destructive/10' : 'border-input'}`}
                         >
                           <option value="">Select customer…</option>
-                          {customers.map(c => (
-                            <option key={c._id || c.id} value={c._id || c.id || ''}>{c.name}</option>
-                          ))}
+                          {customers.map(c => {
+                            const cid = entityId(c)
+                            return <option key={cid} value={cid}>{c.name}</option>
+                          })}
                         </select>
                         {rowErrors[row.uid]?.customer && <p className="text-xs text-destructive">{rowErrors[row.uid].customer}</p>}
                       </div>
@@ -501,7 +520,7 @@ export function RecordPaymentDialog({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+          <Button variant="outline" onClick={() => closeDialog(false)} disabled={saving}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving} className="gap-2">
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
             {saving ? 'Saving…' : `Record ${saleRows.filter(r => r.customer).length || ''} Payment${saleRows.filter(r => r.customer).length !== 1 ? 's' : ''}`}
@@ -520,10 +539,9 @@ interface QuickPaymentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   target: LedgerGroup | null
-  customerMap?: Map<string, DeliveryCustomer>
 }
 
-export function QuickPaymentDialog({ open, onOpenChange, target, customerMap: _customerMap }: QuickPaymentDialogProps) {
+export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentDialogProps) {
   const toast = useToast()
   const createSale = useCreateDeliverySale()
   const [saving, setSaving] = useState(false)
@@ -533,6 +551,13 @@ export function QuickPaymentDialog({ open, onOpenChange, target, customerMap: _c
     phone_number: '',
     date_of_payment: format(new Date(), 'yyyy-MM-dd'),
   })
+
+  // Closing clears the form. Otherwise the next row this dialog opens on
+  // arrives with the previous row's amount and payer already typed in.
+  const closeDialog = useCallback((next: boolean) => {
+    if (!next) setForm({ payment_amount: '', payer_name: '', phone_number: '', date_of_payment: format(new Date(), 'yyyy-MM-dd') })
+    onOpenChange(next)
+  }, [onOpenChange])
 
   const handleSave = useCallback(async () => {
     if (!target) return
@@ -563,20 +588,19 @@ export function QuickPaymentDialog({ open, onOpenChange, target, customerMap: _c
         paymentMethod: 'manual',
       } as Partial<DeliverySale>)
       toast.success(`${target.truckNumber} · ${fmt(paymentAmount)}`)
-      onOpenChange(false)
-      setForm({ payment_amount: '', payer_name: '', phone_number: '', date_of_payment: format(new Date(), 'yyyy-MM-dd') })
+      closeDialog(false)
     } catch (err: any) {
       toast.error(err?.message || 'Failed to record payment')
     } finally {
       setSaving(false)
     }
-  }, [target, form, createSale, toast, onOpenChange])
+  }, [target, form, createSale, toast, closeDialog])
 
   const amountTyped = Number(stripCommas(form.payment_amount)) || 0
   const remainingBalance = target ? target.balance - amountTyped : 0
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
@@ -650,7 +674,7 @@ export function QuickPaymentDialog({ open, onOpenChange, target, customerMap: _c
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+          <Button variant="outline" onClick={() => closeDialog(false)} disabled={saving}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving} className="gap-2">
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
             {saving ? 'Saving…' : 'Save Payment'}
@@ -721,7 +745,7 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
         if (target.payments.length > 0) {
           await Promise.all(target.payments.map(p =>
             updateSale.mutateAsync({
-              id: p._id || p.id || '',
+              id: entityId(p),
               data: {
                 customerId: customerId || undefined,
                 location: setupDestination.trim() || undefined,
@@ -736,7 +760,7 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
       } else if (target.payments.length > 0) {
         await Promise.all(target.payments.map(p =>
           updateSale.mutateAsync({
-            id: p._id || p.id || '',
+            id: entityId(p),
             data: {
               customerId: customerId || undefined,
               location: setupDestination.trim() || undefined,
@@ -782,9 +806,10 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
               <Label>Customer</Label>
               <select aria-label="Setup customer" value={setupCustomer} onChange={e => setSetupCustomer(e.target.value)} className="h-8 w-full rounded-lg border border-input bg-background px-2.5 py-1 text-base md:text-sm">
                 <option value="">Select customer…</option>
-                {customers.map(c => (
-                  <option key={c._id || c.id} value={c._id || c.id || ''}>{c.name}</option>
-                ))}
+                {customers.map(c => {
+                  const cid = entityId(c)
+                  return <option key={cid} value={cid}>{c.name}</option>
+                })}
               </select>
             </div>
             <div className="space-y-1">
@@ -848,12 +873,9 @@ interface EditEntryDialogProps {
   onOpenChange: (open: boolean) => void
   target: DeliverySale | null
   tripCodes: string[]
-  allSales: DeliverySale[]
-  getCycleKey: (truck: string, date: string | null | undefined) => string
-  customerMap?: Map<string, DeliveryCustomer>
 }
 
-export function EditEntryDialog({ open, onOpenChange, target, tripCodes, customerMap }: EditEntryDialogProps) {
+export function EditEntryDialog({ open, onOpenChange, target, tripCodes }: EditEntryDialogProps) {
   const toast = useToast()
   const updateSale = useUpdateDeliverySale()
   const { options: bankOptions } = useBankAccountPicker()
@@ -908,7 +930,7 @@ export function EditEntryDialog({ open, onOpenChange, target, tripCodes, custome
       const computedSv = qty && rate && !sv ? qty * rate : sv
 
       await updateSale.mutateAsync({
-        id: String(target._id ?? target.id ?? ''),
+        id: entityId(target),
         data: {
           quantity: qty,
           rate: rate,
@@ -932,7 +954,7 @@ export function EditEntryDialog({ open, onOpenChange, target, tripCodes, custome
     } finally {
       setSaving(false)
     }
-  }, [target, form, editTripCode, updateSale, toast, onOpenChange, customerMap])
+  }, [target, form, editTripCode, updateSale, toast, onOpenChange])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

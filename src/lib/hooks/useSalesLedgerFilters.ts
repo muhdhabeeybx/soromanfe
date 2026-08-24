@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { parseISO } from 'date-fns'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { matchesDateRange, getPresetRange, type TimePreset, isFillingStation } from '#/lib/sales-ledger-utils'
+import { matchesDateRange, getPresetRange, type TimePreset, isFillingStation, idKey, entityId } from '#/lib/sales-ledger-utils'
 
 interface UseSalesLedgerFiltersParams {
   ledgerGroups: LedgerGroup[]
@@ -62,7 +62,7 @@ export function useSalesLedgerFilters({
     if (truckFilter !== 'all') result = result.filter(g => g.truckNumber === truckFilter)
     if (customerFilter !== 'all') {
       const selectedCustName = customerMap.get(customerFilter)?.name
-      result = result.filter(g => (g.customerId || '') === customerFilter || (selectedCustName && g.customerName === selectedCustName))
+      result = result.filter(g => idKey(g.customerId) === customerFilter || (selectedCustName && g.customerName === selectedCustName))
     }
     if (tripCodeFilter !== 'all') result = result.filter(g => g.code === tripCodeFilter)
     if (customerTypeFilter !== 'all') {
@@ -98,12 +98,11 @@ export function useSalesLedgerFilters({
       return matchesDateRange(dateField, dateRange.from, dateRange.to)
     })
     if (truckFilter !== 'all') result = result.filter(s => s.truckNumber === truckFilter)
-    if (customerFilter !== 'all') result = result.filter(s => String(s.customerId) === customerFilter)
-    if (tripCodeFilter !== 'all') result = result.filter(s => (s.allocationCode || saleTripMap[s._id || s.id || ''] || '') === tripCodeFilter)
+    if (customerFilter !== 'all') result = result.filter(s => idKey(s.customerId) === customerFilter)
+    if (tripCodeFilter !== 'all') result = result.filter(s => (s.allocationCode || saleTripMap[entityId(s)] || '') === tripCodeFilter)
     if (customerTypeFilter !== 'all') {
       result = result.filter(s => {
-        const custObj = s.customerId ? customerMap.get(String(s.customerId)) : null
-        const isFS = isFillingStation(custObj)
+        const isFS = isFillingStation(customerMap.get(idKey(s.customerId)))
         return customerTypeFilter === 'filling_station' ? isFS : !isFS
       })
     }
@@ -111,7 +110,7 @@ export function useSalesLedgerFilters({
     if (q) {
       result = result.filter(s =>
         (s.truckNumber || '').toLowerCase().includes(q)
-        || (s.customerName || (s.customerId ? customerMap.get(String(s.customerId))?.name : '') || '').toLowerCase().includes(q)
+        || (s.customerName || customerMap.get(idKey(s.customerId))?.name || '').toLowerCase().includes(q)
         || (s.payerName || '').toLowerCase().includes(q)
         || (s.location || '').toLowerCase().includes(q)
       )
@@ -130,19 +129,23 @@ export function useSalesLedgerFilters({
   const uniqueCustomerOptions = useMemo(() => {
     const map = new Map<string, string>()
     ledgerGroups.forEach(g => {
-      if (g.customerId && g.customerName) map.set(g.customerId, g.customerName)
+      if (g.customerId && g.customerName) map.set(idKey(g.customerId), g.customerName)
     })
     allSales.forEach(s => {
-      const name = s.customerName || (s.customerId ? customerMap.get(String(s.customerId))?.name : '') || ''
-      if (s.customerId && name) map.set(String(s.customerId), name)
-    })
-    allLoadings.forEach(l => {
-      const cid = l.customerId ? String(l.customerId) : ''
-      const name = l.customerName || (cid ? customerMap.get(cid)?.name : '') || ''
+      const cid = idKey(s.customerId)
+      const name = s.customerName || customerMap.get(cid)?.name || ''
       if (cid && name) map.set(cid, name)
     })
+    allLoadings.forEach(l => {
+      const cid = idKey(l.customerId)
+      const name = l.customerName || customerMap.get(cid)?.name || ''
+      if (cid && name) map.set(cid, name)
+    })
+    // entityId, not the raw id: a number key never collided with the string
+    // keys set above, so every customer already named by a ledger row was
+    // listed a second time and the duplicate matched no rows when picked.
     customers.forEach(c => {
-      const id = c._id || c.id || ''
+      const id = entityId(c)
       if (id && c.name && !map.has(id)) map.set(id, c.name)
     })
     return Array.from(map.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))

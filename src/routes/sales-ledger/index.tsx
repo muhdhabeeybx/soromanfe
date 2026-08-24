@@ -32,7 +32,7 @@ import {
 } from '#/components/sales-ledger/SalesLedgerDialogs'
 import {
   toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate,
-  getCodeTheme, type TimePreset,
+  getCodeTheme, idKey, type TimePreset,
 } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, formatBankLabel } from '#/lib/bank-accounts'
 import { routeGuard } from '#/lib/route-guard'
@@ -77,15 +77,23 @@ function SalesLedgerDashboard() {
   }, [rawPfis])
 
   // ── Lookup Maps ────────────────────────────────────────────────────
+  // Keyed by string under both spellings of the id. The ids are numbers at
+  // runtime, so a map built on the raw value answered nothing when looked up
+  // with the string a <select> or a search param carries — every customer
+  // read as unresolved, and with it every filling station read as a normal
+  // customer. See idKey in sales-ledger-utils.
   const customerMap = useMemo(() => {
     const m = new Map<string, DeliveryCustomer>()
-    customers.forEach(c => m.set(c._id || c.id || '', c))
+    customers.forEach(c => {
+      if (c._id != null) m.set(idKey(c._id), c)
+      if (c.id != null) m.set(idKey(c.id), c)
+    })
     return m
   }, [customers])
 
   const pfiMap = useMemo(() => {
     const m = new Map<string, Pfi>()
-    pfis.forEach(p => m.set(p._id, p))
+    pfis.forEach(p => m.set(idKey(p._id), p))
     return m
   }, [pfis])
 
@@ -331,36 +339,21 @@ function SalesLedgerDashboard() {
   }, [totals])
 
   // ── Loaded trucks for dialog ───────────────────────────────────────
-  const cyclePaymentSummary = useMemo(() => {
-    const map = new Map<string, { totalExpected: number; totalPaid: number }>()
-    allSales.forEach(s => {
-      const key = getCycleKey(s.truckNumber, s.dateLoaded)
-      const existing = map.get(key) || { totalExpected: 0, totalPaid: 0 }
-      existing.totalPaid += toNum(s.paymentAmount)
-      map.set(key, existing)
-    })
-    return map
-  }, [allSales])
-
+  //
+  // Every allocation, settled or not. This used to hide an offloaded truck
+  // whose cycle was fully paid, but the summary it consulted only ever
+  // accumulated payments and left expected at zero, so the test never fired
+  // and no truck was ever hidden. Correcting the figure would have started
+  // hiding trucks instead — and a payment keyed against a settled cycle is a
+  // correction someone still has to be able to make.
   const loadedTrucks = useMemo(() => {
-    return allLoadings.filter(t => {
-      if (!(t.truckNumber || (t as any).truckId || (t as any).truck)) return false
-      if (t.loadingStatus === 'offloaded') {
-        const cycleKey = getCycleKey(t.truckNumber || '', t.dateAllocated || '')
-        const cycle = cyclePaymentSummary.get(cycleKey)
-        if (cycle) {
-          const outstanding = cycle.totalExpected - cycle.totalPaid
-          if (outstanding <= 0 && cycle.totalExpected > 0) return false
-        }
-      }
-      return true
-    }).sort((a, b) => {
+    return allLoadings.filter(t => !!(t.truckNumber || t.truckId)).sort((a, b) => {
       const truckA = (a.truckNumber || '').toUpperCase()
       const truckB = (b.truckNumber || '').toUpperCase()
       if (truckA !== truckB) return truckA.localeCompare(truckB)
       return normalizeCycleDate(b.dateAllocated || '').localeCompare(normalizeCycleDate(a.dateAllocated || ''))
     })
-  }, [allLoadings, cyclePaymentSummary])
+  }, [allLoadings])
 
   // ── Trip Code Management ───────────────────────────────────────────
   const addTripCode = () => {
@@ -389,7 +382,7 @@ function SalesLedgerDashboard() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [assignMode, setAssignMode] = useState(false)
 
-  const openPaymentDialog = (_loadingId?: string, inAssignMode = false) => {
+  const openPaymentDialog = (inAssignMode = false) => {
     setAssignMode(inAssignMode)
     setDialogOpen(true)
   }
@@ -1029,7 +1022,7 @@ function SalesLedgerDashboard() {
                   </TableHeader>
                   <TableBody>
                     {paginatedSales.map((sale, idx) => {
-                      const customerName = sale.customerName || customerMap.get(String(sale.customerId))?.name || '—'
+                      const customerName = sale.customerName || customerMap.get(idKey(sale.customerId))?.name || '—'
                       const datePaid = sale.dateOfPayment || sale.dateLoaded
                       const serial = pageOffset + idx + 1
                       return (
@@ -1041,7 +1034,7 @@ function SalesLedgerDashboard() {
                             search: {
                               truckNumber: sale.truckNumber,
                               dateLoaded: sale.dateLoaded || '',
-                              customerId: String(sale.customerId || ''),
+                              customerId: idKey(sale.customerId),
                               code: sale.allocationCode || '',
                             },
                           })}

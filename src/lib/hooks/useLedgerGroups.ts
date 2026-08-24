@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from 'react'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
-import { toNum, isFillingStation, getCycleKey, normalizeText, normalizePlate } from '#/lib/sales-ledger-utils'
+import { toNum, isFillingStation, getCycleKey, normalizeText, normalizePlate, idKey, entityId } from '#/lib/sales-ledger-utils'
 
 interface UseLedgerGroupsParams {
   allSales: DeliverySale[]
@@ -15,7 +15,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
     const direct = String(loading.pfiNumber || '').trim()
     if (direct) return direct
     if (loading.pfiId) {
-      const pfi = pfiMap.get(String(loading.pfiId))
+      const pfi = pfiMap.get(idKey(loading.pfiId))
       return pfi?.pfiNumber || ''
     }
     return ''
@@ -41,8 +41,8 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
     const sortPayments = (payments: DeliverySale[]) => [...payments].sort((a, b) => {
       const dateA = String(a.dateOfPayment || a.createdAt || a.dateLoaded || '')
       const dateB = String(b.dateOfPayment || b.createdAt || b.dateLoaded || '')
-      const idA = String(a._id ?? a.id ?? '')
-      const idB = String(b._id ?? b.id ?? '')
+      const idA = entityId(a)
+      const idB = entityId(b)
       return dateA.localeCompare(dateB) || idA.localeCompare(idB)
     })
 
@@ -53,26 +53,26 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
     ]
 
     sortedLoadings.forEach(loading => {
-      const loadingId = loading._id || loading.id || ''
+      const loadingId = entityId(loading)
       const cycleKey = getCycleKey(loading.truckNumber || '', loading.dateAllocated || '')
       const cycleSales = salesByCycle.get(cycleKey) || []
-      let payments = cycleSales.filter(s => { const sid = String(s._id ?? s.id ?? ''); return !matchedSaleIds.has(sid) })
+      let payments = cycleSales.filter(s => !matchedSaleIds.has(entityId(s)))
 
       if (payments.length === 0 && !loading.dateAllocated) {
         const truckKey = normalizePlate(loading.truckNumber)
         const truckSales = salesByTruck.get(truckKey) || []
-        payments = truckSales.filter(s => { const sid = String(s._id ?? s.id ?? ''); return !matchedSaleIds.has(sid) })
+        payments = truckSales.filter(s => !matchedSaleIds.has(entityId(s)))
       }
 
       payments = sortPayments(payments)
-      payments.forEach(p => { const sid = String(p._id ?? p.id ?? ''); matchedSaleIds.add(sid) })
+      payments.forEach(p => matchedSaleIds.add(entityId(p)))
 
       const pfiNumber = getPfiNumber(loading)
       const allocationCode = loading.allocationCode || payments.map(s => s.allocationCode).find(Boolean) || ''
 
       const byCustomer = new Map<string | null, DeliverySale[]>()
       payments.forEach(sale => {
-        const cid = sale.customerId ? String(sale.customerId) : null
+        const cid = idKey(sale.customerId) || null
         const arr = byCustomer.get(cid) ?? []
         arr.push(sale)
         byCustomer.set(cid, arr)
@@ -118,7 +118,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
         })
       } else {
         const firstPayment = payments[0]
-        const customerId = loading.customerId ? String(loading.customerId) : firstPayment?.customerId ? String(firstPayment.customerId) : null
+        const customerId = idKey(loading.customerId) || idKey(firstPayment?.customerId) || null
         const customerObj = customerId ? customerMap.get(customerId) : null
         const salesExpected = payments.reduce((mx, s) => Math.max(mx, toNum(s.salesValue)), 0)
         const salesRate = payments.reduce((mx, s) => Math.max(mx, toNum(s.rate)), 0)
@@ -146,9 +146,8 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
     // Unmatched sales
     const unmatchedGroups = new Map<string, DeliverySale[]>()
     allSales.forEach(sale => {
-      const sid = String(sale._id ?? sale.id ?? '')
-      if (matchedSaleIds.has(sid)) return
-      const key = [getCycleKey(sale.truckNumber, sale.dateLoaded), sale.customerId ? String(sale.customerId) : '', normalizeText(sale.location)].join('::')
+      if (matchedSaleIds.has(entityId(sale))) return
+      const key = [getCycleKey(sale.truckNumber, sale.dateLoaded), idKey(sale.customerId), normalizeText(sale.location)].join('::')
       const existing = unmatchedGroups.get(key) ?? []
       existing.push(sale)
       unmatchedGroups.set(key, existing)
@@ -157,18 +156,22 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
     unmatchedGroups.forEach((payments, key) => {
       const sorted = sortPayments(payments)
       const firstPayment = sorted[0]
-      const customerObj = firstPayment.customerId ? customerMap.get(String(firstPayment.customerId)) : null
+      const customerObj = customerMap.get(idKey(firstPayment.customerId))
       const expected = sorted.reduce((mx, s) => Math.max(mx, toNum(s.salesValue)), 0)
       const totalPaid = sorted.reduce((sum, s) => sum + toNum(s.paymentAmount), 0)
       const allocationCode = firstPayment.allocationCode || sorted.map(s => s.allocationCode).find(Boolean) || ''
-      const quantity = sorted.reduce((sum, s) => sum + toNum(s.quantity), 0)
+      // The largest quantity on the group, not their sum. These sales are all
+      // the same cycle, customer and destination — every follow-up payment
+      // carries the load's quantity again, so adding them up reported a
+      // 33,000 L truck as 99,000 L once it had been paid in three parts.
+      const quantity = sorted.reduce((mx, s) => Math.max(mx, toNum(s.quantity)), 0)
       groups.push({
         key: `sale:${key}`,
         truckNumber: firstPayment.truckNumber,
         dateLoaded: firstPayment.dateLoaded || '',
         depot: firstPayment.depotLoaded || '',
         location: isFillingStation(customerObj) ? (customerObj?.name || '') : (firstPayment.location || ''),
-        customerId: firstPayment.customerId ? String(firstPayment.customerId) : null,
+        customerId: idKey(firstPayment.customerId) || null,
         customerName: firstPayment.customerName || customerObj?.name || '',
         quantity, rate: sorted.reduce((mx, s) => Math.max(mx, toNum(s.rate)), 0),
         expected, totalPaid, balance: expected - totalPaid,
@@ -189,7 +192,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
       const cycleKey = getCycleKey(s.truckNumber, s.dateLoaded)
       if (!map.has(cycleKey)) map.set(cycleKey, new Map())
       const inner = map.get(cycleKey)!
-      const cid = String(s.customerId)
+      const cid = idKey(s.customerId)
       if (!inner.has(cid)) inner.set(cid, String(r))
     })
     return map
