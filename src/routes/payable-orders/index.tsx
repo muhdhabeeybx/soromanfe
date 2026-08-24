@@ -26,6 +26,21 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', minimumFractionDigits: 0 }).format(value)
 }
 
+/**
+ * A unit price, always to the kobo.
+ *
+ * formatCurrency rounds to whole naira, which is right for a ₦60m total and
+ * wrong for the rate behind it: a price of ₦1,210.50 would read ₦1,210.5, and
+ * against 50,000 litres that missing half-kobo is ₦25,000 of the total it is
+ * supposed to explain.
+ */
+function formatRate(value: number) {
+  return new Intl.NumberFormat('en-NG', {
+    style: 'currency', currency: 'NGN',
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(value)
+}
+
 function PendingOrdersPage() {
   const navigate = useNavigate()
   const [searchTerm, setSearchTerm] = useState('')
@@ -213,6 +228,9 @@ function PendingOrdersPage() {
                       <TableHead>PFI</TableHead>
                       <TableHead>Product</TableHead>
                       <TableHead>Quantity</TableHead>
+                      {/* Sits between the two figures it reconciles, so the
+                          row reads quantity × unit price = total. */}
+                      <TableHead>Unit Price</TableHead>
                       <TableHead>Total Amount</TableHead>
                       <TableHead>Wallet Balance</TableHead>
                       <TableHead>Shortfall</TableHead>
@@ -226,6 +244,7 @@ function PendingOrdersPage() {
                       const pName = order.productName || 'Unknown'
                       const balance = Number(order.customerBalance) || 0
                       const total = Number(order.totalAmount) || 0
+                      const unitPrice = Number(order.price) || 0
                       const shortfall = shortfallOf(order)
                       return (
                         <TableRow
@@ -264,6 +283,9 @@ function PendingOrdersPage() {
                           </TableCell>
                           <TableCell className="font-normal">
                             {Number(order.quantity)?.toLocaleString()} {order.productUnit || 'Liters'}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap font-normal text-muted-foreground">
+                            {unitPrice > 0 ? formatRate(unitPrice) : '—'}
                           </TableCell>
                           <TableCell className="font-semibold text-foreground">
                             {formatCurrency(total)}
