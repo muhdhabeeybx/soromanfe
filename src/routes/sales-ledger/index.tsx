@@ -13,7 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '#/components/ui/select'
 import {
-  Plus, Search, Download, Truck, Wallet, FileText,
+  Plus, Search, Download, Truck, Wallet, FileText, FileSpreadsheet,
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
   ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal,
@@ -36,6 +36,11 @@ import {
 } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, formatBankLabel } from '#/lib/bank-accounts'
 import { routeGuard } from '#/lib/route-guard'
+import {
+  exportSalesLedgerExcel, exportSalesLedgerPdf,
+  exportDailyPaymentsExcel, exportDailyPaymentsPdf,
+  type SalesLedgerFilters,
+} from './-sales-ledger-export'
 
 export const Route = createFileRoute('/sales-ledger/')({
   beforeLoad: () => routeGuard('/sales-ledger'),
@@ -125,8 +130,13 @@ function SalesLedgerDashboard() {
   })
 
   // ── Pagination ─────────────────────────────────────────────────────
+  //
+  // The whole list, by default. Fifteen rows a page meant the totals in the
+  // footer described one page while the summary cards above described the
+  // filter — two sets of figures on one screen that never agreed. Paging is
+  // still there for anyone who wants it.
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(15)
+  const [pageSize, setPageSize] = useState<number | 'all'>('all')
 
   useEffect(() => {
     setCurrentPage(1)
@@ -135,24 +145,25 @@ function SalesLedgerDashboard() {
     truckFilter, customerFilter, customerTypeFilter, tripCodeFilter,
   ])
 
-  const paginatedLedgerGroups = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredLedgerGroups.slice(start, start + pageSize)
-  }, [filteredLedgerGroups, currentPage, pageSize])
+  const pageOffset = pageSize === 'all' ? 0 : (currentPage - 1) * pageSize
+  const takePage = useCallback(<T,>(list: T[]): T[] => (
+    pageSize === 'all' ? list : list.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  ), [pageSize, currentPage])
 
-  const paginatedSales = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredSales.slice(start, start + pageSize)
-  }, [filteredSales, currentPage, pageSize])
+  const paginatedLedgerGroups = useMemo(
+    () => takePage(filteredLedgerGroups), [filteredLedgerGroups, takePage])
+
+  const paginatedSales = useMemo(
+    () => takePage(filteredSales), [filteredSales, takePage])
 
   const renderPaginationFooter = (
     totalCount: number,
     totalPaidSum: number,
     itemLabel: string
   ) => {
-    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
-    const startItem = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0
-    const endItem = Math.min(currentPage * pageSize, totalCount)
+    const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(totalCount / pageSize))
+    const startItem = totalCount > 0 ? pageOffset + 1 : 0
+    const endItem = pageSize === 'all' ? totalCount : Math.min(currentPage * pageSize, totalCount)
 
     return (
       <div className="border-t border-border bg-muted/50 px-4 py-3 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -160,18 +171,17 @@ function SalesLedgerDashboard() {
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground font-normal">Rows per page:</span>
             <Select
-              value={pageSize.toString()}
+              value={String(pageSize)}
               onValueChange={(val) => {
-                setPageSize(Number(val))
+                setPageSize(val === 'all' ? 'all' : Number(val))
                 setCurrentPage(1)
               }}
             >
               <SelectTrigger className="h-8 w-[72px] bg-background text-xs">
-                <SelectValue placeholder={pageSize.toString()} />
+                <SelectValue placeholder={String(pageSize)} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="10">10</SelectItem>
-                <SelectItem value="15">15</SelectItem>
+                <SelectItem value="all">All</SelectItem>
                 <SelectItem value="25">25</SelectItem>
                 <SelectItem value="50">50</SelectItem>
                 <SelectItem value="100">100</SelectItem>
@@ -384,58 +394,41 @@ function SalesLedgerDashboard() {
     setDialogOpen(true)
   }
 
-  // ── CSV Export ──────────────────────────────────────────────────────
-  const exportExcel = useCallback(() => {
-    if (!filteredLedgerGroups.length) return
-    const u = (s: string) => (s || '').toUpperCase()
-    const safeFmtDate = (d: string | null | undefined): string => safeFormatDate(d, 'dd/MM/yyyy')
-    const headers = ['S/N', 'PFI CODE', 'TRUCK NO.', 'CUSTOMER', 'DESTINATION', 'QTY (LTRS)', 'RATE', 'EXPECTED', 'PAYMENT', 'BALANCE', 'PAYER', 'BANK', 'PAYMENT DATE']
-    const rows: string[][] = []
-    let sn = 0
-    filteredLedgerGroups.forEach(group => {
-      sn += 1
-      if (group.payments.length === 0) {
-        rows.push([String(sn), group.code || '', group.truckNumber || '', u(group.customerName || ''), u(group.location || ''), group.quantity > 0 ? String(group.quantity) : '', group.rate > 0 ? String(group.rate) : '', group.expected > 0 ? String(group.expected) : '', '', group.expected > 0 ? String(group.expected) : '', '', '', ''])
-      } else {
-        let cumulative = 0
-        group.payments.forEach((s, idx) => {
-          cumulative += toNum(s.paymentAmount)
-          const bal = group.expected - cumulative
-          rows.push([
-            idx === 0 ? String(sn) : '', idx === 0 ? (group.code || '') : '', idx === 0 ? group.truckNumber : '', idx === 0 ? u(group.customerName || '') : '', idx === 0 ? u(group.location || '') : '',
-            idx === 0 && group.quantity > 0 ? String(group.quantity) : '', idx === 0 && group.rate > 0 ? String(group.rate) : '', idx === 0 && group.expected > 0 ? String(group.expected) : '',
-            toNum(s.paymentAmount) > 0 ? String(toNum(s.paymentAmount)) : '', group.expected > 0 ? (bal === 0 ? 'FULLY PAID' : bal > 0 ? String(bal) : `+${String(Math.abs(bal))}`) : '',
-            u(s.payerName || ''), u(formatBankLabel(bankAccounts, s.bank)), safeFmtDate(s.dateOfPayment),
-          ])
-        })
-      }
-    })
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = 'DELIVERY-SALES-LEDGER.csv'
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-  }, [filteredLedgerGroups])
+  // ── Exports ─────────────────────────────────────────────────────────
+  //
+  // Both of these were bare CSVs: no separators, no currency, dates as text,
+  // and a ledger row's payments flattened into unlabelled repeats. They are
+  // styled workbooks and PDFs now — see -sales-ledger-export.ts.
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
-  const exportDailyPayments = useCallback(() => {
-    if (!filteredSales.length) return
-    const u = (s: string) => (s || '').toUpperCase()
-    const safeFmtDate = (d: string | null | undefined): string => safeFormatDate(d, 'dd/MM/yyyy')
-    const period = timePreset === 'custom' ? `${customFrom || '?'}_TO_${customTo || '?'}` : timePreset.toUpperCase()
-    const headers = ['S/N', 'DATE PAID', 'TRUCK NO.', 'CUSTOMER', 'DESTINATION', 'VOLUME (L)', 'RATE', 'EXPECTED', 'AMOUNT PAID', 'PAYER', 'BANK', 'PHONE', 'ENTERED BY']
-    const rows = filteredSales.map((s, idx) => [
-      String(idx + 1), safeFmtDate(s.dateOfPayment || s.dateLoaded), u(s.truckNumber),
-      u(s.customerName || customerMap.get(String(s.customerId))?.name || ''), u(s.location || ''),
-      toNum(s.quantity) > 0 ? String(toNum(s.quantity)) : '', toNum(s.rate) > 0 ? String(toNum(s.rate)) : '',
-      toNum(s.salesValue) > 0 ? String(toNum(s.salesValue)) : '', toNum(s.paymentAmount) > 0 ? String(toNum(s.paymentAmount)) : '',
-      u(s.payerName || ''), u(formatBankLabel(bankAccounts, s.bank)), s.phoneNumber || '', u(s.enteredBy || ''),
-    ])
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `DAILY-PAYMENTS-${period}.csv`
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-  }, [filteredSales, customerMap, timePreset, customFrom, customTo])
+  const exportFilters = useMemo((): SalesLedgerFilters => ({
+    periodLabel,
+    search: searchQuery,
+    truck: truckFilter,
+    customer: customerFilter === 'all'
+      ? 'all'
+      : (uniqueCustomerOptions.find(c => c.id === customerFilter)?.name || customerFilter),
+    code: tripCodeFilter,
+  }), [periodLabel, searchQuery, truckFilter, customerFilter, uniqueCustomerOptions, tripCodeFilter])
+
+  const runExport = useCallback(async (kind: 'excel' | 'pdf') => {
+    const isLedger = activeView === 'ledger'
+    if (isLedger ? !filteredLedgerGroups.length : !filteredSales.length) return
+    setExporting(kind)
+    try {
+      if (isLedger) {
+        if (kind === 'excel') await exportSalesLedgerExcel(filteredLedgerGroups, exportFilters, bankAccounts)
+        else await exportSalesLedgerPdf(filteredLedgerGroups, exportFilters, bankAccounts)
+      } else {
+        if (kind === 'excel') await exportDailyPaymentsExcel(filteredSales, exportFilters, bankAccounts)
+        else await exportDailyPaymentsPdf(filteredSales, exportFilters, bankAccounts)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(null)
+    }
+  }, [activeView, filteredLedgerGroups, filteredSales, exportFilters, bankAccounts, toast])
 
   const isLoading = salesLoading || inventoryLoading || customersLoading
 
@@ -450,10 +443,29 @@ function SalesLedgerDashboard() {
         description="Manage loaded trucks and track incremental payments."
         actions={
           <>
-            <Button variant="outline" className="gap-2" onClick={activeView === 'ledger' ? exportExcel : exportDailyPayments} disabled={activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0}>
-              <Download className="size-4" />
-              <span className="hidden sm:inline">{activeView === 'ledger' ? 'Download Ledger' : 'Download Payments'}</span>
-              <span className="sm:hidden">Export</span>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => runExport('excel')}
+              disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
+            >
+              {exporting === 'excel'
+                ? <Loader2 className="size-4 animate-spin" />
+                : <FileSpreadsheet className="size-4" />}
+              <span className="hidden sm:inline">Export Excel</span>
+              <span className="sm:hidden">Excel</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => runExport('pdf')}
+              disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 className="size-4 animate-spin" />
+                : <Download className="size-4" />}
+              <span className="hidden sm:inline">Export PDF</span>
+              <span className="sm:hidden">PDF</span>
             </Button>
             <Button className="gap-2 bg-accent hover:bg-accent/80" onClick={() => openPaymentDialog()}>
               <Plus className="size-4" /> Record Payment
@@ -820,7 +832,7 @@ function SalesLedgerDashboard() {
                 </TableHeader>
                 <TableBody>
                   {(() => {
-                    let serial = (currentPage - 1) * pageSize
+                    let serial = pageOffset
                     const rows: React.ReactNode[] = []
                     const multiCustCounts = new Map<number, number>()
                     filteredLedgerGroups.forEach(g => {
@@ -906,6 +918,59 @@ function SalesLedgerDashboard() {
                           </TableCell>
                         </TableRow>
                       )
+
+                      // Every payment on the row, in the order it came in,
+                      // each carrying the balance it left behind. A row's
+                      // Payment cell is a total; these are what it is made of.
+                      let running = 0
+                      group.payments.forEach((sale, payIdx) => {
+                        const amount = toNum(sale.paymentAmount)
+                        running += amount
+                        const balanceAfter = group.expected - running
+                        rows.push(
+                          <TableRow
+                            key={`${group.key}-pay-${sale._id || sale.id || payIdx}`}
+                            className="bg-muted/25 border-b border-border/50 text-xs hover:bg-muted/40"
+                          >
+                            <TableCell />
+                            <TableCell />
+                            <TableCell className="whitespace-nowrap text-muted-foreground pl-4">
+                              <span className="text-muted-foreground/70 mr-1">↳</span>
+                              {safeFormatDate(sale.dateOfPayment || sale.dateLoaded, 'dd MMM yy')}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-muted-foreground uppercase">
+                              {sale.payerName || '—'}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-muted-foreground">
+                              {formatBankLabel(bankAccounts, sale.bank) || '—'}
+                            </TableCell>
+                            <TableCell className="text-right text-muted-foreground whitespace-nowrap tabular-nums">
+                              {toNum(sale.quantity) > 0 ? `${fmtQty(toNum(sale.quantity))} L` : ''}
+                            </TableCell>
+                            <TableCell className="text-right text-muted-foreground whitespace-nowrap tabular-nums">
+                              {toNum(sale.rate) > 0 ? fmt(toNum(sale.rate)) : ''}
+                            </TableCell>
+                            <TableCell />
+                            <TableCell className="text-right font-semibold text-accent whitespace-nowrap tabular-nums">
+                              {amount > 0 ? fmt(amount) : '—'}
+                            </TableCell>
+                            <TableCell className={`text-right whitespace-nowrap tabular-nums ${balanceAfter > 0 ? 'text-destructive/80' : 'text-muted-foreground'}`}>
+                              {group.expected > 0
+                                ? (balanceAfter === 0 ? '₦0' : balanceAfter > 0 ? fmt(balanceAfter) : `+${fmt(Math.abs(balanceAfter))}`)
+                                : ''}
+                            </TableCell>
+                            <TableCell className="text-center whitespace-nowrap">
+                              {sale.depositStatus === 'paid' ? (
+                                <span className="text-xs font-semibold text-accent">Confirmed</span>
+                              ) : sale.depositStatus ? (
+                                <span className="text-xs font-semibold text-warning">Pending</span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">{sale.enteredBy || '—'}</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
                     })
                     return rows
                   })()}
@@ -966,7 +1031,7 @@ function SalesLedgerDashboard() {
                     {paginatedSales.map((sale, idx) => {
                       const customerName = sale.customerName || customerMap.get(String(sale.customerId))?.name || '—'
                       const datePaid = sale.dateOfPayment || sale.dateLoaded
-                      const serial = (currentPage - 1) * pageSize + idx + 1
+                      const serial = pageOffset + idx + 1
                       return (
                         <TableRow
                           key={sale._id || sale.id}
