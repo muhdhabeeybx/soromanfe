@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format, isWithinInterval } from 'date-fns'
-import { Plus, Pencil, Trash2, Search, Loader2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, Loader2, FileSpreadsheet, FileText } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -24,6 +24,8 @@ import {
 } from '#/lib/hooks/useFleet'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
+import { useToast } from '#/lib/hooks/useToast'
+import { exportFleetLedgerExcel, exportFleetLedgerPdf } from './-fleet-ledger-export'
 
 export const Route = createFileRoute('/fleet-ledger/')({
   beforeLoad: () => routeGuard('/fleet-ledger'),
@@ -75,6 +77,36 @@ function FleetLedgerPage() {
     })
   }, [entries, range, truckFilter, typeFilter, categoryFilter, search])
 
+  // ── Export ─────────────────────────────────────────────────────────
+  // Whatever is on screen, filters and all — a report that silently covers a
+  // different set than the page it was run from is worse than none.
+  const toast = useToast()
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
+
+  const runExport = async (kind: 'excel' | 'pdf') => {
+    if (!filtered.length) return
+    const filters = {
+      periodLabel: preset === 'custom'
+        ? `${from || '?'} – ${to || '?'}`
+        : DATE_PRESETS.find((p) => p.value === preset)?.label ?? 'All time',
+      truck: truckFilter === ALL
+        ? 'All trucks'
+        : (trucks.find((t) => String(t.id) === truckFilter)?.plateNumber ?? truckFilter),
+      type: typeFilter,
+      category: categoryFilter,
+      search,
+    }
+    setExporting(kind)
+    try {
+      if (kind === 'excel') await exportFleetLedgerExcel(filtered, filters)
+      else await exportFleetLedgerPdf(filtered, filters)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(null)
+    }
+  }
+
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader
@@ -83,10 +115,32 @@ function FleetLedgerPage() {
       description="Add, edit, and manage all truck expense and income entries."
       actions={
         <>
+          <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline" size="sm"
+            onClick={() => runExport('excel')}
+            disabled={!filtered.length || exporting !== null}
+          >
+          {exporting === 'excel'
+            ? <Loader2 data-icon="inline-start" className="animate-spin" />
+            : <FileSpreadsheet data-icon="inline-start" />}
+          Export Excel
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => runExport('pdf')}
+            disabled={!filtered.length || exporting !== null}
+          >
+          {exporting === 'pdf'
+            ? <Loader2 data-icon="inline-start" className="animate-spin" />
+            : <FileText data-icon="inline-start" />}
+          Export PDF
+          </Button>
           <Button size="sm" onClick={() => setEditing('new')}>
           <Plus data-icon="inline-start" />
           Add entry
           </Button>
+          </div>
         </>
       }
     />

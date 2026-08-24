@@ -199,6 +199,17 @@ export const STATUS_TONE: Record<ExpenseStatus, string> = {
  */
 export const DELETABLE_STATUSES = new Set<ExpenseStatus>(['pending', 'changes_requested', 'verified'])
 
+/**
+ * Editable until it is paid — mirrors chain.canEditExpense on the server.
+ *
+ * Anyone on the request may correct it while it is still moving: the officer
+ * who raised it and every reviewer in the chain. Once the money has left the
+ * bank the figures are a record of what happened, not a proposal, so nobody
+ * edits them — including a super admin.
+ */
+export const isExpenseEditable = (e: { status: ExpenseStatus }): boolean =>
+  e.status !== 'paid'
+
 /** The four groups an expense may be booked to, plus income, which it may not. */
 export type GlGroupCode =
   | 'pfi_direct' | 'administrative' | 'depot' | 'sales_distribution' | 'income'

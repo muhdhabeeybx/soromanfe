@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
-import { Search, Plus, Receipt, Hourglass, CheckCircle2, X, Trash2, Pencil } from 'lucide-react'
+import { Search, Plus, Receipt, Hourglass, CheckCircle2, X, Trash2, Pencil, Lock } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { Badge } from '#/components/ui/badge'
@@ -15,7 +15,7 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { useExpenses, useDeleteExpense, DELETABLE_STATUSES, type PfiExpense, type ExpenseFilters } from '#/lib/hooks/usePfis'
+import { useExpenses, useDeleteExpense, DELETABLE_STATUSES, isExpenseEditable, type PfiExpense, type ExpenseFilters } from '#/lib/hooks/usePfis'
 import { ExpenseDialog } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
 import { naira } from '#/routes/pfi/-pfi-utils'
@@ -178,9 +178,18 @@ function MyRequestsPage() {
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>
                       <div className="flex items-center justify-end gap-0.5">
-                        <Button variant="ghost" size="icon-sm" onClick={() => openEdit(e)} title="Edit">
-                          <Pencil /><span className="sr-only">Edit</span>
-                        </Button>
+                        {isExpenseEditable(e) ? (
+                          <Button variant="ghost" size="icon-sm" onClick={() => openEdit(e)} title="Edit">
+                            <Pencil /><span className="sr-only">Edit</span>
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost" size="icon-sm" disabled
+                            title="Paid — this expense is closed and can no longer be edited"
+                          >
+                            <Lock /><span className="sr-only">Paid — locked</span>
+                          </Button>
+                        )}
                         {DELETABLE_STATUSES.has(e.status) && (
                           <Button
                             variant="ghost" size="icon-sm" title="Delete"

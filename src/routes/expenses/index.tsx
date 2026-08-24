@@ -3,7 +3,7 @@ import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
-  Search, Plus, Receipt, Banknote, Building2, Hourglass, Download, X, Trash2, Pencil,
+  Search, Plus, Receipt, Banknote, Building2, Hourglass, Download, X, Trash2, Pencil, Lock,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -20,7 +20,7 @@ import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useExpenses, useExpenseCategories, useDeleteExpense,
-  type PfiExpense, type ExpenseFilters, DELETABLE_STATUSES,
+  type PfiExpense, type ExpenseFilters, DELETABLE_STATUSES, isExpenseEditable,
 } from '#/lib/hooks/usePfis'
 import { ExpenseDialog, cash, plain } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
@@ -336,9 +336,18 @@ function ExpensesPage() {
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>
                       <div className="flex items-center justify-end gap-0.5">
-                        <Button variant="ghost" size="icon-sm" onClick={() => openEdit(e)} title="Edit">
-                          <Pencil /><span className="sr-only">Edit</span>
-                        </Button>
+                        {isExpenseEditable(e) ? (
+                          <Button variant="ghost" size="icon-sm" onClick={() => openEdit(e)} title="Edit">
+                            <Pencil /><span className="sr-only">Edit</span>
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost" size="icon-sm" disabled
+                            title="Paid — this expense is closed and can no longer be edited"
+                          >
+                            <Lock /><span className="sr-only">Paid — locked</span>
+                          </Button>
+                        )}
                         {/* Past "With CFO" the chain has already spent effort on
                             it — reject or send it back instead, so the paperwork
                             remembers why rather than the row just vanishing. */}
