@@ -6,6 +6,7 @@ import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { StatusChip } from '#/components/ui/status-chip'
 import { HoverArrowLink } from '#/components/ui/hover-arrow-link'
 import { Skeleton } from '#/components/ui/skeleton'
+import { PanelRow, PanelRows } from '#/components/ui/panel-row'
 import { PeriodFilter, PERIOD_LABELS, type Period } from '#/components/overview/PeriodFilter'
 import { RevenueTrendChart } from '#/components/overview/RevenueTrendChart'
 import { ActivityFeed } from '#/components/overview/ActivityFeed'
@@ -239,32 +240,21 @@ function OverviewDashboard() {
           <div className={PANEL_RAIL}>
             <span className={MICRO}>Financial summary</span>
           </div>
-          <div className="divide-y divide-foreground/10">
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total revenue</span>
-              <span className="text-sm font-semibold">{formatCurrency(combinedRevenue)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Order revenue</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.orders?.total || 0)}</span>
-            </div>
-            {/* <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Offline sales</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.offlineSales?.total || 0)}</span>
-            </div> */}
-            {/* <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Delivery payments</span>
-              <span className="text-sm font-semibold">{formatCurrency(rev.deliverySales?.paymentAmount || 0)}</span>
-            </div> */}
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Customer wallets</span>
-              <span className="text-sm font-semibold">{formatCurrency(Number(wallet.balances?.totalBalance || 0))}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Active holds</span>
-              <span className="text-sm font-semibold text-warning">{formatCurrency(Number(wallet.activeHolds?.totalHeld || 0))}</span>
-            </div>
-          </div>
+          <PanelRows>
+            {/* Total revenue is the headline — everything under it is a
+                component of it or a position alongside it. */}
+            <PanelRow lead label="Total revenue" value={formatCurrency(combinedRevenue)} />
+            <PanelRow label="Order revenue" value={formatCurrency(rev.orders?.total || 0)} />
+            {/* <PanelRow label="Offline sales" value={formatCurrency(rev.offlineSales?.total || 0)} /> */}
+            {/* <PanelRow label="Delivery payments" value={formatCurrency(rev.deliverySales?.paymentAmount || 0)} /> */}
+            <PanelRow label="Customer wallets" value={formatCurrency(Number(wallet.balances?.totalBalance || 0))} />
+            <PanelRow
+              label="Active holds"
+              hint="Committed against unreleased orders"
+              tone="warning"
+              value={formatCurrency(Number(wallet.activeHolds?.totalHeld || 0))}
+            />
+          </PanelRows>
           <div className={cn(PANEL_FOOTER, 'justify-between')}>
             <span className="text-xs text-muted-foreground">
               Manual Deposits: <span className="font-semibold text-foreground">{formatCurrency(Number(wallet.movement?.credits || 0))}</span>
@@ -280,28 +270,24 @@ function OverviewDashboard() {
           <div className={PANEL_RAIL}>
             <span className={MICRO}>PFI &amp; Inventory</span>
           </div>
-          <div className="divide-y divide-foreground/10">
-            {/* <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Active PFIs</span>
-              <span className="text-sm font-semibold">{activePfis.length}</span>
-            </div> */}
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total Quantity remaining</span>
-              <span className="text-sm font-semibold">{formatLitres(totalRemainingLitres)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Inventory value</span>
-              <span className="text-sm font-semibold">{formatCurrency(totalPfiValue)}</span>
-            </div>
+          <PanelRows>
+            {/* <PanelRow label="Active PFIs" value={formatNumber(activePfis.length)} /> */}
+            <PanelRow
+              lead
+              label="Total quantity remaining"
+              hint="Across active PFIs"
+              value={formatLitres(totalRemainingLitres)}
+            />
+            <PanelRow label="Inventory value" value={formatCurrency(totalPfiValue)} />
             {(pfi.byStatus || []).map((s: { status: string; pfiCount: number; remainingLitres?: number }) => (
-              <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
-                <span className="text-sm capitalize">{s.status} PFIs</span>
-                <span className="text-sm font-semibold">
-                  {formatNumber(s.pfiCount)} &middot; {formatLitres(s.remainingLitres || 0)}
-                </span>
-              </div>
+              <PanelRow
+                key={s.status}
+                label={<span className="capitalize">{s.status} PFIs</span>}
+                hint={`${formatNumber(s.pfiCount)} batch${s.pfiCount === 1 ? '' : 'es'}`}
+                value={formatLitres(s.remainingLitres || 0)}
+              />
             ))}
-          </div>
+          </PanelRows>
           <div className={cn(PANEL_FOOTER, 'justify-end')}>
             <HoverArrowLink to={'/pfi' as any}>View PFIs</HoverArrowLink>
           </div>
@@ -318,19 +304,17 @@ function OverviewDashboard() {
           </div>
           {outstanding.customers?.length > 0 ? (
             <>
-              <div className="divide-y divide-foreground/10">
+              <PanelRows>
                 {outstanding.customers.slice(0, 5).map((c: { customerName: string; customerType?: string; outstanding?: number }, i: number) => (
-                  <div key={i} className="flex items-center justify-between px-6 py-3.5">
-                    <div className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{c.customerName}</span>
-                      <span className="text-xs text-muted-foreground capitalize">{c.customerType?.replace(/_/g, ' ')}</span>
-                    </div>
-                    <span className="shrink-0 text-sm font-semibold text-warning">
-                      {formatCurrency(Number(c.outstanding || 0))}
-                    </span>
-                  </div>
+                  <PanelRow
+                    key={c.customerName || i}
+                    label={<span className="font-medium text-foreground">{c.customerName}</span>}
+                    hint={<span className="capitalize">{c.customerType?.replace(/_/g, ' ')}</span>}
+                    tone="warning"
+                    value={formatCurrency(Number(c.outstanding || 0))}
+                  />
                 ))}
-              </div>
+              </PanelRows>
               <div className={cn(PANEL_FOOTER, 'justify-end')}>
                 {/* These figures are delivery sales netted off per customer, and
                   the customer database is where they are carried. */}
@@ -354,8 +338,12 @@ function OverviewDashboard() {
             By revenue
           </StatusChip>
         </div>
+        {/* The table's own cells are p-2 while every rail and row in a PANEL
+            is px-6, so without the gutter classes below the first column
+            starts 16px left of the heading above it. First and last cells
+            take the panel's gutter; the rest keep the table's own rhythm. */}
         {depotLeaderboard.length > 0 ? (
-          <Table>
+          <Table className="[&_td:first-child]:pl-6 [&_th:first-child]:pl-6 [&_td:last-child]:pr-6 [&_th:last-child]:pr-6">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-12">Rank</TableHead>
@@ -368,11 +356,14 @@ function OverviewDashboard() {
             <TableBody>
               {depotLeaderboard.map((d: { id: string; name: string; orderCount: number; volume: number; revenue: number }, i: number) => (
                 <TableRow key={d.id}>
-                  <TableCell className="font-semibold">{i + 1}</TableCell>
-                  <TableCell className="font-medium">{d.name}</TableCell>
-                  <TableCell className="text-right">{formatNumber(d.orderCount)}</TableCell>
-                  <TableCell className="text-right">{formatLitres(d.volume)}</TableCell>
-                  <TableCell className="text-right font-semibold">{formatCurrency(d.revenue)}</TableCell>
+                  {/* Rank is an ordinal, not a figure — it recedes so the eye
+                      goes to the depot and its revenue. The leader is the one
+                      row worth carrying extra weight. */}
+                  <TableCell className="tabular-nums text-muted-foreground">{i + 1}</TableCell>
+                  <TableCell className={cn('font-medium', i === 0 && 'font-semibold')}>{d.name}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(d.orderCount)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatLitres(d.volume)}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(d.revenue)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -399,28 +390,24 @@ function OverviewDashboard() {
               </StatusChip>
             )}
           </div>
-          <div className="divide-y divide-foreground/10">
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total requests</span>
-              <span className="text-sm font-semibold">{formatNumber(dangote.totalRequests)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total value</span>
-              <span className="text-sm font-semibold">{formatCurrency(dangote.totalValue)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Paid value</span>
-              <span className="text-sm font-semibold text-accent">{formatCurrency(dangote.paidValue)}</span>
-            </div>
+          <PanelRows>
+            <PanelRow lead label="Total value" value={formatCurrency(dangote.totalValue)} />
+            <PanelRow
+              label="Paid value"
+              hint={dangote.totalValue > 0 ? `${Math.round((dangote.paidValue / dangote.totalValue) * 100)}% collected` : undefined}
+              tone="positive"
+              value={formatCurrency(dangote.paidValue)}
+            />
+            <PanelRow label="Total requests" value={formatNumber(dangote.totalRequests)} />
             {(dangote.byStatus || []).map((s: { status: string; count: number; total: number }) => (
-              <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
-                <span className="text-sm">{s.status}</span>
-                <span className="text-sm font-semibold">
-                  {formatNumber(s.count)} &middot; {formatCurrency(Number(s.total))}
-                </span>
-              </div>
+              <PanelRow
+                key={s.status}
+                label={s.status}
+                hint={`${formatNumber(s.count)} request${s.count === 1 ? '' : 's'}`}
+                value={formatCurrency(Number(s.total))}
+              />
             ))}
-          </div>
+          </PanelRows>
           <div className={cn(PANEL_FOOTER, 'justify-end')}>
             <HoverArrowLink to={'/dangote-orders' as any}>View orders</HoverArrowLink>
           </div>
@@ -438,34 +425,29 @@ function OverviewDashboard() {
               </StatusChip>
             )}
           </div>
-          <div className="divide-y divide-foreground/10">
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total orders</span>
-              <span className="text-sm font-semibold">{formatNumber(lpg.totalOrders)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Total value</span>
-              <span className="text-sm font-semibold">{formatCurrency(lpg.totalValue)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Paid value</span>
-              <span className="text-sm font-semibold text-accent">{formatCurrency(lpg.paidValue)}</span>
-            </div>
-            <div className="flex items-center justify-between px-6 py-3.5">
-              <span className="text-sm">Stations</span>
-              <span className="text-sm font-semibold">
-                {lpg.stations?.active || 0} active / {lpg.stations?.total || 0} total
-              </span>
-            </div>
+          <PanelRows>
+            <PanelRow lead label="Total value" value={formatCurrency(lpg.totalValue)} />
+            <PanelRow
+              label="Paid value"
+              hint={lpg.totalValue > 0 ? `${Math.round((lpg.paidValue / lpg.totalValue) * 100)}% collected` : undefined}
+              tone="positive"
+              value={formatCurrency(lpg.paidValue)}
+            />
+            <PanelRow label="Total orders" value={formatNumber(lpg.totalOrders)} />
+            <PanelRow
+              label="Stations"
+              hint={`${formatNumber(lpg.stations?.total || 0)} on the books`}
+              value={`${formatNumber(lpg.stations?.active || 0)} active`}
+            />
             {(lpg.byStatus || []).map((s: { status: string; count: number; total: number }) => (
-              <div key={s.status} className="flex items-center justify-between px-6 py-3.5">
-                <span className="text-sm">{s.status}</span>
-                <span className="text-sm font-semibold">
-                  {formatNumber(s.count)} &middot; {formatCurrency(Number(s.total))}
-                </span>
-              </div>
+              <PanelRow
+                key={s.status}
+                label={s.status}
+                hint={`${formatNumber(s.count)} order${s.count === 1 ? '' : 's'}`}
+                value={formatCurrency(Number(s.total))}
+              />
             ))}
-          </div>
+          </PanelRows>
           <div className={cn(PANEL_FOOTER, 'justify-end')}>
             <HoverArrowLink to={'/lpg-orders' as any}>View orders</HoverArrowLink>
           </div>

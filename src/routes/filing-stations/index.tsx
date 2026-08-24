@@ -1380,10 +1380,10 @@ function FilingStationsDashboard() {
                                       <TableCell className="text-muted-foreground whitespace-nowrap font-normal">
                                         {entryDate ? (() => { try { return format(parseISO(entryDate), 'dd MMM yy') } catch { return entryDate } })() : '—'}
                                       </TableCell>
-                                      <TableCell className="text-right font-semibold text-foreground">{isSale ? `${fmtQty(saleQty)} L` : '—'}</TableCell>
-                                      <TableCell className="text-right text-muted-foreground">{isSale ? `₦${saleRate.toLocaleString()}` : '—'}</TableCell>
-                                      <TableCell className="text-right text-foreground font-normal">{isSale ? fmt(saleVal) : '—'}</TableCell>
-                                      <TableCell className="text-right font-semibold text-accent">{depositAmt > 0 ? fmt(depositAmt) : '—'}</TableCell>
+                                      <TableCell className="text-right font-semibold text-foreground tabular-nums">{isSale ? `${fmtQty(saleQty)} L` : '—'}</TableCell>
+                                      <TableCell className="text-right text-muted-foreground tabular-nums">{isSale ? `₦${saleRate.toLocaleString()}` : '—'}</TableCell>
+                                      <TableCell className="text-right text-foreground font-normal tabular-nums">{isSale ? fmt(saleVal) : '—'}</TableCell>
+                                      <TableCell className="text-right font-semibold text-accent tabular-nums">{depositAmt > 0 ? fmt(depositAmt) : '—'}</TableCell>
                                       <TableCell className="text-muted-foreground">{entry.payerName || '—'}</TableCell>
                                       <TableCell className="text-muted-foreground">{entry.bank ? entry.bank.split(' · ')[1] || entry.bank : '—'}</TableCell>
                                       <TableCell>
@@ -1400,8 +1400,8 @@ function FilingStationsDashboard() {
                                           </button>
                                         ) : '—'}
                                       </TableCell>
-                                      <TableCell className="text-right text-warning">{expenseAmt > 0 ? fmt(expenseAmt) : '—'}</TableCell>
-                                      <TableCell className="text-right px-4">
+                                      <TableCell className="text-right text-warning tabular-nums">{expenseAmt > 0 ? fmt(expenseAmt) : '—'}</TableCell>
+                                      <TableCell className="text-right px-4 tabular-nums">
                                         <div className="flex items-center justify-end gap-1">
                                           <button
                                             type="button"

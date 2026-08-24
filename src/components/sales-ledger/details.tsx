@@ -482,7 +482,7 @@ export function SalesLedgerDetails() {
                               <TableCell className="font-normal text-foreground whitespace-nowrap">
                                 {safeFormatDate(payment.dateOfPayment)}
                               </TableCell>
-                              <TableCell className="text-right font-semibold text-accent whitespace-nowrap">
+                              <TableCell className="text-right font-semibold text-accent whitespace-nowrap tabular-nums">
                                 {fmt(toNum(payment.paymentAmount))}
                               </TableCell>
                               <TableCell className={`text-right font-semibold whitespace-nowrap ${balanceAfter > 0 ? 'text-destructive' : balanceAfter < 0 ? 'text-muted-foreground' : targetGroup.expected > 0 ? 'text-accent' : 'text-muted-foreground'}`}>

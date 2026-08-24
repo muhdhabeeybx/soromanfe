@@ -194,6 +194,50 @@ export function fundingAmount(f: OrderFunding): number {
   return Number(f.depositAmount ?? f.amount ?? 0)
 }
 
+/** Sales value as the report computes it — rate × litres, not the stored total. */
+export function orderSalesValue(o: FinanceReportOrder): number {
+  return Number(o.price || 0) * Number(o.quantity || 0)
+}
+
+/**
+ * What this order was actually paid — the money attributed to IT, which is
+ * not the same thing as the deposits listed under it.
+ *
+ * fundingAmount (the Amount Paid column) deliberately shows each deposit in
+ * full, because one payment can cover several orders and showing the slice
+ * would hide money that genuinely arrived. That makes it the wrong basis for
+ * a per-order differential: a ₦50m deposit covering five orders would show
+ * every one of them ₦40m in surplus.
+ *
+ * So this sums `f.amount`, the slice FIFO attributed to this order, plus
+ * `unattributedAmount` — the part of the balance that came from deposits
+ * predating the allocation ledger.
+ *
+ * An order with no funding tracked at all has no per-deposit record to sum.
+ * Its status is the only evidence available: Paid means the wallet hold
+ * covered the total in full, so that is what it was paid.
+ */
+export function orderAmountPaid(o: FinanceReportOrder): number {
+  if (!o.fundingTracked) {
+    return o.paymentStatus === 'Paid' ? Number(o.totalAmount || 0) : 0
+  }
+  const attributed = o.funding.reduce((sum, f) => sum + Number(f.amount || 0), 0)
+  return attributed + Number(o.unattributedAmount || 0)
+}
+
+/**
+ * Sales value less what this order was paid.
+ *
+ * Positive is a shortfall — money still owed. Negative is an overpayment,
+ * money received beyond the order's value. Normally zero on a paid order,
+ * since an order is not marked Paid until its hold covers the total; it goes
+ * nonzero when a total was corrected by hand after the fact, which is
+ * precisely the case worth surfacing.
+ */
+export function orderDifferential(o: FinanceReportOrder): number {
+  return orderSalesValue(o) - orderAmountPaid(o)
+}
+
 /**
  * What to show in the reference column. An internal movement has no bank
  * reference to show — it is named for what it is rather than left blank, so

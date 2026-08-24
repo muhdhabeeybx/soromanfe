@@ -1,8 +1,16 @@
 import { format } from 'date-fns'
 import {
-  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount, orderPaidInto, orderCompany,
+  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
+  orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
+import {
+  XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
+  ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
+  TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
+  writeTitleBlock, writeSectionHeading, paintSigned,
+  pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
+} from '#/lib/report-theme'
 
 /**
  * Amounts and quantities are written as real numbers with a cell format,
@@ -11,31 +19,11 @@ import {
  * anyone does with one of these sheets. Figures are always written out in
  * full — no "1.2bn" abbreviations — since a finance report is exactly the
  * place a rounded figure would be read as the real one.
- */
-const NGN = '₦#,##0.00;[Red]-₦#,##0.00'
-const QTY = '#,##0 "L"'
-/**
- * Dates read dd-mm-yyyy, hyphen separated.
  *
- * The hyphens matter: in an Excel number-format code "/" is not a literal
- * but a placeholder for the machine's own date separator, so a format
- * written with slashes comes out however the reader's locale renders dates —
- * dots on some machines. "-" is a literal and survives intact, so every
- * reader sees the same thing.
+ * The palette, borders, fills, number formats and autotable presets all come
+ * from lib/report-theme so this sheet and the station ledger look like they
+ * came from the same company. They used to each define their own.
  */
-const DATE_FMT = 'dd-mm-yyyy'
-/** The date-fns equivalent, for the PDF and anywhere text is written directly. */
-const DATE_PATTERN = 'dd-MM-yyyy'
-
-const BRAND_GREEN = 'FF007A55'
-const HEADER_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FF1F3864' } }
-const SUMMARY_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFE8EEF7' } }
-// A payment-source sub-row gets the same font as an order row — only a faint
-// tint marks it as nested, never italics or grey text.
-const SUBROW_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFF7F9FB' } }
-const TOTAL_FILL = SUMMARY_FILL
-const THIN = { style: 'thin' as const, color: { argb: 'FFB7C0CC' } }
-const ALL_BORDERS = { top: THIN, left: THIN, bottom: THIN, right: THIN }
 
 export interface FinanceReportFilters {
   /** Human label — "Today", "This Week", "21 Aug 2026", etc. */
@@ -55,6 +43,8 @@ export interface FinanceReportSummary {
   totalQuantity: number
   totalSalesValue: number
   totalAmountPaid: number
+  /** Sum of the per-order differentials — see orderDifferential for the basis. */
+  totalDifferential: number
   /** Only meaningful — and only shown — when a single PFI is selected. */
   initialStock: number | null
   tankBalanceAfter: number | null
@@ -87,11 +77,25 @@ export interface PfiStockRow {
  *
  * "Amount Paid" is deliberately funding-only. The order row leaves it empty
  * so the column reads as a list of the actual payments received, with Sales
- * Value alongside as what was owed — the differential between the two being
- * the thing this report exists to show.
+ * Value alongside as what was owed.
+ *
+ * "Differential" is order-scoped and is NOT Sales Value minus the Amount Paid
+ * cells beneath it. Those show each deposit in full, and one deposit can
+ * cover several orders — subtracting them would show every order in a shared
+ * payment as massively overpaid. It is Sales Value minus the amount
+ * ATTRIBUTED to this order; see orderDifferential. Positive means still
+ * owed, negative means overpaid.
  */
 type ColumnScope = 'order' | 'funding'
-const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string; scope: ColumnScope }> = [
+const COLUMNS: Array<{
+  header: string
+  key: string
+  width: number
+  fmt?: string
+  scope: ColumnScope
+  /** Green when positive, red when negative. Only for figures whose sign carries meaning. */
+  signed?: boolean
+}> = [
   { header: 'S/N', key: 'sn', width: 6, scope: 'order' },
   { header: 'Date', key: 'date', width: 13, scope: 'order' },
   { header: 'Order Reference', key: 'ref', width: 18, scope: 'order' },
@@ -106,6 +110,7 @@ const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string;
   { header: 'Depositor / Payer', key: 'depositor', width: 22, scope: 'funding' },
   { header: 'Deposit Reference', key: 'depositRef', width: 20, scope: 'funding' },
   { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
+  { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -133,7 +138,8 @@ function rowValues(o: FinanceReportOrder, i: number) {
     qty,
     product: up(o.productName || '—'),
     rate,
-    salesValue: rate * qty,
+    salesValue: orderSalesValue(o),
+    differential: orderDifferential(o),
     paidInto: up(orderPaidInto(o) || '—'),
   }
 }
@@ -170,16 +176,6 @@ function fundingRowValues(f: OrderFunding) {
   }
 }
 
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
 
 /** "ZENITH-DEPOT PAYMENTS REPORT 22-08-26" — PFI takes precedence over location, since it's the narrower filter. */
 export function buildFilename(filters: FinanceReportFilters) {
@@ -202,8 +198,8 @@ export function buildFilename(filters: FinanceReportFilters) {
 function summaryColumns(
   summary: FinanceReportSummary,
   filters: FinanceReportFilters,
-): Array<{ header: string; value: string | number; fmt?: string }> {
-  const cols: Array<{ header: string; value: string | number; fmt?: string }> = [
+): Array<{ header: string; value: string | number; fmt?: string; signed?: boolean }> {
+  const cols: Array<{ header: string; value: string | number; fmt?: string; signed?: boolean }> = [
     { header: 'Generated At', value: up(format(new Date(), 'd MMM yyyy, HH:mm')) },
     { header: 'Period', value: up(filters.periodLabel) },
     { header: 'Location', value: up(filters.locationName) },
@@ -213,6 +209,7 @@ function summaryColumns(
     { header: 'Total Quantity', value: summary.totalQuantity, fmt: QTY },
     { header: 'Total Sales Value', value: summary.totalSalesValue, fmt: NGN },
     { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
+    { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_SIGNED, signed: true },
   ]
   if (summary.initialStock != null) cols.push({ header: 'Initial Stock (PFI)', value: summary.initialStock, fmt: QTY })
   if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance After (PFI)', value: summary.tankBalanceAfter, fmt: QTY })
@@ -246,7 +243,9 @@ export async function exportFinanceReportExcel(
   wb.creator = 'Soroman System'
   wb.created = new Date()
 
-  const ws = wb.addWorksheet('Finance Report')
+  const ws = wb.addWorksheet('Finance Report', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  })
   // key + width only, no `header` — that would auto-write a header into row
   // 1, and row 1 here belongs to the title instead. Both header rows below
   // are written by hand once their block's position is known.
@@ -261,61 +260,80 @@ export async function exportFinanceReportExcel(
     col.width = Math.max(col.width || 10, c.header.length + 2, String(c.value).length + 2)
   })
 
-  ws.getCell('A1').value = 'Soroman — Finance Report'
-  ws.getCell('A1').font = { bold: true, size: 14, color: { argb: BRAND_GREEN } }
-  ws.getCell('A2').value = `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`
-  ws.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF666666' } }
+  let cursor = writeTitleBlock(ws, 1, {
+    title: 'SOROMAN — FINANCE REPORT',
+    subtitle: [
+      `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`,
+      `Period: ${filters.periodLabel}`,
+      `Location: ${filters.locationName}`,
+      `PFI: ${filters.pfiNumber}`,
+    ].join('   ·   '),
+    columnSpan: COLUMNS.length,
+  })
+  cursor += 1
 
-  let cursor = 4
   const summaryHeaderRow = ws.getRow(cursor)
   summaryHeaderRow.values = summaryCols.map((c) => c.header)
+  summaryHeaderRow.height = ROW_HEIGHT.header
   for (let i = 1; i <= summaryCols.length; i++) {
     const cell = summaryHeaderRow.getCell(i)
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    cell.font = HEADER_FONT
     cell.fill = HEADER_FILL
     cell.border = ALL_BORDERS
-    cell.alignment = { vertical: 'middle' }
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
   }
   cursor++
 
   const summaryValueRow = ws.getRow(cursor)
   summaryValueRow.values = summaryCols.map((c) => c.value)
+  summaryValueRow.height = ROW_HEIGHT.total
   for (let i = 1; i <= summaryCols.length; i++) {
+    const col = summaryCols[i - 1]
     const cell = summaryValueRow.getCell(i)
     cell.border = ALL_BORDERS
     cell.fill = SUMMARY_FILL
-    cell.font = { bold: true }
-    if (summaryCols[i - 1].fmt) cell.numFmt = summaryCols[i - 1].fmt as string
+    cell.font = TOTAL_FONT
+    cell.alignment = { vertical: 'middle', horizontal: 'center' }
+    if (col.fmt) cell.numFmt = col.fmt
+    if (col.signed && typeof col.value === 'number') paintSigned(cell, col.value)
   }
   cursor++
 
   const note = extraFilterNote(filters)
   if (note) {
     ws.getCell(cursor, 1).value = note
-    ws.getCell(cursor, 1).font = { italic: true, size: 9, color: { argb: 'FF666666' } }
+    ws.getCell(cursor, 1).font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
     cursor++
   }
   cursor += 1
 
   const headerRow = ws.getRow(cursor)
   headerRow.values = COLUMNS.map((c) => c.header)
+  headerRow.height = ROW_HEIGHT.header
   headerRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    cell.font = HEADER_FONT
     cell.fill = HEADER_FILL
     cell.border = ALL_BORDERS
-    cell.alignment = { vertical: 'middle' }
+    cell.alignment = { vertical: 'middle', wrapText: true }
   })
   cursor++
 
   const tableStartRow = cursor
   rows.forEach((o, i) => {
+    const values = rowValues(o, i)
     const row = ws.getRow(cursor)
-    row.values = rowValues(o, i)
+    row.values = values
+    row.height = ROW_HEIGHT.body
     for (const c of COLUMNS) {
       const cell = row.getCell(c.key)
       cell.border = ALL_BORDERS
       if (c.fmt) cell.numFmt = c.fmt
+      if (c.signed) {
+        const v = (values as Record<string, unknown>)[c.key]
+        if (typeof v === 'number') paintSigned(cell, v)
+      }
     }
+    row.getCell('ref').font = { bold: true }
     if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
     cursor++
 
@@ -323,6 +341,7 @@ export async function exportFinanceReportExcel(
       for (const f of o.funding) {
         const subRow = ws.getRow(cursor)
         subRow.values = fundingRowValues(f)
+        subRow.height = ROW_HEIGHT.body
         for (const c of COLUMNS) {
           const cell = subRow.getCell(c.key)
           cell.border = ALL_BORDERS
@@ -335,6 +354,10 @@ export async function exportFinanceReportExcel(
     }
   })
   ws.views = [{ state: 'frozen', ySplit: tableStartRow - 1 }]
+  ws.autoFilter = {
+    from: { row: tableStartRow - 1, column: 1 },
+    to: { row: tableStartRow - 1, column: COLUMNS.length },
+  }
 
   const totalRow = ws.getRow(cursor)
   totalRow.values = {
@@ -342,34 +365,38 @@ export async function exportFinanceReportExcel(
     qty: summary.totalQuantity,
     salesValue: summary.totalSalesValue,
     amount: summary.totalAmountPaid,
+    differential: summary.totalDifferential,
   }
+  totalRow.height = ROW_HEIGHT.total
   // eachCell() alone would skip the columns this row never set a value for,
   // leaving the shading/border look like it stops partway across — walk
   // every column position instead so the totals row reads as one solid bar.
   for (let i = 1; i <= COLUMNS.length; i++) {
     const cell = totalRow.getCell(i)
-    cell.border = ALL_BORDERS
-    cell.fill = TOTAL_FILL
-    cell.font = { bold: true }
+    cell.border = TOTAL_BORDERS
+    cell.fill = GRAND_TOTAL_FILL
+    cell.font = TOTAL_FONT
   }
+  totalRow.getCell('differential').numFmt = NGN_SIGNED
+  paintSigned(totalRow.getCell('differential'), summary.totalDifferential)
   totalRow.getCell('qty').numFmt = QTY
   totalRow.getCell('salesValue').numFmt = NGN
   totalRow.getCell('amount').numFmt = NGN
   cursor += 3
 
   if (pfiStock.length > 0) {
-    ws.getCell(cursor, 1).value = 'PFI STOCK SUMMARY'
-    ws.getCell(cursor, 1).font = { bold: true, size: 12, color: { argb: BRAND_GREEN } }
-    cursor += 2
+    cursor = writeSectionHeading(ws, cursor, 'PFI STOCK SUMMARY')
+    cursor += 1
 
     const stockHeaders = ['PFI', 'Location', 'Product', 'Initial Stock', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']
     const stockHeaderRow = ws.getRow(cursor)
     stockHeaderRow.values = stockHeaders
+    stockHeaderRow.height = ROW_HEIGHT.header
     stockHeaderRow.eachCell((cell) => {
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+      cell.font = HEADER_FONT
       cell.fill = HEADER_FILL
       cell.border = ALL_BORDERS
-      cell.alignment = { vertical: 'middle' }
+      cell.alignment = { vertical: 'middle', wrapText: true }
     })
     cursor++
 
@@ -388,7 +415,7 @@ export async function exportFinanceReportExcel(
         if (i === 8) cell.numFmt = NGN
         // Negative remaining stock is a real deficit — the batch was
         // charged for more than the tank actually received.
-        if (i === 7 && p.volumeRemaining < 0) cell.font = { color: { argb: 'FFCC0000' } }
+        if (i === 7 && p.volumeRemaining < 0) cell.font = { color: { argb: XL.loss } }
       }
       cursor++
     }
@@ -400,11 +427,12 @@ export async function exportFinanceReportExcel(
     stockTotalRow.getCell(1).value = `Total (${pfiStock.length} PFIs)`
     stockTotalRow.getCell(5).value = periodTotal
     stockTotalRow.getCell(5).numFmt = QTY
+    stockTotalRow.height = ROW_HEIGHT.total
     for (let i = 1; i <= 8; i++) {
       const cell = stockTotalRow.getCell(i)
-      cell.border = ALL_BORDERS
+      cell.border = TOTAL_BORDERS
       cell.fill = TOTAL_FILL
-      cell.font = { bold: true }
+      cell.font = TOTAL_FONT
     }
   }
 
@@ -426,12 +454,18 @@ export async function exportFinanceReportPdf(
   const autoTable = (await import('jspdf-autotable')).default
 
   const doc = new jsPDF({ orientation: 'landscape' })
-  doc.setFontSize(14)
-  doc.text('Soroman — Finance Report', 14, 15)
-  doc.setFontSize(9)
-  doc.text(`Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`, 14, 21)
+  const startY = drawPdfHeader(
+    doc,
+    'Soroman — Finance Report',
+    [
+      `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`,
+      `Period: ${filters.periodLabel}`,
+      `Location: ${filters.locationName}`,
+      `PFI: ${filters.pfiNumber}`,
+    ].join('   ·   '),
+  )
 
-  const naira = (n: number) => `NGN ${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const naira = pdfNaira
   const summaryCols = summaryColumns(summary, filters)
   const displayValue = (c: { value: string | number; fmt?: string }) => {
     if (typeof c.value !== 'number') return c.value
@@ -440,13 +474,27 @@ export async function exportFinanceReportPdf(
     return c.value.toLocaleString()
   }
 
+  const signedSummaryIndexes = summaryCols
+    .map((c, i) => (c.signed ? i : -1))
+    .filter((i) => i >= 0)
+
   autoTable(doc, {
-    startY: 25,
+    startY,
     head: [summaryCols.map((c) => c.header)],
     body: [summaryCols.map((c) => displayValue(c))],
-    styles: { fontSize: 7.5, cellPadding: 2, lineColor: [183, 192, 204], lineWidth: 0.1 },
-    headStyles: { fillColor: [0, 122, 85], textColor: 255, fontStyle: 'bold' },
-    bodyStyles: { fillColor: [232, 238, 247], fontStyle: 'bold', textColor: [20, 20, 20] },
+    styles: { ...pdfStyles.body, fontSize: 7.5 },
+    headStyles: { ...pdfStyles.head, fillColor: PDF.brandGreen, fontSize: 7.5 },
+    bodyStyles: pdfStyles.summaryBody,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (data: any) => {
+      if (data.section !== 'body') return
+      if (!signedSummaryIndexes.includes(data.column.index)) return
+      const text = String(data.cell.raw).trim()
+      if (!text) return
+      // Parenthesised is negative — pdfNaira writes it that way so the sign
+      // survives a monochrome print.
+      data.cell.styles.textColor = text.startsWith('(') ? PDF.loss : PDF.gain
+    },
   })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -482,6 +530,7 @@ export async function exportFinanceReportPdf(
         product: v.product,
         rate: naira(v.rate),
         salesValue: naira(v.salesValue),
+        differential: Math.abs(v.differential) < 0.005 ? '—' : naira(v.differential),
         paidInto: v.paidInto,
       }),
     )
@@ -513,17 +562,19 @@ export async function exportFinanceReportPdf(
   footAt('qty', summary.totalQuantity.toLocaleString())
   footAt('salesValue', naira(summary.totalSalesValue))
   footAt('amount', naira(summary.totalAmountPaid))
+  footAt('differential', naira(summary.totalDifferential))
 
   const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
+  const differentialIndex = COLUMNS.findIndex((c) => c.key === 'differential')
 
   autoTable(doc, {
     startY: cursorY,
     head: [COLUMNS.map((c) => c.header)],
     body,
     foot: [footRow],
-    styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [183, 192, 204], lineWidth: 0.1 },
-    headStyles: { fillColor: [31, 56, 100], textColor: 255, lineWidth: 0.1 },
-    footStyles: { fillColor: [232, 238, 247], textColor: [20, 20, 20], fontStyle: 'bold', lineWidth: 0.1 },
+    styles: pdfStyles.body,
+    headStyles: pdfStyles.head,
+    footStyles: { ...pdfStyles.foot, fillColor: PDF.grandTotalTint },
     // A payment-source sub-row gets the same faint tint as its Excel
     // counterpart — never a font change, just enough to read as nested. A
     // sub-row is the one whose Order Reference cell is blank. Plain
@@ -535,8 +586,22 @@ export async function exportFinanceReportPdf(
       // every row this table builds is the plain array below, so narrowing
       // to that is safe and keeps the index lookup honest.
       const raw = data.row.raw
-      if (data.section === 'body' && Array.isArray(raw) && raw[refColumnIndex] === '') {
-        data.cell.styles.fillColor = [247, 249, 251]
+      const isSubRow =
+        data.section === 'body' && Array.isArray(raw) && raw[refColumnIndex] === ''
+      if (isSubRow) {
+        data.cell.styles.fillColor = PDF.subRowTint
+        return
+      }
+      if (data.section === 'body' && data.column.index === refColumnIndex) {
+        data.cell.styles.fontStyle = 'bold'
+      }
+      // Signed money reads green or red in the body and in the totals bar
+      // alike — the one place in these documents where colour means anything.
+      if (data.column.index === differentialIndex) {
+        const text = String(data.cell.raw).trim()
+        if (text && text !== '—') {
+          data.cell.styles.textColor = text.startsWith('(') ? PDF.loss : PDF.gain
+        }
       }
     },
   })
@@ -563,18 +628,19 @@ export async function exportFinanceReportPdf(
       // remaining are per-PFI positions in mixed batches, summing them
       // across PFIs would not mean anything.
       foot: [['', '', `Total (${pfiStock.length} PFIs)`, '', periodTotal.toLocaleString(), '', '', '']],
-      styles: { fontSize: 7, cellPadding: 1.5, lineColor: [183, 192, 204], lineWidth: 0.1 },
-      headStyles: { fillColor: [31, 56, 100], textColor: 255, lineWidth: 0.1 },
-      footStyles: { fillColor: [232, 238, 247], textColor: [20, 20, 20], fontStyle: 'bold', lineWidth: 0.1 },
+      styles: { ...pdfStyles.body, fontSize: 7 },
+      headStyles: pdfStyles.head,
+      footStyles: pdfStyles.foot,
       // A batch charged for more BL than the tank received shows a negative
       // remaining — a real deficit, worth the same red flag it gets on screen.
       didParseCell: (data) => {
         if (data.section === 'body' && data.column.index === 6 && String(data.cell.raw).trim().startsWith('-')) {
-          data.cell.styles.textColor = [204, 0, 0]
+          data.cell.styles.textColor = PDF.loss
         }
       },
     })
   }
 
+  drawPdfFooters(doc, `Soroman Finance Report · ${filters.periodLabel}`)
   doc.save(`${buildFilename(filters)}.pdf`)
 }

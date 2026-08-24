@@ -496,6 +496,7 @@ export async function exportStationLedgerPdf(
     bodyStyles: pdfStyles.summaryBody,
     // The two signed figures carry their meaning in colour here as well as
     // in parentheses, matching the workbook.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (data: any) => {
       if (data.section !== 'body') return
       const signedColumns = [5, 8]
@@ -506,7 +507,7 @@ export async function exportStationLedgerPdf(
   })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let cursorY = (doc as any).lastAutoTable.finalY + 6
+  const cursorY = (doc as any).lastAutoTable.finalY + 6
 
   // Row layout walks COLUMNS and asks each whether this row kind fills it,
   // so a column can move or change scope without index arithmetic here.

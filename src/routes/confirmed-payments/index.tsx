@@ -28,7 +28,7 @@ import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-or
 import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
-  orderPaidInto, orderCompany,
+  orderPaidInto, orderCompany, orderDifferential,
   type FinanceReportOrder, type OrderFunding,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
@@ -43,7 +43,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'differential'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -77,11 +77,36 @@ function Row({ label, value, icon: Icon }: { label: string; value: React.ReactNo
   )
 }
 
-function SummaryItem({ label, value }: { label: string; value: React.ReactNode }) {
+/**
+ * `tone` is only ever passed for a figure whose SIGN means something — a
+ * differential, a shortfall. Everything else stays foreground, so red and
+ * green never become decoration and always read as the same fact.
+ */
+function SummaryItem({
+  label,
+  value,
+  tone = 'plain',
+  hint,
+}: {
+  label: string
+  value: React.ReactNode
+  tone?: 'plain' | 'owed' | 'over'
+  hint?: string
+}) {
   return (
     <div className="min-w-0">
       <p className={cn(MICRO, 'text-muted-foreground')}>{label}</p>
-      <p className="mt-0.5 truncate text-sm font-semibold text-foreground">{value}</p>
+      <p
+        className={cn(
+          'mt-0.5 truncate text-sm font-semibold',
+          tone === 'owed' && 'text-destructive',
+          tone === 'over' && 'text-accent',
+          tone === 'plain' && 'text-foreground',
+        )}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
 }
@@ -356,11 +381,22 @@ function FinanceReportPage() {
     return sum
   }, [rows])
 
+  // Summed from the per-order differentials rather than computed as
+  // totalSalesValue − totalAmountPaid: those two are on different bases (the
+  // paid figure counts each DEPOSIT once, the differential counts what each
+  // ORDER was attributed), so subtracting the aggregates would not equal the
+  // column it is supposed to total.
+  const totalDifferential = useMemo(
+    () => rows.reduce((sum, o) => sum + orderDifferential(o), 0),
+    [rows],
+  )
+
   const summary: FinanceReportSummary = {
     count: totals?.count ?? 0,
     totalQuantity: totals?.totalQuantity ?? 0,
     totalSalesValue,
     totalAmountPaid,
+    totalDifferential,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
   }
@@ -571,6 +607,24 @@ function FinanceReportPage() {
           <SummaryItem label="Product" value={productName} />
           <SummaryItem label="Total sales value" value={naira(summary.totalSalesValue)} />
           <SummaryItem label="Total amount paid" value={naira(summary.totalAmountPaid)} />
+          <SummaryItem
+            label="Total differential"
+            value={
+              Math.abs(summary.totalDifferential) < 0.005
+                ? naira(0)
+                : summary.totalDifferential > 0
+                  ? naira(summary.totalDifferential)
+                  : `(${naira(Math.abs(summary.totalDifferential))})`
+            }
+            tone={
+              Math.abs(summary.totalDifferential) < 0.005
+                ? 'plain'
+                : summary.totalDifferential > 0
+                  ? 'owed'
+                  : 'over'
+            }
+            hint={summary.totalDifferential > 0 ? 'Still owed' : summary.totalDifferential < 0 ? 'Overpaid' : 'Fully reconciled'}
+          />
           {selectedPfi && (
             <>
               <SummaryItem label="Initial stock (PFI)" value={`${(summary.initialStock ?? 0).toLocaleString()} L`} />
@@ -695,6 +749,20 @@ function FinanceReportPage() {
                     product: <span className="text-muted-foreground">{o.productName || '—'}</span>,
                     rate: <span className="whitespace-nowrap">{naira(Number(o.price))}</span>,
                     salesValue: <span className="whitespace-nowrap font-semibold">{naira(salesValue)}</span>,
+                    // Sales value less what this ORDER was attributed, not
+                    // less the deposit figures listed beneath it — see
+                    // orderDifferential. Positive is still owed, negative is
+                    // overpaid, and a clean order reads as a quiet dash
+                    // rather than a loud zero.
+                    differential: (() => {
+                      const d = orderDifferential(o)
+                      if (Math.abs(d) < 0.005) return <span className="text-muted-foreground">—</span>
+                      return (
+                        <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
+                          {d > 0 ? naira(d) : `(${naira(Math.abs(d))})`}
+                        </span>
+                      )
+                    })(),
                     paidInto: <span className="block max-w-[16rem] truncate text-muted-foreground">{orderPaidInto(o) || '—'}</span>,
                   }
                   return (
