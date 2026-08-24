@@ -17,8 +17,12 @@ import {
   FileCheck,
   Hourglass,
   Trash2,
+  Download,
+  Loader2,
 } from 'lucide-react'
 import { formatCurrency, formatAccountName } from '../utils/formatters'
+import { downloadOrderInvoice } from '#/lib/invoice'
+import { useToast } from '#/lib/hooks/useToast'
 import type { OrderWizardReturn } from '../hooks/useOrderWizard'
 import { useCreateExpectedPayment } from '#/lib/hooks/useExpectedPayments'
 
@@ -147,6 +151,8 @@ function ExpectedPaymentNote({ customerId, orderId }: { customerId: number; orde
 
 export function CompletionStep({ wizard }: CompletionStepProps) {
   const navigate = useNavigate()
+  const toast = useToast()
+  const [downloading, setDownloading] = useState(false)
   const {
     placedOrder,
     paymentInfo,
@@ -157,6 +163,25 @@ export function CompletionStep({ wizard }: CompletionStepProps) {
   } = wizard
 
   if (!placedOrder) return null
+
+  /**
+   * The invoice carries the company name captured on the wizard, which the
+   * order row does not always echo back — without it a customer trading under
+   * a company would get an invoice billed to their personal name.
+   */
+  const downloadInvoice = async () => {
+    setDownloading(true)
+    try {
+      await downloadOrderInvoice(
+        { ...placedOrder, companyName: orderCompanyName || placedOrder.companyName },
+        paymentInfo,
+      )
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not generate the invoice')
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   return (
     <div key="step-6" className="space-y-6 animate-fade-in">
@@ -171,6 +196,13 @@ export function CompletionStep({ wizard }: CompletionStepProps) {
             Order <span className="font-mono font-semibold text-primary">{placedOrder.orderNumber}</span> has been processed and customer balance was updated.
           </p>
         </div>
+        {/* Offered here, at the moment the order lands, rather than only in
+            the action row at the bottom — this is the point at which someone
+            wants to hand the customer something. */}
+        <Button size="lg" onClick={downloadInvoice} disabled={downloading} className="gap-2">
+          {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          {downloading ? 'Preparing invoice…' : 'Download Invoice'}
+        </Button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 max-w-2xl mx-auto">
@@ -295,6 +327,10 @@ export function CompletionStep({ wizard }: CompletionStepProps) {
 
       {/* Actions */}
       <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2 pb-4">
+        <Button variant="outline" onClick={downloadInvoice} disabled={downloading}>
+          {downloading ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Download className="size-4 mr-2" />}
+          Invoice
+        </Button>
         <Button variant="outline" onClick={resetWizard}>
           <Plus className="size-4 mr-2" /> Place Another Order
         </Button>
