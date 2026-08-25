@@ -305,17 +305,30 @@ export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
  * The deposit id rides along because the caller has to count each payment once
  * however many orders it appears under.
  */
-export function orderPaymentSources(order: FinanceReportOrder): Array<{ depositId: number; amount: number }> {
+export function orderPaymentSources(
+  order: FinanceReportOrder,
+): Array<{ depositId: number; amount: number; shared: boolean }> {
   if (order.fundingTracked) {
-    return order.funding.map((f) => ({ depositId: f.depositId, amount: fundingAmount(f) }))
+    // An allocation slice is already per-order: the same deposit split across
+    // three orders yields three different figures, and every one of them
+    // belongs in the total. Deduping these by deposit id would drop all but
+    // the first and understate the report.
+    return order.funding.map((f) => ({
+      depositId: f.depositId,
+      amount: fundingAmount(f),
+      shared: false,
+    }))
   }
-  const sources: Array<{ depositId: number; amount: number }> = []
+  // A traced wallet credit is NOT per-order — the same bank credit can sit
+  // behind several orders and is shown whole under each, so it must be
+  // counted once.
+  const sources: Array<{ depositId: number; amount: number; shared: boolean }> = []
   for (const w of order.walletSource ?? []) {
     if (w.statementSources.length > 0) {
-      for (const s of w.statementSources) sources.push({ depositId: s.depositId, amount: s.amount })
+      for (const s of w.statementSources) sources.push({ depositId: s.depositId, amount: s.amount, shared: true })
       continue
     }
-    sources.push({ depositId: w.depositId, amount: w.amount })
+    sources.push({ depositId: w.depositId, amount: w.amount, shared: true })
   }
   return sources
 }
@@ -350,17 +363,32 @@ export function shortDepositor(narration: string | null | undefined): string {
 }
 
 /**
- * What this payment actually was — the deposit's own amount, not the slice
- * of it FIFO attributed to this order.
+ * What this payment put toward THIS order — the slice attributed to it, not
+ * the deposit's own total.
  *
- * The two differ whenever one payment covered several orders, or part of it
- * went to the wallet as surplus. Showing the attributed slice nets those
- * movements away silently, so a row could read less than the money that
- * genuinely arrived; showing the real figure leaves the differential against
- * sales value visible, which is the point of the column.
+ * This returned the whole deposit, on the reasoning that showing the slice
+ * would hide money that genuinely arrived. That reasoning belongs to a
+ * deposit-centric view; on an order's own line it is simply wrong, and it put
+ * the column at odds with everything around it.
+ *
+ * FG11437 is the case that surfaced it. Sales value 666,600,000, paid in full,
+ * Differential correctly showing nothing owed — and Amount Paid totalling
+ * 716,600,000, because two of its twenty deposits were shared with other
+ * orders and were being counted whole against this one:
+ *
+ *     deposit 4531   45,000 of 50,000,000 went here — 49,955,000 overstated
+ *     deposit 4791    6,361,000 of 6,406,000       —      45,000 overstated
+ *
+ * The detail dialog was right all along: it reads `f.amount` directly and
+ * reconciles to the order total exactly. Differential already used the slice
+ * too (see orderAmountPaid), which is why one column said fully paid while
+ * the one beside it said 50m more had been received.
+ *
+ * A slice belongs to exactly one order, so slices never double-count across
+ * the report — see orderPaymentSources for why that matters to the total.
  */
 export function fundingAmount(f: OrderFunding): number {
-  return Number(f.depositAmount ?? f.amount ?? 0)
+  return Number(f.amount ?? 0)
 }
 
 /** Sales value as the report computes it — rate × litres, not the stored total. */

@@ -131,6 +131,9 @@ function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?
         </Badge>
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">{naira(Number(funding.amount))}</span>
+          {/* Unmatch — commented out, not removed. The handler, its confirm
+              dialog and the mutation behind it are all still wired up below;
+              only the way in is closed.
           {onUnmatch && (
             <Button
               variant="ghost"
@@ -141,7 +144,7 @@ function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?
               <Unlink className="size-3.5" />
               Unmatch
             </Button>
-          )}
+          )} */}
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -254,6 +257,9 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
             </div>
           </div>
 
+          {/* Wallet before/after — commented out. The figures still come down
+              on the order (walletBalanceBefore / walletBalanceAfter) if this
+              is wanted back.
           <div className="py-3">
             <p className={cn(MICRO, 'pb-1 text-muted-foreground')}>Wallet</p>
             {order.walletBalanceBefore == null ? (
@@ -277,18 +283,20 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
               </div>
             )}
           </div>
+          */}
 
           <div className="py-3 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <p className={cn(MICRO, 'text-muted-foreground')}>
                 Payment source{order.funding.length ? ` (${order.funding.length})` : ''}
               </p>
+              {/* Re-match — commented out alongside Unmatch, same reasoning.
               {order.paymentStatus === 'Paid' && onRematch && (
                 <Button variant="outline" size="sm" onClick={onRematch}>
                   <RefreshCw data-icon="inline-start" />
                   Re-match
                 </Button>
-              )}
+              )} */}
             </div>
             {!order.fundingTracked ? (
               // An order paid from wallet balance writes no allocation row, so
@@ -409,11 +417,9 @@ function FinanceReportPage() {
   // column lists, not the orders' own totals, which are what was owed and
   // already shown as Sales Value.
   //
-  // Counted once per deposit, because one payment can cover several orders
-  // and is shown in full under each of them. Adding the rows up as displayed
-  // would count that payment twice (~₦125m over a single week of live data),
-  // so the column reads as what genuinely arrived while the total still
-  // reconciles to the bank.
+  // Each order's own share, summed. The column shows the slice attributed to
+  // the order rather than the whole deposit (see fundingAmount), so the rows
+  // add up without a deposit shared between orders being counted twice.
   //
   // Through orderPaymentSources rather than o.funding directly: an order paid
   // from wallet balance has no allocation entry to walk, so walking only that
@@ -424,10 +430,22 @@ function FinanceReportPage() {
     let sum = 0
     for (const o of rows) {
       for (const s of orderPaymentSources(o)) {
-        if (seen.has(s.depositId)) continue
-        seen.add(s.depositId)
+        // Only the shared kind is counted once. An allocation slice is
+        // already specific to its order, so deduping those would drop every
+        // order after the first that a split deposit paid for.
+        if (s.shared) {
+          if (seen.has(s.depositId)) continue
+          seen.add(s.depositId)
+        }
         sum += s.amount
       }
+      // Balance that predates the allocation ledger has no funding row to sit
+      // on, so it appears in no column — but it was still paid, and
+      // orderAmountPaid counts it, which is what Differential is measured
+      // against. Left out, the footer and the Differential column would be
+      // computed on different bases and could never be reconciled against each
+      // other.
+      if (o.fundingTracked) sum += Number(o.unattributedAmount || 0)
     }
     return sum
   }, [rows])

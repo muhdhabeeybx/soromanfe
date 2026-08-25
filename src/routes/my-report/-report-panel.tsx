@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { Loader2, Trash2, Pencil, Download, Plus, X } from 'lucide-react'
+import { Loader2, Trash2, Pencil, Download, Plus, X, Eye } from 'lucide-react'
 
 import api from '#/lib/api/http'
 import { Button } from '#/components/ui/button'
@@ -14,6 +14,9 @@ import {
 } from '#/components/ui/table'
 import { PageEmpty } from '#/components/PageEmpty'
 import { StatusChip } from '#/components/ui/status-chip'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '#/components/ui/dialog'
 import { MICRO, PANEL, PANEL_RAIL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import { useToast } from '#/lib/hooks/useToast'
@@ -292,6 +295,8 @@ export function ReportPanel({
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
   /** id of the handed-over report already loaded, so it loads exactly once. */
   const [loadedHandoff, setLoadedHandoff] = useState<number | null>(null)
+  /** The report open in the read view. */
+  const [viewing, setViewing] = useState<any | null>(null)
 
   // Only active batches can be reported against, and every PFI carries its
   // own location and remaining balance — so location and opening stock are
@@ -583,12 +588,62 @@ export function ReportPanel({
   }
 
   /**
+   * The definition that describes a given row.
+   *
+   * The row's own type, never the tab's. The list spans every type a person
+   * has filed, so reading a row through the active panel's definition puts it
+   * against the wrong field set entirely — which is how a foreign report used
+   * to come out of the PDF button with half its figures missing and labels
+   * belonging to another report.
+   */
+  const defFor = (r: any): ReportDef => REPORTS[r.reportType as ReportType] ?? def
+
+  /**
+   * A report as label/value lines, in filing order.
+   *
+   * One assembly, read by both the PDF and the view dialog, so the document
+   * someone downloads and the one they are looking at can never disagree
+   * about what the report says.
+   */
+  const reportLines = (r: any): Array<[string, string]> => {
+    const d = defFor(r)
+    const lines: Array<[string, string]> = [
+      ['Date', r.reportDate ? format(new Date(r.reportDate), 'd MMM yyyy') : '—'],
+      ['Location', r.location || '—'],
+      ['PFI', r.pfiNumber || '—'],
+      ['Submitted by', r.submittedByName || '—'],
+    ]
+    for (const f of allFields(d)) {
+      if (f.type === 'priceBands') {
+        for (const b of (Array.isArray(r.priceBands) ? r.priceBands : [])) {
+          lines.push([`Price ${money(b.price)}`, `${num(b.litres)} L`])
+        }
+        continue
+      }
+      if (f.type === 'topCustomers') {
+        (Array.isArray(r.topCustomers) ? r.topCustomers : []).forEach((c: any, i: number) => {
+          lines.push([`Top customer #${i + 1}`, `${c.name || '—'} · ${c.phone || '—'} · ${num(c.litres)} L`])
+        })
+        continue
+      }
+      // columnValue, not r[f.key]: the commission report's outstanding and
+      // remaining figures are derived rather than stored, and reading the row
+      // directly would silently drop them.
+      const v = columnValue(r, f.key)
+      if (v == null || v === '') continue
+      lines.push([f.label, f.type === 'money' ? money(v) : f.unit ? withUnit(v, unitForRow(r)) : String(v)])
+    }
+    return lines
+  }
+
+  /**
    * Download is a separate action, not a side effect of saving.
    *
    * Upstream every submit *and every edit* silently dropped a PDF into the
    * user's downloads, so correcting a typo left a second file behind.
    */
   const download = async (r: any) => {
+    const d = defFor(r)
     const { jsPDF } = await import('jspdf')
     const autoTable = (await import('jspdf-autotable')).default
     const doc = new jsPDF()
@@ -597,41 +652,18 @@ export function ReportPanel({
     doc.rect(0, 0, 210, 26, 'F')
     doc.setTextColor(255).setFontSize(13)
     doc.text('SOROMAN ENERGY LIMITED', 14, 12)
-    doc.setFontSize(9).text(def.pdfTitle.toUpperCase(), 14, 19)
+    doc.setFontSize(9).text(d.pdfTitle.toUpperCase(), 14, 19)
 
     doc.setTextColor(0).setFontSize(9)
     doc.text(`Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`, 14, 34)
 
-    const body: string[][] = [
-      ['Date', r.reportDate ? format(new Date(r.reportDate), 'd MMM yyyy') : '—'],
-      ['Location', r.location || '—'],
-      ['PFI', r.pfiNumber || '—'],
-      ['Submitted by', r.submittedByName || '—'],
-    ]
-    for (const f of allFields(def)) {
-      if (f.type === 'priceBands') {
-        for (const b of (Array.isArray(r.priceBands) ? r.priceBands : [])) {
-          body.push([`Price ${money(b.price)}`, `${num(b.litres)} L`])
-        }
-        continue
-      }
-      if (f.type === 'topCustomers') {
-        (Array.isArray(r.topCustomers) ? r.topCustomers : []).forEach((c: any, i: number) => {
-          body.push([`Top customer #${i + 1}`, `${c.name || '—'} · ${c.phone || '—'} · ${num(c.litres)} L`])
-        })
-        continue
-      }
-      // columnValue, not r[f.key]: the commission report's outstanding and
-      // remaining figures are derived rather than stored, and reading the row
-      // directly would silently drop them from the PDF.
-      const v = columnValue(r, f.key)
-      if (v == null || v === '') continue
-      body.push([f.label, f.type === 'money' ? money(v) : f.unit ? withUnit(v, unitForRow(r)) : String(v)])
-    }
-
-    autoTable(doc, { startY: 40, body, styles: { fontSize: 9, cellPadding: 2.5 } })
+    autoTable(doc, {
+      startY: 40,
+      body: reportLines(r).map(([k, v]) => [k, v]),
+      styles: { fontSize: 9, cellPadding: 2.5 },
+    })
     const stamp = r.reportDate ? format(new Date(r.reportDate), 'yyyyMMdd') : 'report'
-    doc.save(`${def.filePrefix}_${(r.location || 'ALL').replace(/\s+/g, '')}_${stamp}.pdf`)
+    doc.save(`${d.filePrefix}_${(r.location || 'ALL').replace(/\s+/g, '')}_${stamp}.pdf`)
   }
 
   // A report handed over from another tab, loaded during render rather than
@@ -846,6 +878,9 @@ export function ReportPanel({
                               manager has reviewed it, the API rejects a PATCH, so
                               the button disappears rather than round-tripping an
                               error. */}
+                          <Button variant="ghost" size="icon-sm" title="View" onClick={() => setViewing(r)}>
+                            <Eye /><span className="sr-only">View</span>
+                          </Button>
                           {r.status === 'submitted' && (
                             <Button variant="ghost" size="icon-sm" title="Edit" onClick={() => edit(r)}>
                               <Pencil /><span className="sr-only">Edit</span>
@@ -888,6 +923,81 @@ export function ReportPanel({
           </div>
         )}
       </section>
+
+      {/*
+        Reading a report was the one thing this page could not do. You could
+        edit it, delete it, or download it as a PDF — so the only way to check
+        what you had filed was to open the form that overwrites it, or to put a
+        file on disk. Both are worse than looking.
+
+        Rendered through the ROW's definition, not the tab's, so a report of
+        another type reads against its own fields rather than against a layout
+        it was never filed under.
+      */}
+      <Dialog open={viewing !== null} onOpenChange={(o) => { if (!o) setViewing(null) }}>
+        <DialogContent className="max-h-[88svh] overflow-y-auto sm:max-w-[560px]">
+          {viewing && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{defFor(viewing).title}</DialogTitle>
+                <DialogDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>
+                    {viewing.reportDate ? format(new Date(viewing.reportDate), 'd MMM yyyy') : '—'}
+                    {viewing.location ? ` · ${viewing.location}` : ''}
+                  </span>
+                  <StatusChip tone={STATUS_TONE[viewing.status as keyof typeof STATUS_TONE] ?? 'inert'}>
+                    {viewing.status || 'submitted'}
+                  </StatusChip>
+                </DialogDescription>
+              </DialogHeader>
+
+              {/* A rejection's reason is the whole point of opening the report,
+                  so it leads rather than sitting in a tooltip on the chip. */}
+              {viewing.status === 'rejected' && viewing.reviewComment && (
+                <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                  <span className="font-medium">Sent back:</span> {viewing.reviewComment}
+                </p>
+              )}
+
+              <dl className="divide-y divide-foreground/10">
+                {reportLines(viewing).map(([label, value]) => (
+                  <div key={label} className="flex items-start justify-between gap-4 py-2">
+                    <dt className="text-sm text-muted-foreground">{label}</dt>
+                    <dd className="text-right text-sm font-medium">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              <DialogFooter className="gap-2 sm:gap-2">
+                <div className="mr-auto flex items-center gap-2">
+                  {viewing.status === 'submitted' && (
+                    <Button
+                      variant="outline"
+                      onClick={() => { const r = viewing; setViewing(null); edit(r) }}
+                    >
+                      <Pencil data-icon="inline-start" />
+                      Edit
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => download(viewing)}>
+                    <Download data-icon="inline-start" />
+                    PDF
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => { setConfirmDelete(viewing.id); setViewing(null) }}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete
+                  </Button>
+                </div>
+                <Button variant="ghost" onClick={() => setViewing(null)}>Close</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
