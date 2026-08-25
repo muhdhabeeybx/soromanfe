@@ -35,7 +35,7 @@ import { PDF, triggerDownload } from '#/lib/report-theme'
  */
 export const ISSUER = {
   name: 'Soroman',
-  tagline: 'Petroleum Products & Distribution',
+  tagline: 'Buy Fuel Online in Minutes',
   address: '',
   cityLine: '',
   phone: '',
