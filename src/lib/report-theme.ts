@@ -42,6 +42,15 @@ export const XL = {
   gain: 'FF0B7A3B',
   loss: 'FFCC0000',
   warn: 'FF9A6700',
+  /**
+   * Money that moved inside the business rather than through a bank.
+   *
+   * A third meaning alongside gain and loss, and the only one that is not
+   * about sign: an internal transfer has no statement line and no reference
+   * because none exists, which reads as missing data unless it is marked.
+   */
+  internal: 'FF1D4ED8',
+  internalTint: 'FFEFF4FE',
 } as const
 
 /** RGB tuples, for jsPDF / autotable. */
@@ -60,6 +69,9 @@ export const PDF = {
   inkSoft: [90, 100, 114] as [number, number, number],
   gain: [11, 122, 59] as [number, number, number],
   loss: [204, 0, 0] as [number, number, number],
+  /** See XL.internal — the same third meaning, for jsPDF. */
+  internal: [29, 78, 216] as [number, number, number],
+  internalTint: [239, 244, 254] as [number, number, number],
 } as const
 
 // ── Number formats ────────────────────────────────────────────────────────

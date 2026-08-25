@@ -26,6 +26,11 @@ export interface OrderFunding {
   depositDescription?: string | null
   /** Customer the money came from, resolved from a "customer #N" in the description. */
   transferFromCustomerName?: string | null
+  /** How many orders this one credit paid for. 1 for almost all of them. */
+  sharedOrderCount?: number | null
+  /** The order that took the largest share of it — where the statement line belongs. */
+  primaryOrderId?: number | null
+  primaryOrderRef?: string | null
 }
 
 /**
@@ -219,6 +224,48 @@ export function fundingDepositor(f: OrderFunding): string {
  * surplus came off ("Overpayment received from order #11169"). The first is
  * rewritten to read as a name; the second is already legible as written.
  */
+/**
+ * Money that moved inside the business rather than arriving from a bank.
+ *
+ * A transfer between customers' wallets, or surplus carried off another
+ * order. Both land as a deposit with no statement line and no reference,
+ * because no bank payment happened — which is exactly what makes them
+ * indistinguishable from missing data unless they are called out. The report
+ * marks them so a reader can tell "no bank reference because none exists"
+ * from "no bank reference because nobody filled it in".
+ */
+/**
+ * A remainder carried off another order's bank credit.
+ *
+ * One credit can settle one order and leave a tail that pays for the next. The
+ * report prints a row per (order, credit) pair, so that tail appeared under
+ * the second order carrying the SAME bank reference as the first — which reads
+ * as one statement line being spent twice. It never was: the slices sum to the
+ * credit exactly, on every one of the 23 cases in the book.
+ *
+ * The money is real and the reference is real; what was missing was any way to
+ * tell a fresh bank payment from a remainder. So the remainder is now labelled
+ * for what it is — "TRF FROM KN11400" — and the bank reference appears as a
+ * bank line exactly once, against the order that took the bulk of it.
+ *
+ * Nothing about the ledger changes. This is what the row is called.
+ */
+export function carriedFromOrder(
+  f: OrderFunding,
+  orderId: number,
+): { ref: string; orderId: number } | null {
+  if (!f.sharedOrderCount || f.sharedOrderCount < 2) return null
+  if (f.primaryOrderId == null || f.primaryOrderId === orderId) return null
+  return { ref: f.primaryOrderRef || `#${f.primaryOrderId}`, orderId: f.primaryOrderId }
+}
+
+export function isInternalTransfer(f: OrderFunding): boolean {
+  if (f.statementDepositor || f.depositReference) return false
+  return /wallet transfer from customer|overpayment received from order/i.test(
+    f.depositDescription || '',
+  )
+}
+
 function internalSource(f: OrderFunding): string {
   if (f.transferFromCustomerName && /from customer #/i.test(f.depositDescription || '')) {
     return `${f.transferFromCustomerName} (wallet transfer)`
@@ -287,53 +334,6 @@ export function walletStatementRows(order: FinanceReportOrder): StatementRow[] {
 }
 
 /**
- * Every credit behind an order as a (deposit, amount) pair — whichever way it
- * was paid.
- *
- * The Amount Paid column is filled from two different places depending on the
- * order: a tracked order lists its allocation entries, and a wallet-funded one
- * with no allocation row lists the statement credits traced behind its hold.
- * The report's Amount Paid total only ever walked the first of those, so an
- * order paid entirely from wallet balance — no allocation row, by definition —
- * added nothing to it. DI11332 is the case in point: ₦62.4m paid, its statement
- * line printed under it in the table, and a total of ₦0 above.
- *
- * Returning both through one function keeps the total equal to the sum of the
- * column it totals. It mirrors walletStatementRows deliberately: if that
- * decides a credit is worth printing, this counts it, and they cannot drift.
- *
- * The deposit id rides along because the caller has to count each payment once
- * however many orders it appears under.
- */
-export function orderPaymentSources(
-  order: FinanceReportOrder,
-): Array<{ depositId: number; amount: number; shared: boolean }> {
-  if (order.fundingTracked) {
-    // An allocation slice is already per-order: the same deposit split across
-    // three orders yields three different figures, and every one of them
-    // belongs in the total. Deduping these by deposit id would drop all but
-    // the first and understate the report.
-    return order.funding.map((f) => ({
-      depositId: f.depositId,
-      amount: fundingAmount(f),
-      shared: false,
-    }))
-  }
-  // A traced wallet credit is NOT per-order — the same bank credit can sit
-  // behind several orders and is shown whole under each, so it must be
-  // counted once.
-  const sources: Array<{ depositId: number; amount: number; shared: boolean }> = []
-  for (const w of order.walletSource ?? []) {
-    if (w.statementSources.length > 0) {
-      for (const s of w.statementSources) sources.push({ depositId: s.depositId, amount: s.amount, shared: true })
-      continue
-    }
-    sources.push({ depositId: w.depositId, amount: w.amount, shared: true })
-  }
-  return sources
-}
-
-/**
  * The payer's name out of a bank narration.
  *
  * Statement text is machine-written, long, and shaped differently by each
@@ -385,7 +385,7 @@ export function shortDepositor(narration: string | null | undefined): string {
  * the one beside it said 50m more had been received.
  *
  * A slice belongs to exactly one order, so slices never double-count across
- * the report — see orderPaymentSources for why that matters to the total.
+ * the report.
  */
 export function fundingAmount(f: OrderFunding): number {
   return Number(f.amount ?? 0)
@@ -528,4 +528,67 @@ export function useRematchOrderFunding() {
     },
     onError: (err: any) => toast.error(getErrorMessage(err)),
   })
+}
+
+/**
+ * Where a report's money actually differs from what it billed.
+ *
+ * The report gave a Sales Value, an Amount Paid and a net Differential, and
+ * nothing in between — so a total that looked wrong could not be checked
+ * against anything. On PFI 39/26 the figures were exact (11,008,317,654.50
+ * billed, 169,552.50 overpaid across six orders, 11,008,487,207.00 received)
+ * and still unverifiable by eye, because nothing said which six orders or by
+ * how much.
+ *
+ * Every figure here is computed from the same orderAmountPaid the Differential
+ * column uses, so the breakdown always adds back to the totals above it:
+ *
+ *     totalSalesValue - totalAmountPaid === shortTotal - overpaidTotal
+ *                                      === netDifferential
+ */
+export interface PaymentBreakdown {
+  /** Orders whose payment matches their sales value to the kobo. */
+  exactCount: number
+  overpaidCount: number
+  /** Positive: how much was received beyond what was billed. */
+  overpaidTotal: number
+  shortCount: number
+  /** Positive: how much is still owed. */
+  shortTotal: number
+  /** Funding entries that moved inside the business rather than from a bank. */
+  internalCount: number
+  internalTotal: number
+  /** Positive is owed, negative is overpaid — the sum of the column. */
+  netDifferential: number
+}
+
+export function paymentBreakdown(orders: FinanceReportOrder[]): PaymentBreakdown {
+  const b: PaymentBreakdown = {
+    exactCount: 0,
+    overpaidCount: 0, overpaidTotal: 0,
+    shortCount: 0, shortTotal: 0,
+    internalCount: 0, internalTotal: 0,
+    netDifferential: 0,
+  }
+
+  for (const o of orders) {
+    const d = orderDifferential(o)
+    b.netDifferential += d
+    // Half a kobo, so a rounding artefact never reports as a shortfall.
+    if (Math.abs(d) < 0.005) b.exactCount += 1
+    else if (d > 0) { b.shortCount += 1; b.shortTotal += d }
+    else { b.overpaidCount += 1; b.overpaidTotal += Math.abs(d) }
+
+    for (const f of o.funding) {
+      // Both kinds of money that did not arrive from a bank on this order: a
+      // recorded wallet transfer, and a remainder carried off another order's
+      // credit. They are the same thing to a reader — money moved internally —
+      // and counting only the first understated it.
+      if (!isInternalTransfer(f) && !carriedFromOrder(f, o.id)) continue
+      b.internalCount += 1
+      b.internalTotal += fundingAmount(f)
+    }
+  }
+
+  return b
 }

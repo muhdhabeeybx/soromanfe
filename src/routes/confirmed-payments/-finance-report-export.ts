@@ -2,8 +2,8 @@ import { format } from 'date-fns'
 import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  walletStatementRows,
-  type FinanceReportOrder, type OrderFunding, type StatementRow,
+  walletStatementRows, isInternalTransfer, carriedFromOrder,
+  type FinanceReportOrder, type OrderFunding, type StatementRow, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
   XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
@@ -46,6 +46,14 @@ export interface FinanceReportSummary {
   totalAmountPaid: number
   /** Sum of the per-order differentials — see orderDifferential for the basis. */
   totalDifferential: number
+  /**
+   * Where billed and received come apart — see paymentBreakdown.
+   *
+   * Carried into the exports rather than left on screen: a net differential
+   * on a printed sheet is the figure someone queries, and without the counts
+   * behind it there is nothing to answer them with.
+   */
+  breakdown?: PaymentBreakdown
   /** Only meaningful — and only shown — when a single PFI is selected. */
   initialStock: number | null
   tankBalanceAfter: number | null
@@ -192,13 +200,20 @@ function statementRowValues(r: StatementRow) {
 }
 
 /** A funding sub-row — no order details repeated, just where that money came from. */
-function fundingRowValues(f: OrderFunding) {
+function fundingRowValues(f: OrderFunding, orderId: number) {
+  const carried = carriedFromOrder(f, orderId)
   return {
     // The payment as it actually arrived, not the slice attributed to this
     // order — see fundingAmount.
     amount: fundingAmount(f),
-    depositor: up(fundingDepositor(f) || '—'),
-    depositRef: up(fundingReference(f) || '—'),
+    depositor: up(carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'),
+    // Named, not blank: an internal transfer has no bank reference because no
+    // bank was involved, and an empty cell cannot say that.
+    // A remainder still names the credit it came off, so the sheet can be
+    // traced back to the bank line — it just no longer claims to BE one.
+    depositRef: carried
+      ? up(`OFF ${fundingReference(f) || 'CREDIT'}`)
+      : isInternalTransfer(f) ? 'INTERNAL TRANSFER' : up(fundingReference(f) || '—'),
     // When the money landed per the bank statement, not when the deposit row
     // happened to be keyed in — those differ by days on a back-dated match.
     depositDate: fundingPaidAt(f) ? new Date(String(fundingPaidAt(f))) : null,
@@ -241,6 +256,17 @@ function summaryColumns(
     { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_SIGNED, signed: true },
   ]
+  // The three ways billed and received come apart, each with its count, so a
+  // differential on a printed sheet can be checked rather than just read.
+  const b = summary.breakdown
+  if (b) {
+    cols.push(
+      { header: `Overpaid (${b.overpaidCount})`, value: b.overpaidTotal, fmt: NGN },
+      { header: `Shortfall (${b.shortCount})`, value: b.shortTotal, fmt: NGN },
+      { header: `Internal Transfers (${b.internalCount})`, value: b.internalTotal, fmt: NGN },
+      { header: 'Orders Reconciling Exactly', value: b.exactCount },
+    )
+  }
   if (summary.initialStock != null) cols.push({ header: 'Initial Stock (PFI)', value: summary.initialStock, fmt: QTY })
   if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance After (PFI)', value: summary.tankBalanceAfter, fmt: QTY })
   return cols
@@ -307,13 +333,17 @@ export function writeFinanceTable(
 
     if (o.fundingTracked) {
       for (const f of o.funding) {
+        // Blue, matching the screen: this money never came through a bank, so
+        // its empty reference column is a fact rather than an omission.
+        const internal = isInternalTransfer(f) || !!carriedFromOrder(f, o.id)
         const subRow = ws.getRow(cursor)
-        subRow.values = fundingRowValues(f)
+        subRow.values = fundingRowValues(f, o.id)
         subRow.height = ROW_HEIGHT.body
         for (const c of COLUMNS) {
           const cell = subRow.getCell(c.key)
           cell.border = ALL_BORDERS
-          cell.fill = SUBROW_FILL
+          cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
+          if (internal) cell.font = { color: { argb: XL.internal } }
           if (c.key === 'amount') cell.numFmt = NGN
         }
         if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
@@ -612,7 +642,7 @@ export async function exportFinanceReportPdf(
 
     if (o.fundingTracked) {
       for (const f of o.funding) {
-        const fv = fundingRowValues(f)
+        const fv = fundingRowValues(f, o.id)
         body.push(
           cellsFor('funding', {
             depositDate: fv.depositDate ? format(fv.depositDate, DATE_PATTERN) : '—',
@@ -656,6 +686,7 @@ export async function exportFinanceReportPdf(
 
   const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
   const differentialIndex = COLUMNS.findIndex((c) => c.key === 'differential')
+  const depositRefIndex = COLUMNS.findIndex((c) => c.key === 'depositRef')
 
   autoTable(doc, {
     startY: cursorY,
@@ -679,7 +710,18 @@ export async function exportFinanceReportPdf(
       const isSubRow =
         data.section === 'body' && Array.isArray(raw) && raw[refColumnIndex] === ''
       if (isSubRow) {
-        data.cell.styles.fillColor = PDF.subRowTint
+        // An internal transfer identifies itself by the reference cell the
+        // shared row builder stamps, so the two documents cannot disagree
+        // about which payments are internal.
+        // Both forms of internal money identify themselves in the reference
+        // cell the shared row builder stamps — "INTERNAL TRANSFER" for a
+        // recorded wallet movement, "OFF {ref}" for a remainder carried off
+        // another order's credit. Reading it here keeps the PDF's colouring
+        // tied to the same fact the workbook and the screen use.
+        const refCell = Array.isArray(raw) ? String(raw[depositRefIndex] ?? '').toUpperCase() : ''
+        const internal = refCell === 'INTERNAL TRANSFER' || refCell.startsWith('OFF ')
+        data.cell.styles.fillColor = internal ? PDF.internalTint : PDF.subRowTint
+        if (internal) data.cell.styles.textColor = PDF.internal
         return
       }
       if (data.section === 'body' && data.column.index === refColumnIndex) {

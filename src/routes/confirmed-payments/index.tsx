@@ -5,6 +5,7 @@ import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
   FileSpreadsheet, ArrowRight, RefreshCw, Unlink, Wallet,
+  ArrowUpCircle, ArrowDownCircle, Repeat, Scale,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -28,7 +29,8 @@ import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-or
 import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
-  orderPaidInto, orderCompany, orderDifferential, orderPaymentSources,
+  orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
+  paymentBreakdown, isInternalTransfer, carriedFromOrder,
   walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
@@ -83,31 +85,66 @@ function Row({ label, value, icon: Icon }: { label: string; value: React.ReactNo
  * differential, a shortfall. Everything else stays foreground, so red and
  * green never become decoration and always read as the same fact.
  */
+/**
+ * The report's colour language, defined once.
+ *
+ * Three meanings, and only these three, wherever a figure appears — the
+ * table, this summary, and both exports:
+ *
+ *   red    money still owed
+ *   green  money received beyond what was billed
+ *   blue   money that moved inside the business, never through a bank
+ *
+ * Colour is never decoration here. A figure with no sign to carry stays
+ * foreground, so red and green always mean the same thing at a glance.
+ */
+const TONE_CLASS = {
+  plain: 'text-foreground',
+  owed: 'text-destructive',
+  over: 'text-accent',
+  internal: 'text-blue-600 dark:text-blue-400',
+} as const
+
+const TONE_CHIP = {
+  plain: 'bg-muted text-muted-foreground ring-border',
+  owed: 'bg-destructive/10 text-destructive ring-destructive/20',
+  over: 'bg-accent/10 text-accent ring-accent/20',
+  internal: 'bg-blue-50 text-blue-700 ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900',
+} as const
+
+type Tone = keyof typeof TONE_CLASS
+
 function SummaryItem({
   label,
   value,
   tone = 'plain',
   hint,
+  icon: Icon,
 }: {
   label: string
   value: React.ReactNode
-  tone?: 'plain' | 'owed' | 'over'
+  tone?: Tone
   hint?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  icon?: any
 }) {
   return (
-    <div className="min-w-0">
-      <p className={cn(MICRO, 'text-muted-foreground')}>{label}</p>
-      <p
-        className={cn(
-          'mt-0.5 truncate text-sm font-semibold',
-          tone === 'owed' && 'text-destructive',
-          tone === 'over' && 'text-accent',
-          tone === 'plain' && 'text-foreground',
-        )}
-      >
-        {value}
-      </p>
-      {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>}
+    <div className="flex min-w-0 items-start gap-2.5">
+      {Icon && (
+        <span className={cn('mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset', TONE_CHIP[tone])}>
+          <Icon className="size-3.5" />
+        </span>
+      )}
+      <div className="min-w-0">
+        <p className={cn(MICRO, 'text-muted-foreground')}>{label}</p>
+        {/* Deliberately NOT truncated. These are money figures a person is
+            checking against their own arithmetic — half of "11,008,487,207.00"
+            is worse than a second line. */}
+        <p className={cn('mt-0.5 text-sm font-semibold break-words', TONE_CLASS[tone])}>
+          {value}
+        </p>
+        {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+      </div>
     </div>
   )
 }
@@ -118,16 +155,21 @@ function SummaryItem({
  * breakdown below is commented out on purpose and kept only for reference —
  * see isPaystackFunding.
  */
-function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?: () => void }) {
+function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; orderId: number; onUnmatch?: () => void }) {
   const ps = (funding.paystackDetails || {}) as Record<string, any>
   const paystack = isPaystackFunding(funding)
   const recorder = fundingRecorder(funding) || null
+  const carried = carriedFromOrder(funding, orderId)
 
   return (
     <div className="rounded-lg border border-warning/20 bg-warning/5 p-3">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <Badge className="bg-warning/15 text-warning border-warning/30 font-normal">
-          {paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
+        <Badge className={cn('font-normal', carried
+          ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900'
+          : 'bg-warning/15 text-warning border-warning/30')}>
+          {carried
+            ? `Transfer from ${carried.ref}`
+            : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
         </Badge>
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">{naira(Number(funding.amount))}</span>
@@ -168,7 +210,15 @@ function FundingCard({ funding, onUnmatch }: { funding: OrderFunding; onUnmatch?
         )} */}
         {!paystack && (
           <>
-            <Row label="Depositor / payer" value={fundingDepositor(funding)} icon={User} />
+            {carried ? (
+              <Row
+                label="Source"
+                value={`Remainder of ${fundingReference(funding) || 'a bank credit'}, which settled ${carried.ref}`}
+                icon={Repeat}
+              />
+            ) : (
+              <Row label="Depositor / payer" value={fundingDepositor(funding)} icon={User} />
+            )}
             <Row label="Receiving bank" value={ps.bankName || ps.receiverBankName} icon={Landmark} />
             <Row label="Receiving account name" value={ps.accountName || ps.receiverAccountName} icon={User} />
             <Row label="Receiving account number" value={ps.accountNumber || ps.receiverAccountNumber} icon={CreditCard} />
@@ -323,6 +373,7 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
                   <FundingCard
                     key={f.depositId}
                     funding={f}
+                    orderId={order.id}
                     onUnmatch={onUnmatch ? () => onUnmatch(f) : undefined}
                   />
                 ))}
@@ -413,42 +464,35 @@ function FinanceReportPage() {
     [rows],
   )
 
-  // The money actually received — the same deposit figures the Amount Paid
-  // column lists, not the orders' own totals, which are what was owed and
-  // already shown as Sales Value.
-  //
-  // Each order's own share, summed. The column shows the slice attributed to
-  // the order rather than the whole deposit (see fundingAmount), so the rows
-  // add up without a deposit shared between orders being counted twice.
-  //
-  // Through orderPaymentSources rather than o.funding directly: an order paid
-  // from wallet balance has no allocation entry to walk, so walking only that
-  // left every such order out of the total while its statement line sat
-  // printed in the column above.
-  const totalAmountPaid = useMemo(() => {
-    const seen = new Set<number>()
-    let sum = 0
-    for (const o of rows) {
-      for (const s of orderPaymentSources(o)) {
-        // Only the shared kind is counted once. An allocation slice is
-        // already specific to its order, so deduping those would drop every
-        // order after the first that a split deposit paid for.
-        if (s.shared) {
-          if (seen.has(s.depositId)) continue
-          seen.add(s.depositId)
-        }
-        sum += s.amount
-      }
-      // Balance that predates the allocation ledger has no funding row to sit
-      // on, so it appears in no column — but it was still paid, and
-      // orderAmountPaid counts it, which is what Differential is measured
-      // against. Left out, the footer and the Differential column would be
-      // computed on different bases and could never be reconciled against each
-      // other.
-      if (o.fundingTracked) sum += Number(o.unattributedAmount || 0)
-    }
-    return sum
-  }, [rows])
+  /**
+   * What the orders in view were paid — orderAmountPaid, summed, and nothing
+   * else.
+   *
+   * This used to total the funding entries instead, which put it on a
+   * different basis from the Differential column beside it and made the two
+   * impossible to reconcile:
+   *
+   *   - a deposit split across orders was counted whole against each of them
+   *     (FG11437 read 50m over its own sales value)
+   *   - balance predating the allocation ledger appeared in no entry at all
+   *   - an order with no allocation records — 5,742 of them across all time —
+   *     contributed only whatever wallet credits could be traced, usually
+   *     nothing, so a wide date range reported 228bn received against 634bn
+   *     billed and a 406bn shortfall that does not exist
+   *
+   * orderAmountPaid answers one question per order — what was this order
+   * paid — and every figure on the page now derives from it. The funding rows
+   * beneath an order are evidence of where its money came from, not a
+   * competing total: they can be fewer than the order was paid (an untraced
+   * wallet balance) without either being wrong.
+   *
+   * Because it is per-order, nothing needs deduplicating: a payment shared
+   * between two orders contributes its own slice to each.
+   */
+  const totalAmountPaid = useMemo(
+    () => rows.reduce((sum, o) => sum + orderAmountPaid(o), 0),
+    [rows],
+  )
 
   // Summed from the per-order differentials rather than computed as
   // totalSalesValue − totalAmountPaid: those two are on different bases (the
@@ -460,7 +504,21 @@ function FinanceReportPage() {
     [rows],
   )
 
+  /**
+   * Where the difference between billed and received actually is.
+   *
+   * A net differential alone cannot be checked: on PFI 39/26 it was six
+   * overpaid orders totalling 169,552.50 against 11bn billed, and nothing on
+   * the page said so. Every figure below is derived from the same
+   * orderDifferential the column uses, so it always adds back to the totals
+   * beside it.
+   */
+  const breakdown = useMemo(() => paymentBreakdown(rows), [rows])
+
   const summary: FinanceReportSummary = {
+    // The breakdown rides along so the exports print the same three figures
+    // the screen shows, rather than a bare differential nobody can check.
+    breakdown,
     count: totals?.count ?? 0,
     totalQuantity: totals?.totalQuantity ?? 0,
     totalSalesValue,
@@ -683,17 +741,45 @@ function FinanceReportPage() {
           <span className={MICRO}>Report summary</span>
           {isFetching && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
         </div>
-        <div className={cn(PANEL_BODY, 'grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6')}>
-          <SummaryItem label="Number of orders" value={summary.count.toLocaleString()} />
-          <SummaryItem label="Period" value={periodLabel} />
-          <SummaryItem label="Total quantity" value={`${summary.totalQuantity.toLocaleString()} L`} />
-          <SummaryItem label="Location" value={locationName} />
-          <SummaryItem label="PFI" value={selectedPfi?.pfiNumber || 'All PFIs'} />
-          <SummaryItem label="Product" value={productName} />
-          <SummaryItem label="Total sales value" value={naira(summary.totalSalesValue)} />
-          <SummaryItem label="Total amount paid" value={naira(summary.totalAmountPaid)} />
+        <div className={cn(PANEL_BODY, 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4')}>
+          <SummaryItem icon={FileText} label="Number of orders" value={summary.count.toLocaleString()} />
+          <SummaryItem icon={Clock} label="Period" value={periodLabel} />
+          <SummaryItem icon={Droplets} label="Total quantity" value={`${summary.totalQuantity.toLocaleString()} L`} />
+          <SummaryItem icon={Landmark} label="Location" value={locationName} />
+          <SummaryItem icon={Hash} label="PFI" value={selectedPfi?.pfiNumber || 'All PFIs'} />
+          <SummaryItem icon={Droplets} label="Product" value={productName} />
+          <SummaryItem icon={Banknote} label="Total sales value" value={naira(summary.totalSalesValue)} />
+          <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
+
+          {/*
+            The three ways billed and received come apart, each with the count
+            behind it — a figure you can go and check, rather than a net number
+            you have to take on trust.
+          */}
           <SummaryItem
-            label="Total differential"
+            icon={ArrowUpCircle}
+            tone={breakdown.overpaidTotal > 0 ? 'over' : 'plain'}
+            label="Overpaid"
+            value={naira(breakdown.overpaidTotal)}
+            // hint={`${breakdown.overpaidCount} order${breakdown.overpaidCount === 1 ? '' : 's'} received more than billed`}
+          />
+          <SummaryItem
+            icon={ArrowDownCircle}
+            tone={breakdown.shortTotal > 0 ? 'owed' : 'plain'}
+            label="Shortfall"
+            value={naira(breakdown.shortTotal)}
+            // hint={`${breakdown.shortCount} order${breakdown.shortCount === 1 ? '' : 's'} still owing`}
+          />
+          <SummaryItem
+            icon={Repeat}
+            tone={breakdown.internalCount > 0 ? 'internal' : 'plain'}
+            label="Internal transfers"
+            value={naira(breakdown.internalTotal)}
+            // hint={`${breakdown.internalCount} payment${breakdown.internalCount === 1 ? '' : 's'} moved inside the business`}
+          />
+          <SummaryItem
+            icon={Scale}
+            label="Net differential"
             value={
               Math.abs(summary.totalDifferential) < 0.005
                 ? naira(0)
@@ -708,7 +794,11 @@ function FinanceReportPage() {
                   ? 'owed'
                   : 'over'
             }
-            hint={summary.totalDifferential > 0 ? 'Still owed' : summary.totalDifferential < 0 ? 'Overpaid' : 'Fully reconciled'}
+            // hint={
+            //   Math.abs(summary.totalDifferential) < 0.005
+            //     ? `All ${breakdown.exactCount.toLocaleString()} orders reconcile exactly`
+            //     : `Shortfall less overpaid · ${breakdown.exactCount.toLocaleString()} of ${summary.count.toLocaleString()} exact`
+            // }
           />
           {selectedPfi && (
             <>
@@ -895,21 +985,59 @@ function FinanceReportPage() {
                         )
                       })}
                       {o.fundingTracked && o.funding.map((f) => {
+                        // Money that never came through a bank. It has no
+                        // statement line and no reference because none exists,
+                        // which is indistinguishable from missing data unless
+                        // it is said out loud — so it is said in blue.
+                        // A recorded wallet transfer, or a remainder carried
+                        // off another order's bank credit. Both are money that
+                        // did not arrive from a bank on this order, so both
+                        // read blue and neither pretends to a bank reference.
+                        const carried = carriedFromOrder(f, o.id)
+                        const internal = isInternalTransfer(f) || !!carried
                         const fundingCells: Record<string, React.ReactNode> = {
                           depositDate: (
                             <span className="whitespace-nowrap text-muted-foreground">
                               {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
                             </span>
                           ),
-                          depositor: <span className="block max-w-[12rem] truncate">{fundingDepositor(f) || '—'}</span>,
-                          depositRef: <span className="block max-w-[10rem] truncate">{fundingReference(f) || '—'}</span>,
-                          // What actually landed, not the slice attributed to
-                          // this order — see fundingAmount.
-                          amount: <span className="whitespace-nowrap font-semibold">{naira(fundingAmount(f))}</span>,
+                          depositor: (
+                            <span className={cn('flex items-center gap-1.5', internal && TONE_CLASS.internal)}>
+                              {internal && <Repeat className="size-3 shrink-0" />}
+                              <span className="block max-w-[11rem] truncate">
+                                {carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'}
+                              </span>
+                            </span>
+                          ),
+                          depositRef: (
+                            <span
+                              className={cn('block max-w-[10rem] truncate', internal && TONE_CLASS.internal)}
+                              // The bank reference is still on the row for
+                              // anyone tracing it — it is simply no longer
+                              // presented as this order's own bank line.
+                              title={carried ? `Remainder of ${fundingReference(f)}, which settled ${carried.ref}` : undefined}
+                            >
+                              {carried
+                                ? `off ${fundingReference(f) || 'credit'}`
+                                : internal ? 'Internal transfer' : fundingReference(f) || '—'}
+                            </span>
+                          ),
+                          amount: (
+                            <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
+                              {naira(fundingAmount(f))}
+                            </span>
+                          ),
                           recordedBy: <span className="block max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</span>,
                         }
                         return (
-                          <TableRow key={`${o.id}-funding-${f.depositId}`} className="bg-muted/20 hover:bg-muted/30">
+                          <TableRow
+                            key={`${o.id}-funding-${f.depositId}`}
+                            className={cn(
+                              internal
+                                ? 'bg-blue-50/60 hover:bg-blue-50 dark:bg-blue-950/30 dark:hover:bg-blue-950/50'
+                                : 'bg-muted/20 hover:bg-muted/30',
+                            )}
+                          >
                             {REPORT_COLUMNS.map((c) => (
                               <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
                                 {c.scope === 'funding' ? fundingCells[c.key] : null}
