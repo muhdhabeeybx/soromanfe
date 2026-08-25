@@ -15,7 +15,7 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { useExpenses, useDeleteExpense, DELETABLE_STATUSES, isExpenseEditable, type PfiExpense, type ExpenseFilters } from '#/lib/hooks/usePfis'
+import { useExpenses, useDeleteExpense, isExpenseDeletable, isExpenseEditable, type PfiExpense, type ExpenseFilters } from '#/lib/hooks/usePfis'
 import { ExpenseDialog } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
 import { naira } from '#/routes/pfi/-pfi-utils'
@@ -190,7 +190,7 @@ function MyRequestsPage() {
                             <Lock /><span className="sr-only">Paid — locked</span>
                           </Button>
                         )}
-                        {DELETABLE_STATUSES.has(e.status) && (
+                        {isExpenseDeletable(e) && (
                           <Button
                             variant="ghost" size="icon-sm" title="Delete"
                             disabled={remove.isPending}

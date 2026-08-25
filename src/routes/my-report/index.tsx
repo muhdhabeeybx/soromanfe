@@ -29,6 +29,21 @@ function MyReportPage() {
   const mine = userRoles.map((r) => ROLE_REPORT[r]).filter(Boolean) as ReportType[]
   const available = isSuperAdmin ? ALL_TYPES : [...new Set(mine)]
   const [active, setActive] = useState<ReportType | null>(available[0] ?? null)
+  /**
+   * A report picked for editing from a tab that does not own its type.
+   *
+   * Every tab lists every report someone has filed, so Edit is frequently
+   * pressed on a row belonging to another type. The form is built from the
+   * active type, so the page switches to the owning tab and hands the report
+   * over rather than loading it into the wrong one.
+   */
+  const [handoff, setHandoff] = useState<{ type: ReportType; report: any } | null>(null)
+
+  const requestEdit = (type: ReportType, report: any) => {
+    if (!available.includes(type)) return
+    setActive(type)
+    setHandoff({ type, report })
+  }
 
   /**
    * No filing role — but possibly a filing history.
@@ -104,7 +119,12 @@ function MyReportPage() {
 
       {/* Keyed so switching tabs resets the form rather than carrying one
           report's half-filled values into another's fields. */}
-      <ReportPanel key={current.type} def={current} />
+      <ReportPanel
+        key={current.type}
+        def={current}
+        initialEdit={handoff?.type === current.type ? handoff.report : null}
+        onRequestEdit={requestEdit}
+      />
     </div>
   )
 }

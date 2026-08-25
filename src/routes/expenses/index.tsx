@@ -20,7 +20,7 @@ import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useExpenses, useExpenseCategories, useDeleteExpense,
-  type PfiExpense, type ExpenseFilters, DELETABLE_STATUSES, isExpenseEditable,
+  type PfiExpense, type ExpenseFilters, isExpenseDeletable, isExpenseEditable,
 } from '#/lib/hooks/usePfis'
 import { ExpenseDialog, cash, plain } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
@@ -364,10 +364,9 @@ function ExpensesPage() {
                             <Lock /><span className="sr-only">Paid — locked</span>
                           </Button>
                         )}
-                        {/* Past "With CFO" the chain has already spent effort on
-                            it — reject or send it back instead, so the paperwork
-                            remembers why rather than the row just vanishing. */}
-                        {DELETABLE_STATUSES.has(e.status) && (
+                        {/* Withdrawable until the money leaves — see
+                            isExpenseDeletable. */}
+                        {isExpenseDeletable(e) && (
                           <Button
                             variant="ghost" size="icon-sm" title="Delete"
                             disabled={remove.isPending}

@@ -256,7 +256,19 @@ function TopCustomersEditor({ rows, onChange }: { rows: TopRow[]; onChange: (r: 
   )
 }
 
-export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; historyOnly?: boolean }) {
+export function ReportPanel({
+  def,
+  historyOnly = false,
+  initialEdit = null,
+  onRequestEdit,
+}: {
+  def: ReportDef
+  historyOnly?: boolean
+  /** A report handed over from another tab, to be loaded into this form. */
+  initialEdit?: any | null
+  /** Ask the page to switch to `type` and open `report` there. */
+  onRequestEdit?: (type: ReportType, report: any) => void
+}) {
   const qc = useQueryClient()
   const toast = useToast()
   const [form, setForm] = useState(() => blankForm(def))
@@ -265,21 +277,21 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
   const [editingId, setEditingId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
   /**
-   * Show every report this person has filed, not just this panel's type.
+   * There is no type filter. "Your submissions" means everything you filed.
    *
-   * ON by default. Off, "Your submissions" quietly meant "your submissions of
-   * the type this tab happens to be", and what someone filed is history while
-   * the tabs are built from the roles they hold today — the two drift the
-   * moment anyone is reassigned. On live data that hid 23 of one filer's 23
-   * reports (all sales_manager, now holding only it_compliance) and part of
-   * three other people's, while the API was returning every one of them
-   * correctly. Nobody looking at an empty list thinks to tick a box.
+   * This was once filtered to the active tab's type, with a checkbox to widen
+   * it. The tabs are built from the roles you hold today and what you filed is
+   * history, so the two drift the moment anyone is reassigned — on live data
+   * that hid 52 of 414 reports, two people seeing none of their own at all.
+   * A checkbox was the wrong remedy: nobody looking at an empty list thinks to
+   * tick one.
    *
-   * The server scopes to the caller either way, so this only ever widens
-   * across a person's OWN records, never anyone else's.
+   * The server scopes to the caller regardless, so this only ever spans a
+   * person's OWN records, never anyone else's.
    */
-  const [allTypes, setAllTypes] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
+  /** id of the handed-over report already loaded, so it loads exactly once. */
+  const [loadedHandoff, setLoadedHandoff] = useState<number | null>(null)
 
   // Only active batches can be reported against, and every PFI carries its
   // own location and remaining balance — so location and opening stock are
@@ -444,21 +456,16 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
   ])
 
   /**
-   * Filtered by type in SQL and paged by the server — one page number, not
-   * the two the upstream version used, which skipped records on every "next".
-   *
-   * `allTypes` drops the type filter. Every report filed before the per-role
-   * panels existed was written as `sales_manager` whatever the filer's role,
-   * so a product manager or compliance officer looking at their own panel
-   * sees none of their own history — it is all sitting under a type they
-   * never pick. The server still scopes to the caller either way, so this
-   * only ever widens across *their own* records, never anyone else's.
+   * Paged by the server — one page number, not the two the upstream version
+   * used, which skipped records on every "next".
    */
   const { data, isLoading } = useQuery({
-    queryKey: ['daily-reports', def.type, page, allTypes],
+    // No def.type in the key: every panel shows the same set, so they share
+    // one cache entry instead of refetching identical data per tab.
+    queryKey: ['daily-reports', 'mine', page],
     queryFn: async () => {
       const res = await api.get('/daily-reports', {
-        params: { ...(allTypes ? {} : { reportType: def.type }), page, limit: PAGE_SIZE },
+        params: { page, limit: PAGE_SIZE },
       })
       return res.data.data as { reports: any[]; pagination?: { total: number; pages?: number } }
     },
@@ -518,7 +525,7 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
     },
     onSuccess: (res) => {
       toast.success(res?.message || (editingId ? 'Report updated' : 'Report submitted'))
-      qc.invalidateQueries({ queryKey: ['daily-reports', def.type] })
+      qc.invalidateQueries({ queryKey: ['daily-reports'] })
       reset()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
@@ -529,13 +536,28 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
     mutationFn: async (id: number) => (await api.delete(`/daily-reports/${id}`)).data,
     onSuccess: () => {
       toast.success('Report deleted')
-      qc.invalidateQueries({ queryKey: ['daily-reports', def.type] })
+      qc.invalidateQueries({ queryKey: ['daily-reports'] })
       setConfirmDelete(null)
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
+  /**
+   * Load a row into the form.
+   *
+   * A report of another type is handed to the tab that owns it instead. The
+   * form is built from `def` and the save posts `reportType: def.type`, so
+   * editing a foreign row here would not merely show the wrong fields — it
+   * would rewrite that report as this panel's type and blank every figure the
+   * two layouts do not share. Now that the list spans every type, that path
+   * is reachable from any tab, so it is closed rather than guarded.
+   */
   const edit = (r: any) => {
+    if (r.reportType && r.reportType !== def.type) {
+      if (onRequestEdit) onRequestEdit(r.reportType as ReportType, r)
+      else toast.error(`This is a ${REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType} report — open that tab to edit it`)
+      return
+    }
     const next = blankForm(def)
     next.reportDate = String(r.reportDate ?? '').slice(0, 10)
     next.location = r.location ?? ''
@@ -610,6 +632,13 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
     autoTable(doc, { startY: 40, body, styles: { fontSize: 9, cellPadding: 2.5 } })
     const stamp = r.reportDate ? format(new Date(r.reportDate), 'yyyyMMdd') : 'report'
     doc.save(`${def.filePrefix}_${(r.location || 'ALL').replace(/\s+/g, '')}_${stamp}.pdf`)
+  }
+
+  // A report handed over from another tab, loaded during render rather than
+  // in an effect so the form is correct on the first paint after the switch.
+  if (initialEdit && initialEdit.id !== loadedHandoff && initialEdit.reportType === def.type) {
+    setLoadedHandoff(initialEdit.id)
+    edit(initialEdit)
   }
 
   const ready = form.reportDate !== '' && (def.requireLocation === false || form.location.trim() !== '')
@@ -736,30 +765,17 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={cn(MICRO, 'text-muted-foreground')}>Your submissions</span>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                className="size-3.5"
-                checked={allTypes}
-                onChange={(e) => { setAllTypes(e.target.checked); setPage(1) }}
-              />
-              All my report types
-            </label>
-            {total > 0 && <span className="text-sm text-muted-foreground">{total} filed</span>}
-          </div>
+          {total > 0 && <span className="text-sm text-muted-foreground">{total} filed</span>}
         </div>
 
         {isLoading ? (
           <div className="flex justify-center py-12"><Loader2 className="animate-spin" /></div>
         ) : rows.length === 0 ? (
           <PageEmpty
-            title={allTypes ? 'Nothing filed yet' : 'No reports of this type yet'}
-            description={
-              allTypes
-                ? 'Fill the form above to file your first one.'
-                : "Fill the form above to file one — or tick \"All my report types\" to see reports you filed before this panel existed."
-            }
+            title="Nothing filed yet"
+            description={historyOnly
+              ? 'Nothing has been filed under your account.'
+              : 'Fill the form above to file your first one.'}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -769,7 +785,7 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
                   <TableHead>Date</TableHead>
                   <TableHead>Location</TableHead>
                   <TableHead className="hidden md:table-cell">PFI</TableHead>
-                  {allTypes && <TableHead>Type</TableHead>}
+                  <TableHead>Type</TableHead>
                   {metricColumns.map((c) => (
                     <TableHead key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
                       {c.label}
@@ -790,11 +806,9 @@ export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; hist
                     <TableCell className="hidden md:table-cell text-muted-foreground">
                       {r.pfiNumber || '—'}
                     </TableCell>
-                    {allTypes && (
-                      <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType || '—'}
-                      </TableCell>
-                    )}
+                    <TableCell className="text-muted-foreground whitespace-nowrap">
+                      {REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType || '—'}
+                    </TableCell>
                     {metricColumns.map((c) => {
                       const v = columnValue(r, c.key)
                       return (

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { format } from 'date-fns'
-import { Loader2, Send, ExternalLink } from 'lucide-react'
+import { Loader2, Send, ExternalLink, Pencil, Trash2, Lock } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 
 import {
@@ -15,7 +15,8 @@ import { Badge } from '#/components/ui/badge'
 import { MICRO } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
-  useExpenseDetail, useReviewExpense, useAddExpenseComment, useAttachFiles, ACTION_META, STATUS_TONE,
+  useExpenseDetail, useReviewExpense, useAddExpenseComment, useAttachFiles, useDeleteExpense,
+  ACTION_META, STATUS_TONE, isExpenseEditable, isExpenseDeletable,
   type PfiExpense, type ExpenseAction,
 } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
@@ -84,6 +85,8 @@ export function ExpenseReviewDrawer({
   const { data: banks } = useBankAccounts({ status: 'Active' })
   const review = useReviewExpense()
   const addComment = useAddExpenseComment()
+  const remove = useDeleteExpense()
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const attach = useAttachFiles()
   const toast = useToast()
   const [pending, setPending] = useState<ExpenseAction | null>(null)
@@ -523,13 +526,58 @@ export function ExpenseReviewDrawer({
               </p>
             )}
 
-            <DialogFooter>
-              {/* After a reject or send-back, editing is always the next thing
-                  the submitter does. */}
-              {(expense.status === 'rejected' || expense.status === 'changes_requested') && (
-                <Button variant="outline" onClick={() => { onOpenChange(false); onEdit(expense) }}>
-                  Correct and resubmit
-                </Button>
+            {/*
+              Edit and delete live here as well as on the row. This dialog is
+              where the request is actually read — the amounts, the
+              attachments, the history — so it is where someone decides it is
+              wrong, and having to close it and find the row again to act on
+              that decision is the wrong way round.
+            */}
+            <DialogFooter className="gap-2 sm:gap-2">
+              {confirmDelete ? (
+                <div className="mr-auto flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Delete this request?</span>
+                  <Button
+                    variant="destructive" size="sm" disabled={remove.isPending}
+                    onClick={async () => {
+                      await remove.mutateAsync(expense.id)
+                      setConfirmDelete(false)
+                      onOpenChange(false)
+                    }}
+                  >
+                    {remove.isPending && <Loader2 className="animate-spin" />}
+                    Yes, delete
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+                </div>
+              ) : (
+                <div className="mr-auto flex items-center gap-2">
+                  {isExpenseEditable(expense) ? (
+                    <Button variant="outline" onClick={() => { onOpenChange(false); onEdit(expense) }}>
+                      <Pencil data-icon="inline-start" />
+                      {/* After a reject or send-back, correcting it is the
+                          submitter's next move, so the label says so. */}
+                      {expense.status === 'rejected' || expense.status === 'changes_requested'
+                        ? 'Correct and resubmit'
+                        : 'Edit'}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled title="Paid — this expense is closed">
+                      <Lock data-icon="inline-start" />
+                      Paid — locked
+                    </Button>
+                  )}
+                  {isExpenseDeletable(expense) && (
+                    <Button
+                      variant="ghost"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      <Trash2 data-icon="inline-start" />
+                      Delete
+                    </Button>
+                  )}
+                </div>
               )}
               <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
             </DialogFooter>

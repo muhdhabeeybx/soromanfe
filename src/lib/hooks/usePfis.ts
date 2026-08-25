@@ -197,7 +197,15 @@ export const STATUS_TONE: Record<ExpenseStatus, string> = {
  * that the chain has already spent effort approving it, so reject or send it
  * back instead of making the row vanish.
  */
-export const DELETABLE_STATUSES = new Set<ExpenseStatus>(['pending', 'changes_requested', 'verified'])
+/**
+ * Deletable until the money leaves — the same line edit draws.
+ *
+ * This was pending / changes_requested / verified, which left the officer who
+ * raised a request unable to withdraw their own mistake once anyone had
+ * approved it. "Reject" is the reviewer's verb, not the raiser's.
+ */
+export const isExpenseDeletable = (e: { status: ExpenseStatus }): boolean =>
+  e.status !== 'paid'
 
 /**
  * Editable until it is paid — mirrors chain.canEditExpense on the server.
