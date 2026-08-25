@@ -256,7 +256,7 @@ function TopCustomersEditor({ rows, onChange }: { rows: TopRow[]; onChange: (r: 
   )
 }
 
-export function ReportPanel({ def }: { def: ReportDef }) {
+export function ReportPanel({ def, historyOnly = false }: { def: ReportDef; historyOnly?: boolean }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [form, setForm] = useState(() => blankForm(def))
@@ -264,8 +264,21 @@ export function ReportPanel({ def }: { def: ReportDef }) {
   const [topRows, setTopRows] = useState<TopRow[]>(() => (def.type === 'it_compliance' ? emptyTopRows() : []))
   const [editingId, setEditingId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
-  /** Show every report this person has filed, not just this panel's type. */
-  const [allTypes, setAllTypes] = useState(false)
+  /**
+   * Show every report this person has filed, not just this panel's type.
+   *
+   * ON by default. Off, "Your submissions" quietly meant "your submissions of
+   * the type this tab happens to be", and what someone filed is history while
+   * the tabs are built from the roles they hold today — the two drift the
+   * moment anyone is reassigned. On live data that hid 23 of one filer's 23
+   * reports (all sales_manager, now holding only it_compliance) and part of
+   * three other people's, while the API was returning every one of them
+   * correctly. Nobody looking at an empty list thinks to tick a box.
+   *
+   * The server scopes to the caller either way, so this only ever widens
+   * across a person's OWN records, never anyone else's.
+   */
+  const [allTypes, setAllTypes] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
   // Only active batches can be reported against, and every PFI carries its
@@ -453,6 +466,16 @@ export function ReportPanel({ def }: { def: ReportDef }) {
 
   const rows = data?.reports ?? []
   const total = data?.pagination?.total ?? rows.length
+  /**
+   * The per-type metric columns only mean anything when every row is that
+   * type. Across a mixed list they read off keys a foreign row does not have
+   * and print a column of dashes under a heading like "Litres sold", which
+   * looks like missing data rather than a column that does not apply. So they
+   * are shown only when the list is actually of one type; the row's own
+   * figures stay reachable through its PDF.
+   */
+  const mixed = new Set(rows.map((r) => r.reportType)).size > 1
+  const metricColumns = mixed ? [] : def.columns
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const reset = () => {
@@ -593,6 +616,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
 
   return (
     <div className="space-y-6">
+      {!historyOnly && (
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={cn(MICRO, 'text-muted-foreground')}>
@@ -707,6 +731,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
           </div>
         </div>
       </section>
+      )}
 
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
@@ -745,7 +770,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                   <TableHead>Location</TableHead>
                   <TableHead className="hidden md:table-cell">PFI</TableHead>
                   {allTypes && <TableHead>Type</TableHead>}
-                  {def.columns.map((c) => (
+                  {metricColumns.map((c) => (
                     <TableHead key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
                       {c.label}
                     </TableHead>
@@ -770,7 +795,7 @@ export function ReportPanel({ def }: { def: ReportDef }) {
                         {REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType || '—'}
                       </TableCell>
                     )}
-                    {def.columns.map((c) => {
+                    {metricColumns.map((c) => {
                       const v = columnValue(r, c.key)
                       return (
                         <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
