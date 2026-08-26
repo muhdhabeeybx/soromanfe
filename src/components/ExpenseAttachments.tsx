@@ -60,6 +60,71 @@ export function FileButton({
   )
 }
 
+/**
+ * The wide drop target the request form uses.
+ *
+ * A small "Attach files" button tucked beside a heading reads as optional,
+ * and the paperwork is the part of a request that most often arrives missing
+ * — an approver cannot verify a payment against a description. A target the
+ * width of the form, that also accepts a dragged file, says the opposite.
+ *
+ * Same no-filter rule as FileButton: a receipt is whatever the vendor handed
+ * over, and refusing it here means it never gets attached at all.
+ */
+export function FileDropZone({
+  busy, onFiles, hint,
+}: {
+  busy: boolean
+  onFiles: (files: FileList) => void
+  hint?: string
+}) {
+  const input = useRef<HTMLInputElement>(null)
+  const [over, setOver] = useState(false)
+
+  return (
+    <>
+      <input
+        ref={input} type="file" multiple className="hidden"
+        onChange={(e) => {
+          if (e.target.files?.length) onFiles(e.target.files)
+          e.target.value = ''
+        }}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => input.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setOver(true) }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setOver(false)
+          if (e.dataTransfer.files?.length) onFiles(e.dataTransfer.files)
+        }}
+        className={cn(
+          'flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed px-4 py-7 text-center transition-colors duration-200',
+          over
+            ? 'border-accent bg-accent/10'
+            : 'border-foreground/20 hover:border-accent/50 hover:bg-muted/40',
+          busy && 'opacity-60',
+        )}
+      >
+        {busy ? (
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        ) : (
+          <Upload className={cn('size-6', over ? 'text-accent' : 'text-muted-foreground')} />
+        )}
+        <span className="text-sm font-semibold">
+          {busy ? 'Uploading…' : 'Upload invoice or document'}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {hint ?? 'Drag a file here, or click to browse. PDFs, photos and scans all work.'}
+        </span>
+      </button>
+    </>
+  )
+}
+
 export function FileRow({
   name, size, href, onRemove, removing,
 }: {
@@ -99,7 +164,14 @@ export function FileRow({
  * Attachments on a request that already exists — the drawer, and the edit form.
  * Files register the moment they finish uploading.
  */
-export function ExpenseAttachments({ expenseId, canEdit = true }: { expenseId: number; canEdit?: boolean }) {
+export function ExpenseAttachments({
+  expenseId, canEdit = true, dropZone = false,
+}: {
+  expenseId: number
+  canEdit?: boolean
+  /** The request form wants the wide target; the review drawer keeps the button. */
+  dropZone?: boolean
+}) {
   const { data: files, isLoading } = useExpenseAttachments(expenseId)
   const attach = useAttachFiles()
   const remove = useDeleteAttachment()
@@ -120,12 +192,14 @@ export function ExpenseAttachments({ expenseId, canEdit = true }: { expenseId: n
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className={cn(MICRO, 'text-muted-foreground')}>
-          Attachments{files?.length ? ` (${files.length})` : ''}
-        </p>
-        {canEdit && <FileButton busy={busy} onFiles={onFiles} />}
-      </div>
+      {!dropZone && (
+        <div className="flex items-center justify-between gap-2">
+          <p className={cn(MICRO, 'text-muted-foreground')}>
+            Attachments{files?.length ? ` (${files.length})` : ''}
+          </p>
+          {canEdit && <FileButton busy={busy} onFiles={onFiles} />}
+        </div>
+      )}
 
       {isLoading ? (
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -146,10 +220,22 @@ export function ExpenseAttachments({ expenseId, canEdit = true }: { expenseId: n
             />
           ))}
         </div>
-      ) : (
+      ) : !dropZone ? (
         <p className="text-sm text-muted-foreground/70">
           Nothing attached. Invoices, teller slips, anything supporting the request.
         </p>
+      ) : null}
+
+      {dropZone && canEdit && (
+        <FileDropZone
+          busy={busy}
+          onFiles={onFiles}
+          hint={
+            files?.length
+              ? 'Drag another file here, or click to browse.'
+              : undefined
+          }
+        />
       )}
     </div>
   )
@@ -186,12 +272,6 @@ export function PendingAttachments({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className={cn(MICRO, 'text-muted-foreground')}>
-          Attachments{files.length ? ` (${files.length})` : ''}
-        </p>
-        <FileButton busy={busy} onFiles={onFiles} />
-      </div>
       {files.length > 0 && (
         <div className="space-y-1.5">
           {files.map((f) => (
@@ -205,6 +285,11 @@ export function PendingAttachments({
           ))}
         </div>
       )}
+      <FileDropZone
+        busy={busy}
+        onFiles={onFiles}
+        hint={files.length ? 'Drag another file here, or click to browse.' : undefined}
+      />
     </div>
   )
 }

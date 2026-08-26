@@ -16,7 +16,6 @@ import {
 import { useCreateVendor } from '#/lib/hooks/useVendors'
 import { VendorField, type VendorFieldValue } from '#/components/VendorField'
 import { PendingAttachments, ExpenseAttachments, type PendingFile } from '#/components/ExpenseAttachments'
-import { MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import { naira } from '#/routes/pfi/-pfi-utils'
 
@@ -39,7 +38,11 @@ const BLANK = {
   // The rate drives the deduction. Empty means the amount was typed by hand.
   wht_rate: '',
   wht_deduction: '',
-  receipt_reference: '',
+  // receipt_reference: dropped from the form. It duplicated the attachment —
+  // the receipt itself is uploaded — and was left blank on all but a handful
+  // of rows. Omitting it from the payload leaves an existing value untouched
+  // (the update path only writes fields that arrive), so historical rows keep
+  // theirs and the drawer still shows it.
   // Where the money is going. Captured up front so an approver can see the
   // destination account before authorising rather than after.
   payee_bank_name: '',
@@ -80,6 +83,49 @@ export const plain = (v: string | null | undefined) =>
  * Shared by both the officer-facing Expenses page and the My Requests page —
  * raising or correcting a request looks the same wherever it happens.
  */
+/**
+ * One labelled field.
+ *
+ * The label is real text, not the muted 10px micro-caps the rest of the app
+ * uses for column headings: this form is filled in by people who raise a
+ * request occasionally, not by anyone who has learned its layout, and a
+ * heading they have to squint at is a field they guess at. The hint sits
+ * between the label and the control so it is read as instruction rather than
+ * as an error after the fact.
+ */
+function Field({
+  label, hint, required, wide, children,
+}: {
+  label: string
+  hint?: string
+  required?: boolean
+  wide?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div className={cn('space-y-1.5', wide && 'sm:col-span-2')}>
+      <label className="block text-sm font-semibold leading-none">
+        {label}
+        {required && <span className="ml-1 text-destructive">*</span>}
+      </label>
+      {hint && <p className="text-xs leading-snug text-muted-foreground">{hint}</p>}
+      {children}
+    </div>
+  )
+}
+
+/** A rule with a title, so the form reads as four short steps not one long list. */
+function Section({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="sm:col-span-2">
+      <div className="flex items-baseline gap-2 border-b border-foreground/10 pb-1.5">
+        <h3 className="text-sm font-bold tracking-tight">{title}</h3>
+        {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+      </div>
+    </div>
+  )
+}
+
 export function ExpenseDialog({
   expense, open, onOpenChange,
 }: {
@@ -122,7 +168,6 @@ export function ExpenseDialog({
         invoice_amount: show(expense.invoice_amount),
         wht_rate: show(expense.wht_rate),
         wht_deduction: show(expense.wht_deduction),
-        receipt_reference: expense.receipt_reference || '',
         payee_bank_name: expense.payee_bank_name || '',
         payee_account_number: expense.payee_account_number || '',
         payee_account_name: expense.payee_account_name || '',
@@ -241,7 +286,6 @@ export function ExpenseDialog({
         invoice_amount: includeTax ? num(form.invoice_amount) : null,
         wht_deduction: includeTax ? (num(form.wht_deduction) ?? 0) : 0,
         wht_rate: includeTax ? num(form.wht_rate) : null,
-        receipt_reference: form.receipt_reference,
         payee_bank_name: form.payee_bank_name,
         payee_account_number: form.payee_account_number,
         payee_account_name: form.payee_account_name,
@@ -263,63 +307,87 @@ export function ExpenseDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[88svh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{expense ? 'Edit request' : 'Raise a payment request'}</DialogTitle>
+          <DialogTitle className="text-lg font-bold">
+            {expense ? 'Edit this request' : 'Request a payment'}
+          </DialogTitle>
           <DialogDescription>
-            It goes to the Expenditure Officer, then the CFO, then final approval.
+            Four short steps. Once submitted it goes to the Expenditure Officer, then
+            the CFO, then final approval — you can follow it on My Requests.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Section title="1. What is the money for?" />
+
           <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>What is this for?</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={() => setType('general')}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg border p-3 text-left text-sm transition-colors duration-250 ease-luxe outline-none',
+                  'flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors duration-250 ease-luxe outline-none',
                   form.type === 'general'
-                    ? 'border-accent/40 bg-accent/10 text-accent'
-                    : 'border-foreground/15 text-muted-foreground hover:bg-muted/60',
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-foreground/15 hover:bg-muted/60',
                 )}
               >
-                <Building2 className="size-4 shrink-0" />
-                General expense
+                <Building2 className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  <span className="block text-sm font-semibold">General expense</span>
+                  <span className="block text-xs opacity-80">
+                    Running the company — salaries, rent, repairs, bank charges.
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => setType('pfi')}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg border p-3 text-left text-sm transition-colors duration-250 ease-luxe outline-none',
+                  'flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors duration-250 ease-luxe outline-none',
                   form.type === 'pfi'
-                    ? 'border-accent/40 bg-accent/10 text-accent'
-                    : 'border-foreground/15 text-muted-foreground hover:bg-muted/60',
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-foreground/15 hover:bg-muted/60',
                 )}
               >
-                <Fuel className="size-4 shrink-0" />
-                Attached to a PFI
+                <Fuel className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  <span className="block text-sm font-semibold">Attached to a PFI</span>
+                  <span className="block text-xs opacity-80">
+                    A cost that belongs to one cargo and adds to what it cost.
+                  </span>
+                </span>
               </button>
             </div>
           </div>
 
           {form.type === 'pfi' && (
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className={cn(MICRO, 'block text-muted-foreground')}>Which PFI</label>
+            <Field
+              wide required
+              label="Which cargo is this cost for?"
+              hint="The amount will be added to this PFI's total cost."
+            >
               <NativeSelect value={form.pfi_id} onChange={(e) => set('pfi_id', e.target.value)}>
-                <option value="">Select the PFI…</option>
+                <option value="">Choose the PFI…</option>
                 {pfiOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.pfiNumber || `PFI ${p.id}`}
                   </option>
                 ))}
               </NativeSelect>
-            </div>
+            </Field>
           )}
 
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Category</label>
+          <Field
+            wide required
+            label="What kind of cost is it?"
+            hint={
+              form.type === 'pfi'
+                ? 'Pick the closest heading — demurrage, jetty fees, commission, and so on.'
+                : 'Pick the closest heading. Use “Other General Expenses” if nothing fits.'
+            }
+          >
             <NativeSelect value={form.category_id} onChange={(e) => set('category_id', e.target.value)}>
-              <option value="">Select a category…</option>
+              <option value="">Choose a category…</option>
               {/* PFI accounts come back in GL-code order, which keeps each
                   heading's accounts contiguous — so the optgroups are just the
                   runs, not a second lookup that could disagree with the API. */}
@@ -331,14 +399,20 @@ export function ExpenseDialog({
                   ))
                 : categoryOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </NativeSelect>
-          </div>
+          </Field>
 
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Date</label>
-            <Input type="date" value={form.expense_date} onChange={(e) => set('expense_date', e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Vendor</label>
+          <Field wide label="What is it for, in your own words?" required
+            hint="One line an approver can check the invoice against — say what was bought and for where.">
+            <Input
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              placeholder="e.g. Jetty fees for MT Stellar berthing at Calabar"
+            />
+          </Field>
+
+          <Section title="2. Who is being paid" />
+
+          <Field label="Vendor" required hint="Who the money goes to. Start typing to reuse a saved one.">
             <VendorField
               value={{ vendor: form.vendor, vendor_id: form.vendor_id, saveNew: saveNewVendor }}
               onChange={(v: VendorFieldValue) => {
@@ -346,126 +420,124 @@ export function ExpenseDialog({
                 setSaveNewVendor(v.saveNew)
               }}
             />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Purpose</label>
-            <Input value={form.description} onChange={(e) => set('description', e.target.value)} />
-          </div>
+          </Field>
+          <Field label="Date of the expense" hint="When the cost was incurred, not today's date.">
+            <Input type="date" value={form.expense_date} onChange={(e) => set('expense_date', e.target.value)} />
+          </Field>
 
-          {/* Invoice/VAT/WHT: optional detail, folded away until asked for. */}
+          <Field wide label="Vendor's account name"
+            hint="Exactly as it appears at the bank — a mismatch is what makes a transfer bounce.">
+            <Input
+              value={form.payee_account_name}
+              onChange={(e) => set('payee_account_name', e.target.value)}
+              placeholder="e.g. Keonamex Marine Services Ltd"
+            />
+          </Field>
+          <Field label="Account number">
+            <Input
+              value={form.payee_account_number}
+              inputMode="numeric"
+              onChange={(e) => set('payee_account_number', e.target.value)}
+              placeholder="0123456789"
+            />
+          </Field>
+          <Field label="Bank">
+            <Input
+              value={form.payee_bank_name}
+              onChange={(e) => set('payee_bank_name', e.target.value)}
+              placeholder="e.g. Zenith Bank"
+            />
+          </Field>
+
+          <Section title="3. How much" />
+
+          <Field
+            wide required
+            label="Amount to be paid"
+            hint={
+              includeTax
+                ? 'Invoice amount less WHT. What actually leaves the bank is recorded by the Expenditure Officer at the end.'
+                : 'The figure you want released. Add the invoice breakdown below if this has VAT or WHT on it.'
+            }
+          >
+            <NumberInput
+              allowDecimal placeholder="0.00" value={form.amount}
+              onValueChange={(v) => set('amount', v)}
+            />
+          </Field>
+
+          {/* Invoice/VAT/WHT: real accounting detail most requesters do not
+              have to hand at the moment of asking, so it stays folded away. */}
           <div className="sm:col-span-2">
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-dashed border-foreground/20 p-3 hover:bg-muted/40">
               <input
                 type="checkbox"
-                className="size-3.5"
+                className="mt-0.5 size-4"
                 checked={includeTax}
                 onChange={(e) => setIncludeTax(e.target.checked)}
               />
-              Add invoice &amp; tax breakdown
-              <span className="text-xs text-muted-foreground">(optional)</span>
+              <span>
+                <span className="block text-sm font-semibold">
+                  This invoice has VAT or withholding tax
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Optional. Tick it and the VAT and WHT are worked out for you.
+                </span>
+              </span>
             </label>
           </div>
 
           {includeTax && (
             <>
-              <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>Amount ex VAT</label>
+              <Field label="Amount before VAT" hint="What the invoice says before tax is added.">
                 <NumberInput
                   allowDecimal placeholder="0.00" value={form.amount_ex_vat}
                   onValueChange={(v) => apply({ amount_ex_vat: v })}
                 />
-              </div>
-              <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>
-                  VAT ({(vatRate * 100).toFixed(1)}%)
-                </label>
+              </Field>
+              <Field label={`VAT (${(vatRate * 100).toFixed(1)}%)`} hint="Filled in for you — overwrite if the invoice differs.">
                 <NumberInput
                   allowDecimal placeholder="0.00" value={form.vat_amount}
                   onValueChange={(v) => apply({ vat_amount: v })}
                 />
-              </div>
-              <div className="space-y-1.5 sm:col-span-2">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>Invoice amount</label>
+              </Field>
+              <Field wide label="Invoice total" hint="Before VAT plus the VAT — the face value of the invoice.">
                 <NumberInput
                   allowDecimal placeholder="0.00" value={form.invoice_amount}
                   onValueChange={(v) => apply({ invoice_amount: v })}
                 />
-              </div>
+              </Field>
 
               {/* Rate first, amount second. Which rate an invoice attracts is
                   Finance's call, so the options are bare percentages — this app
                   does not guess the transaction type on their behalf. */}
-              <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>WHT rate</label>
+              <Field label="Withholding tax rate" hint="Taken on the amount before VAT.">
                 <NativeSelect
                   value={form.wht_rate}
                   onChange={(e) => apply({ wht_rate: e.target.value })}
                 >
-                  <option value="">Enter amount manually</option>
+                  <option value="">I'll type the amount myself</option>
                   {whtRates.map((r) => (
                     <option key={r} value={String(r)}>{r === 0 ? 'No WHT (0%)' : `${r}%`}</option>
                   ))}
                 </NativeSelect>
-                <p className="text-xs leading-tight text-muted-foreground/70">
-                  Taken on the ex-VAT amount.
-                </p>
-              </div>
-              <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>WHT deduction</label>
+              </Field>
+              <Field label="WHT to deduct" hint="Held back from the vendor and remitted separately.">
                 <NumberInput
                   allowDecimal placeholder="0.00" value={form.wht_deduction}
                   onValueChange={(v) => apply({ wht_deduction: v, wht_rate: '' })}
                 />
-              </div>
+              </Field>
             </>
           )}
 
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Amount requested</label>
-            <NumberInput
-              allowDecimal placeholder="0.00" value={form.amount}
-              onValueChange={(v) => set('amount', v)}
-            />
-            {includeTax && (
-              <p className="text-xs leading-tight text-muted-foreground/70">
-                Invoice amount less WHT. What actually gets paid is recorded by the
-                Expenditure Officer at the end.
-              </p>
-            )}
-          </div>
+          <Section title="4. Proof" hint="An approver cannot verify a payment against a description alone." />
 
-          <div className="space-y-1.5 sm:col-span-2">
-            <p className={cn(MICRO, 'border-b border-foreground/10 pb-2 text-muted-foreground')}>
-              Pay to
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Account name</label>
-            <Input value={form.payee_account_name} onChange={(e) => set('payee_account_name', e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Account number</label>
-            <Input value={form.payee_account_number} onChange={(e) => set('payee_account_number', e.target.value)} />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Bank name</label>
-            <Input value={form.payee_bank_name} onChange={(e) => set('payee_bank_name', e.target.value)} />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Receipt reference</label>
-            <Input value={form.receipt_reference} onChange={(e) => set('receipt_reference', e.target.value)} />
-          </div>
-
-          <div className="space-y-1.5 sm:col-span-2">
-            <p className={cn(MICRO, 'border-b border-foreground/10 pb-2 text-muted-foreground')}>
-              Supporting documents
-            </p>
-          </div>
           <div className="sm:col-span-2">
             {/* On an existing request files register straight away; on a new one
                 they wait for the id that submitting creates. */}
             {expense ? (
-              <ExpenseAttachments expenseId={expense.id} />
+              <ExpenseAttachments expenseId={expense.id} dropZone />
             ) : (
               <PendingAttachments files={pendingFiles} onChange={setPendingFiles} />
             )}
