@@ -10,6 +10,7 @@ import {
   type ExpenseAttachment,
 } from '#/lib/hooks/usePfis'
 import { uploadExpenseFile, type ExpenseUploadedFile } from '#/lib/hooks/useCloudinaryUpload'
+import { AttachmentViewer, type ViewableAttachment } from '#/components/AttachmentViewer'
 
 /** What the attach endpoint stores for one uploaded file. */
 export type PendingFile = ExpenseUploadedFile
@@ -126,18 +127,31 @@ export function FileDropZone({
 }
 
 export function FileRow({
-  name, size, href, onRemove, removing,
+  name, size, href, contentType, onRemove, removing, onView,
 }: {
   name: string
   size: number
   href?: string
+  contentType?: string | null
   onRemove?: () => void
   removing?: boolean
+  /** Opens the file in the in-app viewer. Falls back to a link without it. */
+  onView?: (file: { name: string; url: string; contentType?: string | null }) => void
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-foreground/15 px-2.5 py-1.5">
       <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />
-      {href ? (
+      {href && onView ? (
+        // A button, not a link: the file opens in the dialog rather than
+        // sending the person out of the dashboard to a bare storage URL.
+        <button
+          type="button"
+          onClick={() => onView({ name, url: href, contentType })}
+          className="min-w-0 flex-1 truncate text-left text-sm underline-offset-2 outline-none hover:underline focus-visible:underline"
+        >
+          {name}
+        </button>
+      ) : href ? (
         <a
           href={href} target="_blank" rel="noreferrer"
           className="min-w-0 flex-1 truncate text-sm underline-offset-2 hover:underline"
@@ -177,6 +191,7 @@ export function ExpenseAttachments({
   const remove = useDeleteAttachment()
   const toast = useToast()
   const [busy, setBusy] = useState(false)
+  const [viewing, setViewing] = useState<ViewableAttachment | null>(null)
 
   const onFiles = async (list: FileList) => {
     setBusy(true)
@@ -211,6 +226,8 @@ export function ExpenseAttachments({
               name={f.file_name || 'Document'}
               size={f.size_bytes}
               href={f.storage_key}
+              contentType={f.content_type}
+              onView={setViewing}
               removing={remove.isPending}
               onRemove={
                 canEdit
@@ -237,6 +254,12 @@ export function ExpenseAttachments({
           }
         />
       )}
+
+      <AttachmentViewer
+        attachment={viewing}
+        open={viewing !== null}
+        onOpenChange={(o) => { if (!o) setViewing(null) }}
+      />
     </div>
   )
 }
@@ -257,6 +280,7 @@ export function PendingAttachments({
 }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
+  const [viewing, setViewing] = useState<ViewableAttachment | null>(null)
 
   const onFiles = async (list: FileList) => {
     setBusy(true)
@@ -280,6 +304,8 @@ export function PendingAttachments({
               name={f.fileName}
               size={f.sizeBytes}
               href={f.url}
+              contentType={f.contentType}
+              onView={setViewing}
               onRemove={() => onChange(files.filter((x) => x.publicId !== f.publicId))}
             />
           ))}
@@ -289,6 +315,12 @@ export function PendingAttachments({
         busy={busy}
         onFiles={onFiles}
         hint={files.length ? 'Drag another file here, or click to browse.' : undefined}
+      />
+
+      <AttachmentViewer
+        attachment={viewing}
+        open={viewing !== null}
+        onOpenChange={(o) => { if (!o) setViewing(null) }}
       />
     </div>
   )

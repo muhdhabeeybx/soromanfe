@@ -31,6 +31,29 @@ export async function getUploadSignature(
  * @param signature  Signed params from getUploadSignature()
  * @returns  The uploaded file's URL and public ID
  */
+/**
+ * Which Cloudinary delivery type a file belongs under.
+ *
+ * `auto` — what this used to send — files a PDF as an `image`, and Cloudinary
+ * refuses to DELIVER PDFs from the image pipeline unless the account opts in.
+ * The upload succeeds, the link is stored, and clicking it months later
+ * returns 401; the browser turns that into a login prompt, which is what an
+ * expense attachment appeared to be asking for.
+ *
+ * `raw` has no such restriction and serves the file under its real content
+ * type, so a PDF opens in the viewer instead of bouncing. Images stay on the
+ * image pipeline, where they belong and where transformations work.
+ *
+ * The signature covers only `folder` and `timestamp` (see upload.service.js),
+ * so choosing the delivery type here does not invalidate it.
+ */
+export function resourceTypeFor(file: File): 'image' | 'video' | 'raw' {
+  const type = (file.type || '').toLowerCase()
+  if (type.startsWith('image/')) return 'image'
+  if (type.startsWith('video/')) return 'video'
+  return 'raw'
+}
+
 export async function uploadToCloudinary(
   file: File,
   signature: CloudinarySignature
@@ -42,7 +65,13 @@ export async function uploadToCloudinary(
   formData.append('signature', signature.signature)
   formData.append('folder', signature.folder)
 
-  const endpoint = `https://api.cloudinary.com/v1_1/${signature.cloudName}/${signature.resourceType}/upload`
+  // The server asks for "auto"; the file itself decides. See resourceTypeFor.
+  const resourceType =
+    signature.resourceType && signature.resourceType !== 'auto'
+      ? signature.resourceType
+      : resourceTypeFor(file)
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${signature.cloudName}/${resourceType}/upload`
 
   const response = await fetch(endpoint, {
     method: 'POST',
