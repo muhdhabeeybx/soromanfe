@@ -13,10 +13,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '#/components/ui/select'
 import {
-  Plus, Search, Download, Truck, Wallet, FileText, FileSpreadsheet,
+  // FileText and ChevronDown went unused with the PFI summary table and the
+  // filters toggle; both are needed again if that block is uncommented.
+  Plus, Search, Download, Truck, Wallet, FileSpreadsheet,
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
-  ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal,
+  ChevronRight, ChevronLeft, SlidersHorizontal,
   Loader2, Landmark, ArrowLeftRight,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -41,6 +43,9 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   exportSalesLedgerExcel, exportSalesLedgerPdf,
   exportDailyPaymentsExcel, exportDailyPaymentsPdf,
+  // Shared with the export so the day blocks on screen and the day blocks in
+  // the file are the same grouping, totalled the same way.
+  groupPaymentsByDay,
   type SalesLedgerFilters,
 } from './-sales-ledger-export'
 
@@ -1124,10 +1129,16 @@ function SalesLedgerDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {paginatedSales.map((sale, idx) => {
+                    {/* Day blocks, each closed by its own total. A flat list
+                        of payments cannot be read as days without counting
+                        rows, and "what came in on Tuesday" is the question
+                        this tab exists for. Grouped within the page, so a
+                        day split across two pages totals what is on each. */}
+                    {groupPaymentsByDay(paginatedSales).flatMap((dayGroup) => {
+                      const dayRows = dayGroup.rows.map((sale) => {
                       const customerName = sale.customerName || customerMap.get(idKey(sale.customerId))?.name || '—'
                       const datePaid = sale.dateOfPayment || sale.dateLoaded
-                      const serial = pageOffset + idx + 1
+                      const serial = pageOffset + paginatedSales.indexOf(sale) + 1
                       return (
                         <TableRow
                           key={sale._id || sale.id}
@@ -1177,6 +1188,30 @@ function SalesLedgerDashboard() {
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{sale.enteredBy || '—'}</TableCell>
                         </TableRow>
                       )
+                      })
+
+                      return [
+                        ...dayRows,
+                        <TableRow key={`day-${dayGroup.day}`} className="bg-muted/60 hover:bg-muted/60 border-b-2 border-border">
+                          <TableCell />
+                          <TableCell className="whitespace-nowrap text-xs font-semibold" colSpan={6}>
+                            {dayGroup.day
+                              ? `${safeFormatDate(dayGroup.day)} — ${dayGroup.totals.count} ${dayGroup.totals.count === 1 ? 'payment' : 'payments'}`
+                              : `No date recorded — ${dayGroup.totals.count} payments`}
+                            {/* Only worth saying when some of the day's money
+                                moved between trucks rather than coming in. */}
+                            {dayGroup.totals.transferred !== 0 && (
+                              <span className="ml-2 font-normal text-blue-700 dark:text-blue-400">
+                                incl. {fmt(dayGroup.totals.transferred)} moved between trucks
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-bold text-accent whitespace-nowrap tabular-nums">
+                            {fmt(dayGroup.totals.paid)}
+                          </TableCell>
+                          <TableCell />
+                        </TableRow>,
+                      ]
                     })}
                   </TableBody>
                 </Table>

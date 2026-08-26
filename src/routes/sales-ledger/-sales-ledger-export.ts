@@ -779,16 +779,55 @@ function paymentRow(sale: DeliverySale, accounts: BankAccount[], index: number) 
   }
 }
 
-function paymentTotals(sales: DeliverySale[]) {
+/**
+ * What a set of payment rows adds up to.
+ *
+ * Volume and expected are deliberately NOT summed. delivery_sales repeats the
+ * load's quantity and sales_value on every payment against it, so a 45,000 L
+ * truck settled in four instalments would contribute 180,000 L and four times
+ * its invoice — the same multiplication that had the dashboard reporting
+ * ₦33bn of outstanding. On a list of payments the only figures that mean
+ * anything are how many and how much.
+ */
+export function paymentTotals(sales: DeliverySale[]) {
   return sales.reduce(
-    (acc, s) => ({
-      count: acc.count + 1,
-      quantity: acc.quantity + toNum(s.quantity),
-      expected: acc.expected + toNum(s.salesValue),
-      paid: acc.paid + toNum(s.paymentAmount),
-    }),
-    { count: 0, quantity: 0, expected: 0, paid: 0 },
+    (acc, s) => {
+      const amount = toNum(s.paymentAmount)
+      return {
+        count: acc.count + 1,
+        paid: acc.paid + amount,
+        // Transfers between trucks net to nothing across the whole list, so
+        // they are counted apart — otherwise a day of heavy reallocation
+        // looks like a day of no collections.
+        received: acc.received + (s.transferGroupId ? 0 : amount),
+        transferred: acc.transferred + (s.transferGroupId ? amount : 0),
+      }
+    },
+    { count: 0, paid: 0, received: 0, transferred: 0 },
   )
+}
+
+/** The day a payment belongs to, as yyyy-MM-dd, or '' when nothing is recorded. */
+const payDayKey = (s: DeliverySale) =>
+  String(s.dateOfPayment || s.dateLoaded || '').slice(0, 10)
+
+/**
+ * Payments in day order, newest first, each day carrying its own total.
+ *
+ * Newest first because this list is read to answer "what came in recently",
+ * and a reader should not have to scroll past four months to find today.
+ */
+export function groupPaymentsByDay(sales: DeliverySale[]) {
+  const days = new Map<string, DeliverySale[]>()
+  for (const s of sales) {
+    const key = payDayKey(s)
+    const arr = days.get(key) ?? []
+    arr.push(s)
+    days.set(key, arr)
+  }
+  return [...days.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+    .map(([day, rows]) => ({ day, rows, totals: paymentTotals(rows) }))
 }
 
 export async function exportDailyPaymentsExcel(
@@ -814,12 +853,54 @@ export async function exportDailyPaymentsExcel(
   })
   cursor += 1
 
+  const byDay = groupPaymentsByDay(sales)
+
   cursor = writeSummaryBand(ws, cursor, [
     { header: 'Entries', value: t.count, fmt: COUNT },
-    { header: 'Volume', value: t.quantity, fmt: QTY },
-    { header: 'Expected', value: t.expected, fmt: NGN },
-    { header: 'Total Paid', value: t.paid, fmt: NGN, good: true },
+    { header: 'Days', value: byDay.length, fmt: COUNT },
+    { header: 'Received', value: t.received, fmt: NGN, good: true },
+    { header: 'Moved Between Trucks', value: t.transferred, fmt: NGN },
+    { header: 'Net Total', value: t.paid, fmt: NGN, good: true },
   ])
+  cursor += 2
+
+  // ── Totals per day, before the detail ────────────────────────────────
+  // The question this tab exists to answer is "how much came in, and when".
+  // Putting the answer at the top means it does not have to be assembled by
+  // scrolling several hundred rows.
+  cursor = writeSectionHeading(ws, cursor, 'TOTALS BY DAY')
+  const dayHead = ws.getRow(cursor)
+  dayHead.values = ['Date', 'Entries', 'Received', 'Moved', 'Day Total']
+  dayHead.height = ROW_HEIGHT.header
+  for (let i = 1; i <= 5; i++) {
+    const cell = dayHead.getCell(i)
+    cell.font = HEADER_FONT
+    cell.fill = HEADER_FILL
+    cell.border = ALL_BORDERS
+    cell.alignment = { vertical: 'middle', horizontal: i === 1 ? 'left' : 'right' }
+  }
+  cursor++
+
+  for (const d of byDay) {
+    const row = ws.getRow(cursor)
+    row.height = ROW_HEIGHT.body
+    row.getCell(1).value = d.day ? safeDate(d.day) : 'No date recorded'
+    if (d.day) row.getCell(1).numFmt = DATE_FMT
+    row.getCell(2).value = d.totals.count
+    row.getCell(2).numFmt = COUNT
+    row.getCell(3).value = d.totals.received
+    row.getCell(3).numFmt = NGN
+    row.getCell(4).value = d.totals.transferred
+    row.getCell(4).numFmt = NGN
+    row.getCell(5).value = d.totals.paid
+    row.getCell(5).numFmt = NGN
+    row.getCell(5).font = { bold: true, color: { argb: XL.gain } }
+    for (let i = 1; i <= 5; i++) {
+      row.getCell(i).border = ALL_BORDERS
+      row.getCell(i).alignment = { vertical: 'middle', horizontal: i === 1 ? 'left' : 'right' }
+    }
+    cursor++
+  }
   cursor += 2
 
   const header = ws.getRow(cursor)
@@ -834,22 +915,50 @@ export async function exportDailyPaymentsExcel(
   cursor++
   const tableStart = cursor
 
-  sales.forEach((sale, i) => {
-    const values = paymentRow(sale, accounts, i)
-    const row = ws.getRow(cursor)
-    row.values = values as never
-    row.height = ROW_HEIGHT.body
-    for (const c of PAYMENT_COLUMNS) {
-      const cell = row.getCell(c.key)
-      cell.border = ALL_BORDERS
-      if (i % 2 === 1) cell.fill = BAND_FILL
-      if (c.fmt) cell.numFmt = c.fmt
+  // Detail in day blocks, each closed by its own total. A flat list of six
+  // hundred payments cannot be read as days without counting rows.
+  let serial = 0
+  for (const d of byDay) {
+    d.rows.forEach((sale, i) => {
+      const values = paymentRow(sale, accounts, serial)
+      serial++
+      const row = ws.getRow(cursor)
+      row.values = values as never
+      row.height = ROW_HEIGHT.body
+      for (const c of PAYMENT_COLUMNS) {
+        const cell = row.getCell(c.key)
+        cell.border = ALL_BORDERS
+        if (i % 2 === 1) cell.fill = BAND_FILL
+        if (c.fmt) cell.numFmt = c.fmt
+      }
+      if (row.getCell('datePaid').value) row.getCell('datePaid').numFmt = DATE_FMT
+      row.getCell('truck').font = { bold: true }
+      // A transfer leg is money moving inside the business, not a collection,
+      // and carries the blue that means exactly that everywhere else.
+      const isTransfer = !!sale.transferGroupId
+      row.getCell('amount').font = {
+        bold: true,
+        color: { argb: isTransfer ? XL.internal : XL.gain },
+      }
+      cursor++
+    })
+
+    const sub = ws.getRow(cursor)
+    sub.height = ROW_HEIGHT.total
+    sub.getCell('customer').value = d.day
+      ? `${format(parseISO(d.day), 'd MMM yyyy')} — ${d.totals.count} ${d.totals.count === 1 ? 'entry' : 'entries'}`
+      : `No date recorded — ${d.totals.count} entries`
+    sub.getCell('amount').value = d.totals.paid
+    sub.getCell('amount').numFmt = NGN
+    for (let i = 1; i <= PAYMENT_COLUMNS.length; i++) {
+      const cell = sub.getCell(i)
+      cell.border = TOTAL_BORDERS
+      cell.fill = SUMMARY_FILL
+      cell.font = TOTAL_FONT
     }
-    if (row.getCell('datePaid').value) row.getCell('datePaid').numFmt = DATE_FMT
-    row.getCell('truck').font = { bold: true }
-    row.getCell('amount').font = { bold: true, color: { argb: XL.gain } }
     cursor++
-  })
+    cursor++
+  }
 
   ws.views = [{ state: 'frozen', ySplit: tableStart - 1 }]
   ws.autoFilter = {
@@ -858,9 +967,9 @@ export async function exportDailyPaymentsExcel(
   }
 
   const totalRow = ws.getRow(cursor)
-  totalRow.getCell('customer').value = `TOTAL — ${t.count} entries`
-  totalRow.getCell('quantity').value = t.quantity
-  totalRow.getCell('expected').value = t.expected
+  totalRow.getCell('customer').value = `TOTAL — ${t.count} entries across ${byDay.length} ${byDay.length === 1 ? 'day' : 'days'}`
+  // Volume and expected are not totalled here: they are the load's figures,
+  // repeated on each payment, and adding them up says nothing true.
   totalRow.getCell('amount').value = t.paid
   totalRow.height = ROW_HEIGHT.total
   for (let i = 1; i <= PAYMENT_COLUMNS.length; i++) {
@@ -898,46 +1007,94 @@ export async function exportDailyPaymentsPdf(
     subtitleOf(filters, `${t.count} payment entries`),
   )
 
+  const byDay = groupPaymentsByDay(sales)
+
   autoTable(doc, {
     startY,
-    head: [['Entries', 'Volume', 'Expected', 'Total Paid']],
+    // Volume and expected are gone: they are the load's figures repeated on
+    // every payment, so totalling them across a payment list says nothing.
+    head: [['Entries', 'Days', 'Received', 'Moved Between Trucks', 'Net Total']],
     body: [[
-      String(t.count), `${t.quantity.toLocaleString()} L`,
-      pdfNaira(t.expected), pdfNaira(t.paid),
+      String(t.count), String(byDay.length),
+      pdfNaira(t.received), pdfNaira(t.transferred), pdfNaira(t.paid),
     ]],
     styles: pdfStyles.body,
     headStyles: { ...pdfStyles.head, fillColor: PDF.brandGreen },
     bodyStyles: pdfStyles.summaryBody,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (data: any) => {
-      if (data.section === 'body' && data.column.index === 3) {
-        data.cell.styles.textColor = PDF.gain
-      }
+      if (data.section === 'body' && data.column.index === 2) data.cell.styles.textColor = PDF.gain
+      if (data.section === 'body' && data.column.index === 3) data.cell.styles.textColor = PDF.internal
+      if (data.section === 'body' && data.column.index === 4) data.cell.styles.textColor = PDF.gain
     },
   })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cursorY = (doc as any).lastAutoTable.finalY + 6
+  let cursorY = (doc as any).lastAutoTable.finalY + 6
 
-  const body = sales.map((sale, i) => {
-    const v = paymentRow(sale, accounts, i)
-    return [
-      v.sn,
-      v.datePaid ? format(v.datePaid, DATE_PATTERN) : '—',
-      v.code, v.truck, v.customer, v.destination,
-      v.quantity > 0 ? `${v.quantity.toLocaleString()} L` : '—',
-      v.rate > 0 ? pdfNaira(v.rate) : '—',
-      v.expected > 0 ? pdfNaira(v.expected) : '—',
-      v.amount > 0 ? pdfNaira(v.amount) : '—',
-      v.payer, v.bank, v.phone, v.enteredBy,
-    ]
+  // ── Totals per day ───────────────────────────────────────────────────
+  autoTable(doc, {
+    startY: cursorY,
+    head: [['Date', 'Entries', 'Received', 'Moved', 'Day Total']],
+    body: byDay.map((d) => [
+      d.day ? format(parseISO(d.day), DATE_PATTERN) : 'No date recorded',
+      String(d.totals.count),
+      pdfNaira(d.totals.received),
+      d.totals.transferred === 0 ? '—' : pdfNaira(d.totals.transferred),
+      pdfNaira(d.totals.paid),
+    ]),
+    styles: pdfStyles.body,
+    headStyles: pdfStyles.head,
+    columnStyles: {
+      1: { halign: 'right' }, 2: { halign: 'right' },
+      3: { halign: 'right' }, 4: { halign: 'right', fontStyle: 'bold' },
+    },
+    tableWidth: 140,
+    margin: { left: 14 },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (data: any) => {
+      if (data.section === 'body' && data.column.index === 4) data.cell.styles.textColor = PDF.gain
+    },
   })
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cursorY = (doc as any).lastAutoTable.finalY + 6
+
+  // Detail runs in day order, and each day's rows are followed by that day's
+  // total so the blocks are readable on paper without adding anything up.
+  const body: Array<Array<string | number>> = []
+  let serial = 0
+  for (const d of byDay) {
+    for (const sale of d.rows) {
+      const v = paymentRow(sale, accounts, serial)
+      serial++
+      body.push([
+        v.sn,
+        v.datePaid ? format(v.datePaid, DATE_PATTERN) : '—',
+        v.code, v.truck, v.customer, v.destination,
+        v.quantity > 0 ? `${v.quantity.toLocaleString()} L` : '—',
+        v.rate > 0 ? pdfNaira(v.rate) : '—',
+        v.expected > 0 ? pdfNaira(v.expected) : '—',
+        v.amount === 0 ? '—' : pdfNaira(v.amount),
+        v.payer, v.bank, v.phone, v.enteredBy,
+      ])
+    }
+    const sub = new Array(PAYMENT_COLUMNS.length).fill('')
+    sub[4] = d.day
+      ? `${format(parseISO(d.day), DATE_PATTERN)} — ${d.totals.count} ${d.totals.count === 1 ? 'entry' : 'entries'}`
+      : `No date — ${d.totals.count} entries`
+    sub[9] = pdfNaira(d.totals.paid)
+    body.push(sub)
+  }
+  // Which body rows are a day total, so didParseCell can shade them.
+  const subtotalRows = new Set<number>()
+  {
+    let i = 0
+    for (const d of byDay) { i += d.rows.length; subtotalRows.add(i); i += 1 }
+  }
+
   const foot = new Array(PAYMENT_COLUMNS.length).fill('')
-  foot[4] = `TOTAL (${t.count})`
-  foot[6] = `${t.quantity.toLocaleString()} L`
-  foot[7] = ''
-  foot[8] = pdfNaira(t.expected)
+  foot[4] = `TOTAL (${t.count} across ${byDay.length} ${byDay.length === 1 ? 'day' : 'days'})`
   foot[9] = pdfNaira(t.paid)
 
   autoTable(doc, {
@@ -950,10 +1107,17 @@ export async function exportDailyPaymentsPdf(
     footStyles: { ...pdfStyles.foot, fillColor: PDF.grandTotalTint },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (data: any) => {
-      if (data.section === 'body' && data.row.index % 2 === 1) {
-        data.cell.styles.fillColor = PDF.bandTint
+      if (data.section !== 'body') return
+      const isSubtotal = subtotalRows.has(data.row.index)
+      if (isSubtotal) {
+        data.cell.styles.fillColor = PDF.summaryTint
+        data.cell.styles.fontStyle = 'bold'
+        data.cell.styles.textColor = PDF.ink
+        if (data.column.index === 9) data.cell.styles.textColor = PDF.gain
+        return
       }
-      if (data.column.index === 9 && data.section === 'body') {
+      if (data.row.index % 2 === 1) data.cell.styles.fillColor = PDF.bandTint
+      if (data.column.index === 9) {
         data.cell.styles.textColor = PDF.gain
         data.cell.styles.fontStyle = 'bold'
       }
