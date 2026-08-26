@@ -592,9 +592,9 @@ function SalesLedgerDashboard() {
                     <SelectValue placeholder="All Types" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
                     <SelectItem value="normal">Normal Customers</SelectItem>
                     <SelectItem value="filling_station">Filling Stations</SelectItem>
+                    <SelectItem value="all">All Types</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -633,10 +633,13 @@ function SalesLedgerDashboard() {
                   <button onClick={() => setCustomerFilter('all')} className="ml-0.5 hover:text-destructive transition-colors duration-250 ease-luxe"><X className="size-2.5" /></button>
                 </Badge>
               )}
-              {customerTypeFilter !== 'all' && (
+              {/* Only a departure from the default is worth a chip. "Normal"
+                  is how the page opens, so labelling it would put a filter
+                  chip on an unfiltered view. */}
+              {customerTypeFilter !== 'normal' && (
                 <Badge variant="outline" className="gap-1 pr-1 text-xs font-normal">
-                  Type: {customerTypeFilter === 'filling_station' ? 'Filling Station' : 'Normal'}
-                  <button onClick={() => setCustomerTypeFilter('all')} className="ml-0.5 hover:text-destructive transition-colors duration-250 ease-luxe"><X className="size-2.5" /></button>
+                  Type: {customerTypeFilter === 'filling_station' ? 'Filling Stations' : 'All Types'}
+                  <button onClick={() => setCustomerTypeFilter('normal')} className="ml-0.5 hover:text-destructive transition-colors duration-250 ease-luxe"><X className="size-2.5" /></button>
                 </Badge>
               )}
               {tripCodeFilter !== 'all' && (
@@ -845,6 +848,14 @@ function SalesLedgerDashboard() {
                     <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Quantity</TableHead>
                     <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Rate</TableHead>
                     <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Expected</TableHead>
+                    {/* The three below belong to a payment, not to the load.
+                        They used to be written into the Customer, Destination
+                        and Rate cells of the sub-row, which put a payer's name
+                        under a "Customer" heading and a bank under
+                        "Destination" — different things sharing a column. */}
+                    <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Date Paid</TableHead>
+                    <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Payer</TableHead>
+                    <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Paid Into</TableHead>
                     <TableHead className="font-semibold text-accent text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Payment</TableHead>
                     <TableHead className="font-semibold text-destructive text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Balance</TableHead>
                     <TableHead className="font-semibold text-muted-foreground text-center whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Status</TableHead>
@@ -918,8 +929,16 @@ function SalesLedgerDashboard() {
                           <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{group.quantity > 0 ? `${fmtQty(group.quantity)} L` : '—'}</TableCell>
                           <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{group.rate > 0 ? fmt(group.rate) : '—'}</TableCell>
                           <TableCell className="text-right font-normal text-foreground whitespace-nowrap text-xs tabular-nums">{group.expected > 0 ? fmt(group.expected) : '—'}</TableCell>
+                          {/* Date paid, payer and account are per-payment —
+                              the main row is the load, and has none. */}
+                          <TableCell />
+                          <TableCell />
+                          <TableCell />
                           <TableCell className="text-right font-semibold text-accent whitespace-nowrap text-xs tabular-nums">{fmt(toNum(group.totalPaid))}</TableCell>
                           <TableCell className={`text-right font-semibold whitespace-nowrap text-xs ${group.balance > 0 ? 'text-destructive' : group.balance < 0 ? 'text-muted-foreground' : group.expected > 0 ? 'text-accent' : 'text-muted-foreground'}`}>
+                            {/* An overpayment reads as a plain positive figure
+                                with a plus. Brackets are accountancy for a
+                                negative, and this is money in hand, not owed. */}
                             {group.expected > 0 ? (group.balance === 0 ? '₦0' : group.balance > 0 ? fmt(group.balance) : `+${fmt(Math.abs(group.balance))}`) : '—'}
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-center">
@@ -941,32 +960,37 @@ function SalesLedgerDashboard() {
                               itself — the whole point of opening that page was
                               usually one of these three. stopPropagation
                               because the row itself navigates. */}
+                          {/* Labelled buttons, each in its own colour. Three
+                              grey icons side by side said nothing about what
+                              they did or which was the consequential one. */}
                           <TableCell className="text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-0.5">
+                            <div className="flex items-center justify-end gap-1.5">
                               <Button
-                                variant="ghost" size="icon-sm" title="Add a payment"
+                                size="sm"
+                                className="h-7 gap-1 bg-accent px-2 text-xs hover:bg-accent/80"
                                 onClick={() => { setQuickTarget(group); setQuickPaymentOpen(true) }}
                               >
-                                <Plus className="size-3.5" />
-                                <span className="sr-only">Add a payment</span>
+                                <Plus className="size-3" />
+                                Payment
                               </Button>
                               <Button
-                                variant="ghost" size="icon-sm" title="Set up this row"
+                                size="sm" variant="outline"
+                                className="h-7 gap-1 px-2 text-xs"
                                 onClick={() => { setQuickTarget(group); setRowSetupOpen(true) }}
                               >
-                                <SlidersHorizontal className="size-3.5" />
-                                <span className="sr-only">Set up this row</span>
+                                <SlidersHorizontal className="size-3" />
+                                Setup
                               </Button>
                               {/* Only where there is actually a surplus to move. */}
                               {group.balance < 0 && (
                                 <Button
-                                  variant="ghost" size="icon-sm"
-                                  className="text-blue-700 hover:bg-blue-50 hover:text-blue-800 dark:text-blue-400 dark:hover:bg-blue-950"
+                                  size="sm"
+                                  className="h-7 gap-1 bg-blue-600 px-2 text-xs text-white hover:bg-blue-700"
                                   title={`Move the ${fmt(Math.abs(group.balance))} overpayment`}
                                   onClick={() => { setQuickTarget(group); setTransferOpen(true) }}
                                 >
-                                  <ArrowLeftRight className="size-3.5" />
-                                  <span className="sr-only">Move the overpayment</span>
+                                  <ArrowLeftRight className="size-3" />
+                                  Move
                                 </Button>
                               )}
                             </div>
@@ -987,51 +1011,51 @@ function SalesLedgerDashboard() {
                             key={`${group.key}-pay-${sale._id || sale.id || payIdx}`}
                             className="bg-muted/25 border-b border-border/50 text-xs hover:bg-muted/40"
                           >
+                            {/* S/N, PFI code and truck belong to the load. The
+                                marker sits under the truck so the payment
+                                reads as hanging off the row above it. */}
                             <TableCell />
                             <TableCell />
-                            <TableCell className="whitespace-nowrap text-muted-foreground pl-4">
-                              <span className="text-muted-foreground/70 mr-1">↳</span>
+                            <TableCell className="whitespace-nowrap pl-4 text-muted-foreground/70">↳</TableCell>
+                            {/* Customer, destination, quantity, rate and
+                                expected are the load's, and a payment has none
+                                of them. Left empty rather than filled with the
+                                payment's own fields, which is what put a
+                                payer's name under a "Customer" heading. */}
+                            <TableCell colSpan={5} className="whitespace-nowrap text-right">
+                              {sale.transferCounterparty && (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
+                                  <ArrowLeftRight className="size-3" />
+                                  {amount < 0 ? 'moved to' : 'moved from'} {sale.transferCounterparty}
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-muted-foreground">
                               {safeFormatDate(sale.dateOfPayment || sale.dateLoaded, 'dd MMM yy')}
                             </TableCell>
-                            <TableCell className="whitespace-nowrap text-muted-foreground uppercase">
+                            <TableCell className="whitespace-nowrap uppercase text-muted-foreground">
                               {sale.payerName || '—'}
                             </TableCell>
                             <TableCell className="whitespace-nowrap text-muted-foreground">
                               {formatBankLabel(bankAccounts, sale.bank) || '—'}
                             </TableCell>
-                            {/* Quantity and rate belong to the load, not to a
-                                payment against it. Repeating them on every
-                                sub-row restated the same 33,000 L four times
-                                and read as four separate loads. */}
-                            <TableCell colSpan={3} className="text-muted-foreground text-right whitespace-nowrap">
-                              {sale.transferCounterparty && (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
-                                  <ArrowLeftRight className="size-3" />
-                                  {amount < 0 ? 'to' : 'from'} {sale.transferCounterparty}
-                                </span>
-                              )}
-                            </TableCell>
                             {/* A transfer out is money leaving this truck, so
-                                it is shown as such rather than as a payment. */}
+                                it carries a minus rather than brackets — the
+                                sign is the plain way to say it. */}
                             <TableCell className={`text-right font-semibold whitespace-nowrap tabular-nums ${amount < 0 ? 'text-blue-700 dark:text-blue-400' : 'text-accent'}`}>
-                              {amount === 0 ? '—' : amount < 0 ? `(${fmt(Math.abs(amount))})` : fmt(amount)}
+                              {amount === 0 ? '—' : amount < 0 ? `-${fmt(Math.abs(amount))}` : fmt(amount)}
                             </TableCell>
                             <TableCell className={`text-right whitespace-nowrap tabular-nums ${balanceAfter > 0 ? 'text-destructive/80' : 'text-muted-foreground'}`}>
                               {group.expected > 0
                                 ? (balanceAfter === 0 ? '₦0' : balanceAfter > 0 ? fmt(balanceAfter) : `+${fmt(Math.abs(balanceAfter))}`)
                                 : ''}
                             </TableCell>
-                            <TableCell className="text-center whitespace-nowrap">
-                              {sale.depositStatus === 'paid' ? (
-                                <span className="text-xs font-semibold text-accent">Confirmed</span>
-                              ) : sale.depositStatus ? (
-                                <span className="text-xs font-semibold text-warning">Pending</span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">{sale.enteredBy || '—'}</span>
-                              )}
-                            </TableCell>
-                            {/* Keeps the sub-row the same width as the main
-                                one now that Actions exists. */}
+                            {/* No status here. Every sub-row read "Pending" or
+                                "Confirmed" about the deposit, which is a
+                                different question from the one the Status
+                                column answers on the row above — whether the
+                                truck is paid off. Two meanings, one heading. */}
+                            <TableCell />
                             <TableCell />
                           </TableRow>
                         )

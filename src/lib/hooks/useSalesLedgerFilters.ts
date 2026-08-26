@@ -24,7 +24,16 @@ export function useSalesLedgerFilters({
   const [activeView, setActiveView] = useState<'ledger' | 'daily'>('ledger')
   const [truckFilter, setTruckFilter] = useState('all')
   const [customerFilter, setCustomerFilter] = useState('all')
-  const [customerTypeFilter, setCustomerTypeFilter] = useState<'all' | 'filling_station' | 'normal'>('all')
+  /**
+   * Normal customers by default.
+   *
+   * Filling stations are the company's own outlets and behave nothing like a
+   * delivery customer — they remit takings rather than settle an invoice, and
+   * they have their own page for it. Mixed into the default view they were
+   * most of the rows and none of the work, so the ledger opened on a list
+   * that had to be narrowed before it could be read.
+   */
+  const [customerTypeFilter, setCustomerTypeFilter] = useState<'all' | 'filling_station' | 'normal'>('normal')
   const [tripCodeFilter, setTripCodeFilter] = useState('all')
 
   const dateRange = useMemo(() => {
@@ -42,7 +51,9 @@ export function useSalesLedgerFilters({
   const clearAllFilters = useCallback(() => {
     setTruckFilter('all')
     setCustomerFilter('all')
-    setCustomerTypeFilter('all')
+    // Back to the default view, not to everything — clearing filters should
+    // return the page to how it opens.
+    setCustomerTypeFilter('normal')
     setTripCodeFilter('all')
     setSearchQuery('')
     setTimePreset('all')
@@ -50,8 +61,10 @@ export function useSalesLedgerFilters({
     setCustomTo('')
   }, [])
 
+  // "normal" is the resting state, so it does not count as a filter in force
+  // — otherwise the page would open already offering to clear itself.
   const hasActiveFilters = truckFilter !== 'all' || customerFilter !== 'all'
-    || customerTypeFilter !== 'all' || tripCodeFilter !== 'all' || searchQuery !== ''
+    || customerTypeFilter !== 'normal' || tripCodeFilter !== 'all' || searchQuery !== ''
 
   const filteredLedgerGroups = useMemo(() => {
     let result = [...ledgerGroups]
