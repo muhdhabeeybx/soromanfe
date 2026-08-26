@@ -31,7 +31,8 @@ import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
   paymentBreakdown, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  fundingApplied, transferOutLabel, transferAmount, untracedAmount, walletStatementRows,
+  fundingApplied, transferOutLabel, transferAmount, untracedAmount, untracedReason, untracedLabel,
+  walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
@@ -410,9 +411,11 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
                 </div>
               ) : (
                 <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
-                  {order.walletFunded
-                    ? 'No statement credits could be matched to this payment.'
-                    : 'Payment source not tracked — this order was paid before detailed payment tracking began.'}
+                  {untracedReason(order) === 'pre-ledger'
+                    ? `This order was confirmed before payment tracking began on 1 July 2026, so no payment was ever recorded against it. The ${naira(untracedAmount(order))} shown as paid is the order's own value, not a bank credit — there is nothing on a statement to match it to.`
+                    : order.walletFunded
+                      ? 'No statement credits could be matched to this payment.'
+                      : 'No payment source has been recorded for this order.'}
                 </p>
               )
             ) : (
@@ -1159,19 +1162,36 @@ function FinanceReportPage() {
                           of the total at the top of the page, which is the
                           first thing anyone checking against a statement
                           notices and the last thing they can explain. */}
-                      {untracedAmount(o) > 0.005 && (
-                        <TableRow key={`${o.id}-untraced`} className="bg-muted/20 hover:bg-muted/30">
-                          {REPORT_COLUMNS.map((c) => (
-                            <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
-                              {c.key === 'depositor' ? (
-                                <span className="text-muted-foreground italic">No recorded source</span>
-                              ) : c.key === 'amount' ? (
-                                <span className="whitespace-nowrap font-semibold">{naira(untracedAmount(o))}</span>
-                              ) : null}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      )}
+                      {untracedAmount(o) > 0.005 && (() => {
+                        const preLedger = untracedReason(o) === 'pre-ledger'
+                        return (
+                          <TableRow
+                            key={`${o.id}-untraced`}
+                            className={cn(
+                              // Hatched grey for the pre-ledger era, so a row
+                              // that can never be matched to a statement does
+                              // not sit there looking like one that should be.
+                              preLedger ? 'bg-muted/50 hover:bg-muted/60' : 'bg-muted/20 hover:bg-muted/30',
+                            )}
+                          >
+                            {REPORT_COLUMNS.map((c) => (
+                              <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                                {c.key === 'depositor' ? (
+                                  <span className="italic text-muted-foreground">{untracedLabel(o)}</span>
+                                ) : c.key === 'depositRef' ? (
+                                  <span className="text-xs text-muted-foreground/80">
+                                    {preLedger ? 'Before 1 Jul 2026 — nothing to match' : 'Not matched to a statement'}
+                                  </span>
+                                ) : c.key === 'amount' ? (
+                                  <span className="whitespace-nowrap font-semibold text-muted-foreground">
+                                    {naira(untracedAmount(o))}
+                                  </span>
+                                ) : null}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        )
+                      })()}
                     </Fragment>
                   )
                 })}

@@ -3,7 +3,7 @@ import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
   walletStatementRows, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  transferOutLabel, transferAmount, untracedAmount,
+  transferOutLabel, transferAmount, untracedAmount, untracedReason, untracedLabel,
   type FinanceReportOrder, type OrderFunding, type StatementRow, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -213,9 +213,13 @@ function statementRowValues(r: StatementRow) {
  * the total the report prints above it.
  */
 function untracedRowValues(o: FinanceReportOrder) {
+  const preLedger = untracedReason(o) === 'pre-ledger'
   return {
-    depositor: 'NO RECORDED SOURCE',
-    depositRef: '—',
+    depositor: up(untracedLabel(o)),
+    // Says why it cannot be matched, on the row, in the sheet someone is
+    // holding next to a bank statement. That is the moment the question gets
+    // asked, so that is where the answer belongs.
+    depositRef: preLedger ? 'BEFORE 1 JUL 2026 — NOTHING TO MATCH' : 'NOT MATCHED TO A STATEMENT',
     amount: untracedAmount(o),
     depositDate: null,
     recordedBy: '—',

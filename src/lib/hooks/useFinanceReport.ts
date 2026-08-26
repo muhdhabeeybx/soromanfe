@@ -585,6 +585,47 @@ export function transferAmount(f: OrderFunding): number {
  * a tracked order's untraced balance had nowhere to appear either. Both now
  * get a row, so the column adds up to the total above it.
  */
+/**
+ * When payment tracking actually began.
+ *
+ * The deposits ledger has no rows before June 2026 and no order carried an
+ * allocation until then; July is the first month where every paid order has
+ * one (966 paid orders since, exactly one untracked). Orders confirmed before
+ * this date were marked Paid without any payment ever being recorded against
+ * them — 4,682 of them, ~₦325bn.
+ *
+ * That figure is not a receipt and never came from a bank statement, so it
+ * cannot be reconciled against one. The report keeps showing it — the orders
+ * were paid, and zeroing them would invent ₦325bn of shortfall that nobody
+ * owes — but says plainly what it is, so nobody spends another evening
+ * hunting for it on a statement.
+ */
+export const PAYMENT_LEDGER_START = new Date('2026-07-01T00:00:00.000Z')
+
+/**
+ * Why an order has money with no funding row behind it.
+ *
+ *   pre-ledger  confirmed before payment tracking existed; nothing was ever
+ *               recorded, and nothing can be. Expected, not a fault.
+ *   unrecorded  confirmed after tracking began and still has no source —
+ *               a real gap, and worth chasing.
+ */
+export function untracedReason(o: FinanceReportOrder): 'pre-ledger' | 'unrecorded' {
+  if (o.fundingTracked) return 'unrecorded'
+  const confirmed = o.paymentConfirmedAt ? new Date(o.paymentConfirmedAt) : null
+  // No confirmation date at all puts an order in the same era: 801 of them,
+  // every one created before tracking began.
+  if (!confirmed || confirmed < PAYMENT_LEDGER_START) return 'pre-ledger'
+  return 'unrecorded'
+}
+
+/** What the untraced row should be called, for whichever reason it exists. */
+export function untracedLabel(o: FinanceReportOrder): string {
+  return untracedReason(o) === 'pre-ledger'
+    ? 'Pre-ledger — no payment recorded'
+    : 'No recorded source'
+}
+
 export function untracedAmount(o: FinanceReportOrder): number {
   const paid = orderAmountPaid(o)
   const shown = o.fundingTracked
