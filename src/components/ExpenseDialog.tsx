@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { Loader2, Building2, Fuel } from 'lucide-react'
 
@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import {
-  useExpenseCategories, useSaveExpense, useAttachFiles,
+  useExpenseCategories, useSaveExpense, useAttachFiles, usePfiList,
   type PfiExpense,
 } from '#/lib/hooks/usePfis'
 import { useCreateVendor } from '#/lib/hooks/useVendors'
@@ -24,6 +24,8 @@ const BLANK = {
   expense_date: format(new Date(), 'yyyy-MM-dd'),
   type: 'general' as 'general' | 'pfi',
   category_id: '',
+  /** Which cargo the cost belongs to. Set only when type is 'pfi'. */
+  pfi_id: '',
   vendor: '',
   vendor_id: '',
   // tin_number / invoice_number: dropped from the form (kept on the schema
@@ -66,13 +68,14 @@ export const plain = (v: string | null | undefined) =>
  * The form: what it's for (general overhead or a specific cargo), who it's
  * paid to, and where the money goes.
  *
- * The GL chart of accounts this once walked (group → 46-account picker) was
- * never actually seeded in production — every real category comes back with
- * no gl_group at all, so that picker was rendering an empty tree for every
- * real request. This reads the same categories through the plain general/PFI
- * split the API has always also returned, which is what real data actually
- * uses. GL code, TIN and invoice number are commented out below rather than
- * deleted, in case the chart gets seeded for real later.
+ * The GL chart is now seeded (migration 0007), so the two questions are asked
+ * separately, which is what the schema always intended: the category says what
+ * the money was spent ON, and — for a cargo cost — the PFI says which batch it
+ * lands on. Before, a "PFI expense" picked a category named after the cargo,
+ * so the chart recorded which vessel and never what for; 220 booked expenses
+ * were moved onto real accounts by that migration.
+ *
+ * TIN and invoice number stay commented out below rather than deleted.
  *
  * Shared by both the officer-facing Expenses page and the My Requests page —
  * raising or correcting a request looks the same wherever it happens.
@@ -85,6 +88,10 @@ export function ExpenseDialog({
   onOpenChange: (o: boolean) => void
 }) {
   const { data: cats } = useExpenseCategories()
+  // Every PFI, not just open ones: an expense often lands after the cargo has
+  // been closed out, and a closed PFI missing from the list would leave the
+  // cost with nowhere to go.
+  const { data: pfiData } = usePfiList({ limit: 500 })
   const save = useSaveExpense()
   const attach = useAttachFiles()
   const createVendor = useCreateVendor()
@@ -105,6 +112,7 @@ export function ExpenseDialog({
         expense_date: String(expense.expense_date).slice(0, 10),
         type: (expense.pfi_id ? 'pfi' : 'general') as 'general' | 'pfi',
         category_id: String(expense.category_id),
+        pfi_id: expense.pfi_id ? String(expense.pfi_id) : '',
         vendor: expense.vendor || '',
         vendor_id: expense.vendor_id ? String(expense.vendor_id) : '',
         description: expense.description || '',
@@ -138,8 +146,29 @@ export function ExpenseDialog({
   const whtRates = cats?.wht_rates?.length ? cats.wht_rates : [0, 2, 2.5, 5, 10]
   const categoryOptions = form.type === 'pfi' ? (cats?.pfi || []) : (cats?.general || [])
 
+  /**
+   * The PFI accounts under their headings, read off the runs of GL code the
+   * API already returns in order. Falls back to one unlabelled group so a
+   * chart seeded without subgroups still renders a usable list.
+   */
+  const categoryGroups = useMemo(() => {
+    const out: Array<{ label: string; accounts: typeof categoryOptions }> = []
+    for (const account of cats?.pfi || []) {
+      const label = account.gl_subgroup || 'Other'
+      const last = out[out.length - 1]
+      if (last && last.label === label) last.accounts.push(account)
+      else out.push({ label, accounts: [account] })
+    }
+    return out
+  }, [cats?.pfi])
+
+  const pfiOptions = pfiData?.pfis || []
+
+  // Switching type invalidates both the category and the cargo: a general
+  // overhead must not keep a PFI attached, or it would quietly inflate that
+  // batch's cost, and the server refuses the combination anyway.
   const setType = (type: 'general' | 'pfi') =>
-    setForm((f) => ({ ...f, type, category_id: '' }))
+    setForm((f) => ({ ...f, type, category_id: '', pfi_id: '' }))
 
   /**
    * The invoice arithmetic, run forward from whatever was just edited:
@@ -178,7 +207,10 @@ export function ExpenseDialog({
       return next
     })
 
-  const ready = form.category_id && Number(form.amount) > 0
+  // A cargo cost with no cargo named lands nowhere, and the server refuses it
+  // — so the button is held rather than letting the request fail on send.
+  const ready =
+    form.category_id && Number(form.amount) > 0 && (form.type !== 'pfi' || form.pfi_id)
 
   const submit = async () => {
     // A vendor picked from the list already carries an id; a freshly-typed
@@ -199,6 +231,7 @@ export function ExpenseDialog({
       data: {
         expense_date: form.expense_date,
         category_id: Number(form.category_id),
+        pfi_id: form.type === 'pfi' && form.pfi_id ? Number(form.pfi_id) : null,
         vendor: form.vendor,
         vendor_id: vendorId,
         description: form.description,
@@ -269,13 +302,34 @@ export function ExpenseDialog({
             </div>
           </div>
 
+          {form.type === 'pfi' && (
+            <div className="space-y-1.5 sm:col-span-2">
+              <label className={cn(MICRO, 'block text-muted-foreground')}>Which PFI</label>
+              <NativeSelect value={form.pfi_id} onChange={(e) => set('pfi_id', e.target.value)}>
+                <option value="">Select the PFI…</option>
+                {pfiOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.pfiNumber || `PFI ${p.id}`}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+          )}
+
           <div className="space-y-1.5 sm:col-span-2">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>
-              {form.type === 'pfi' ? 'Which PFI' : 'Category'}
-            </label>
+            <label className={cn(MICRO, 'block text-muted-foreground')}>Category</label>
             <NativeSelect value={form.category_id} onChange={(e) => set('category_id', e.target.value)}>
-              <option value="">{form.type === 'pfi' ? 'Select the PFI…' : 'Select a category…'}</option>
-              {categoryOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="">Select a category…</option>
+              {/* PFI accounts come back in GL-code order, which keeps each
+                  heading's accounts contiguous — so the optgroups are just the
+                  runs, not a second lookup that could disagree with the API. */}
+              {form.type === 'pfi'
+                ? categoryGroups.map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </optgroup>
+                  ))
+                : categoryOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </NativeSelect>
           </div>
 

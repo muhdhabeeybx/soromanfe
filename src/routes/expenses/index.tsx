@@ -4,6 +4,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
   Search, Plus, Receipt, Banknote, Building2, Hourglass, Download, X, Trash2, Pencil, Lock,
+  Landmark,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -16,6 +17,8 @@ import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
+import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
+import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
@@ -40,6 +43,7 @@ function ExpensesPage() {
   const [filters, setFilters] = useState<ExpenseFilters>({})
   const [editing, setEditing] = useState<PfiExpense | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [bankAccountsOpen, setBankAccountsOpen] = useState(false)
   const [reviewing, setReviewing] = useState<number | null>(null)
   // const [chartOpen, setChartOpen] = useState(false)
   // const canManageChart = useCanManageChart()
@@ -120,14 +124,21 @@ function ExpensesPage() {
       actions={
         <>
           <div className="flex gap-2">
-          {/* GL accounts editor — commented out along with the rest of the GL
-              chart for now, see ExpenseDialog's header note.
+          {/* GL accounts editor — still commented out. The chart itself is now
+              seeded and in use (migration 0007), but letting it be edited from
+              here is a separate decision: an account carrying booked expenses
+              cannot simply be renamed or removed without deciding what happens
+              to them, and nobody has asked for that yet.
           {canManageChart && (
           <Button variant="outline" onClick={() => setChartOpen(true)}>
           <ListTree data-icon="inline-start" />
           GL accounts
           </Button>
           )} */}
+          <Button variant="outline" onClick={() => setBankAccountsOpen(true)}>
+          <Landmark data-icon="inline-start" />
+          Bank accounts
+          </Button>
           <Button variant="outline" onClick={exportCsv} disabled={rows.length === 0}>
           <Download data-icon="inline-start" />
           Export CSV
@@ -398,6 +409,14 @@ function ExpensesPage() {
       </div>
 
       <ExpenseDialog expense={editing} open={dialogOpen} onOpenChange={setDialogOpen} />
+
+      <ScopedBankAccountsDialog
+        open={bankAccountsOpen}
+        onOpenChange={setBankAccountsOpen}
+        usage={BANK_ACCOUNT_USAGE.expenses}
+        title="Expense Bank Accounts"
+        description="The accounts offered when marking an expense paid. Only the accounts ticked here appear in that dropdown."
+      />
 
       {/* <GlAccountsDialog open={chartOpen} onOpenChange={setChartOpen} /> */}
 

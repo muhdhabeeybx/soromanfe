@@ -20,6 +20,7 @@ import {
   type PfiExpense, type ExpenseAction,
 } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
+import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { ExpenseAttachments, FileButton, FileRow, type PendingFile } from '#/components/ExpenseAttachments'
 import { uploadExpenseFile } from '#/lib/hooks/useCloudinaryUpload'
 import { useToast } from '#/lib/hooks/useToast'
@@ -82,7 +83,13 @@ export function ExpenseReviewDrawer({
 }) {
   const navigate = useNavigate()
   const { data: expense, isLoading } = useExpenseDetail(open ? expenseId : null)
-  const { data: banks } = useBankAccounts({ status: 'Active' })
+  // Only the accounts expenses are actually paid out of — see
+  // BANK_ACCOUNT_USAGE. Offering all of the company's banking here invites a
+  // payment being booked against an account it never left.
+  const { data: banks } = useBankAccounts({
+    status: 'Active',
+    usage: BANK_ACCOUNT_USAGE.expenses,
+  })
   const review = useReviewExpense()
   const addComment = useAddExpenseComment()
   const remove = useDeleteExpense()
