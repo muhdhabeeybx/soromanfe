@@ -543,8 +543,60 @@ export function orderAmountPaid(o: FinanceReportOrder): number {
   if (!o.fundingTracked) {
     return o.paymentStatus === 'Paid' ? Number(o.totalAmount || 0) : 0
   }
-  const received = o.funding.reduce((sum, f) => sum + fundingAmount(f), 0)
+  // Receipts only. A surplus leaving for another order is a movement, not a
+  // negative payment, and netting it in here made two things go wrong at once:
+  // AG11212 read as fully paid when 180,000,000 had actually landed against a
+  // 153,400,000 order, and the Amount Paid column stopped being a column of
+  // money received that anyone could add up. The movement now lives in its own
+  // Transfers column — see transferAmount — so this stays a plain total and
+  // Differential shows the 26,600,000 for what it is.
+  const received = o.funding
+    .filter((f) => fundingSource(f) !== 'transfer_out')
+    .reduce((sum, f) => sum + fundingAmount(f), 0)
   return received + Number(o.unattributedAmount || 0)
+}
+
+/**
+ * Money moving between orders, kept out of Amount Paid.
+ *
+ * Negative where a surplus leaves, positive where it lands, so the column is a
+ * self-contained record of internal movement that nets to zero over any period
+ * containing both ends of a movement — checkable on its own, without disturbing
+ * the payment figures beside it.
+ */
+export function transferAmount(f: OrderFunding): number {
+  const source = fundingSource(f)
+  if (source === 'transfer_out') return fundingAmount(f)
+  // The incoming leg: a wallet credit whose description names the order the
+  // surplus came off. It counts as money this order received, so it stays in
+  // Amount Paid — it appears here too, as the other half of the movement.
+  if (source === 'wallet' && /TRF FROM ORDER/i.test(f.depositDescription || '')) {
+    return fundingAmount(f)
+  }
+  return 0
+}
+
+/**
+ * Money the order was paid that has no funding row to sit on.
+ *
+ * Two cases, and between them they are why summing the Amount Paid column in
+ * Excel came up short of the report's own total: an order with no allocations
+ * at all contributes its whole value to the total and prints no sub-rows, and
+ * a tracked order's untraced balance had nowhere to appear either. Both now
+ * get a row, so the column adds up to the total above it.
+ */
+export function untracedAmount(o: FinanceReportOrder): number {
+  const paid = orderAmountPaid(o)
+  const shown = o.fundingTracked
+    ? o.funding
+        .filter((f) => fundingSource(f) !== 'transfer_out')
+        .reduce((sum, f) => sum + fundingAmount(f), 0)
+    : walletStatementRows(o).reduce((sum, r) => sum + r.amount, 0)
+  // Whatever the printed rows do not already account for. Deriving it as the
+  // gap — rather than reading unattributedAmount directly — is what makes the
+  // column sum to the total for BOTH kinds of order, including an untracked
+  // one whose inferred wallet credits happen to cover part of it.
+  return Math.max(0, paid - shown)
 }
 
 /**

@@ -3,7 +3,7 @@ import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
   walletStatementRows, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  transferOutLabel,
+  transferOutLabel, transferAmount, untracedAmount,
   type FinanceReportOrder, type OrderFunding, type StatementRow, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -120,6 +120,13 @@ const COLUMNS: Array<{
   { header: 'Depositor', key: 'depositor', width: 22, scope: 'funding' },
   { header: 'Bank Reference', key: 'depositRef', width: 20, scope: 'funding' },
   { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
+  // Internal movement between orders, deliberately its own column. It used to
+  // be netted into Amount Paid as a bracketed negative, which stopped that
+  // column being something you could select and sum — the first thing anyone
+  // does with this sheet. Negative where a surplus leaves, positive where it
+  // lands, so this column is its own record and nets to zero across a period
+  // holding both ends.
+  { header: 'Transfers', key: 'transfers', width: 16, fmt: NGN_SIGNED, scope: 'funding', signed: true },
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
@@ -200,6 +207,21 @@ function statementRowValues(r: StatementRow) {
   }
 }
 
+/**
+ * The balancing sub-row: money the order was paid that no other row accounts
+ * for. See untracedAmount — without it the Amount Paid column does not sum to
+ * the total the report prints above it.
+ */
+function untracedRowValues(o: FinanceReportOrder) {
+  return {
+    depositor: 'NO RECORDED SOURCE',
+    depositRef: '—',
+    amount: untracedAmount(o),
+    depositDate: null,
+    recordedBy: '—',
+  }
+}
+
 /** A funding sub-row — no order details repeated, just where that money came from. */
 function fundingRowValues(f: OrderFunding, orderId: number) {
   const carried = carriedFromOrder(f, orderId)
@@ -208,9 +230,11 @@ function fundingRowValues(f: OrderFunding, orderId: number) {
   const isTransferOut = source === 'transfer_out'
   return {
     // The payment as it actually arrived — the statement line at face value,
-    // never netted down to what the order needed. See fundingAmount. Negative
-    // for a surplus leaving, so the column sums to what the order kept.
-    amount: fundingAmount(f),
+    // never netted down to what the order needed. See fundingAmount. A row
+    // that is purely a movement out leaves this blank rather than writing a
+    // negative into a column of receipts.
+    amount: isTransferOut ? null : fundingAmount(f),
+    transfers: transferAmount(f) || null,
     depositor: up(
       isTransferOut
         ? transferOutLabel(f)
@@ -387,6 +411,19 @@ export function writeFinanceTable(
         if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
         cursor++
       }
+    }
+
+    if (untracedAmount(o) > 0.005) {
+      const subRow = ws.getRow(cursor)
+      subRow.values = untracedRowValues(o)
+      subRow.height = ROW_HEIGHT.body
+      for (const c of COLUMNS) {
+        const cell = subRow.getCell(c.key)
+        cell.border = ALL_BORDERS
+        cell.fill = SUBROW_FILL
+        if (c.key === 'amount') cell.numFmt = NGN
+      }
+      cursor++
     }
   })
   ws.views = [{ state: 'frozen', ySplit: tableStartRow - 1 }]
@@ -670,7 +707,8 @@ export async function exportFinanceReportPdf(
             depositDate: fv.depositDate ? format(fv.depositDate, DATE_PATTERN) : '—',
             depositor: fv.depositor,
             depositRef: fv.depositRef,
-            amount: naira(fv.amount),
+            amount: fv.amount == null ? '' : naira(fv.amount),
+            transfers: fv.transfers == null ? '' : naira(fv.transfers),
             recordedBy: fv.recordedBy,
           }),
         )
@@ -690,6 +728,19 @@ export async function exportFinanceReportPdf(
           }),
         )
       }
+    }
+
+    if (untracedAmount(o) > 0.005) {
+      const uv = untracedRowValues(o)
+      body.push(
+        cellsFor('funding', {
+          depositDate: '—',
+          depositor: uv.depositor,
+          depositRef: uv.depositRef,
+          amount: naira(uv.amount),
+          recordedBy: uv.recordedBy,
+        }),
+      )
     }
   })
 

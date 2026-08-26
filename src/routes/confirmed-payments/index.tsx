@@ -31,7 +31,7 @@ import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
   paymentBreakdown, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  fundingApplied, transferOutLabel, walletStatementRows,
+  fundingApplied, transferOutLabel, transferAmount, untracedAmount, walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
@@ -46,7 +46,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'differential'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -1120,17 +1120,21 @@ function FinanceReportPage() {
                                     : internal ? 'Internal transfer' : fundingReference(f) || '—'}
                             </span>
                           ),
-                          // Money leaving reads as a negative, in brackets —
-                          // the same convention Differential already uses, so
-                          // the column can be added up down the page and land
-                          // on what the order actually kept.
-                          amount: (
+                          // Receipts only, always positive, so the column can
+                          // be added straight down the page. A row that is
+                          // purely money moving out leaves it empty.
+                          amount: isTransferOut ? null : (
                             <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
-                              {fundingAmount(f) < 0
-                                ? `(${naira(Math.abs(fundingAmount(f)))})`
-                                : naira(fundingAmount(f))}
+                              {naira(fundingAmount(f))}
                             </span>
                           ),
+                          transfers: transferAmount(f) ? (
+                            <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
+                              {transferAmount(f) < 0
+                                ? `(${naira(Math.abs(transferAmount(f)))})`
+                                : naira(transferAmount(f))}
+                            </span>
+                          ) : null,
                           recordedBy: <span className="block max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</span>,
                         }
                         return (
@@ -1150,6 +1154,24 @@ function FinanceReportPage() {
                           </TableRow>
                         )
                       })}
+                      {/* Money the order was paid that no row above accounts
+                          for. Without it the Amount Paid column came up short
+                          of the total at the top of the page, which is the
+                          first thing anyone checking against a statement
+                          notices and the last thing they can explain. */}
+                      {untracedAmount(o) > 0.005 && (
+                        <TableRow key={`${o.id}-untraced`} className="bg-muted/20 hover:bg-muted/30">
+                          {REPORT_COLUMNS.map((c) => (
+                            <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                              {c.key === 'depositor' ? (
+                                <span className="text-muted-foreground italic">No recorded source</span>
+                              ) : c.key === 'amount' ? (
+                                <span className="whitespace-nowrap font-semibold">{naira(untracedAmount(o))}</span>
+                              ) : null}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      )}
                     </Fragment>
                   )
                 })}
