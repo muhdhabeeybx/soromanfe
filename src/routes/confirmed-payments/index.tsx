@@ -31,7 +31,7 @@ import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
   paymentBreakdown, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  fundingApplied, walletStatementRows,
+  fundingApplied, transferOutLabel, walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
@@ -162,6 +162,7 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
   const carried = carriedFromOrder(funding, orderId)
   const source = fundingSource(funding)
   const isWallet = source === 'wallet'
+  const isTransferOut = source === 'transfer_out'
   // What the order took of it, where that is less than what arrived. Only a
   // bank payment larger than the order it was made for shows this, and it is
   // the sentence that explains the Differential column to whoever is holding
@@ -176,19 +177,23 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
       isWallet ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20' : 'border-warning/20 bg-warning/5',
     )}>
       <div className="flex items-center justify-between gap-2 mb-2">
-        <Badge className={cn('font-normal', (carried || isWallet)
+        <Badge className={cn('font-normal', (carried || isWallet || isTransferOut)
           ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900'
           : 'bg-warning/15 text-warning border-warning/30')}>
-          {isWallet
-            ? 'Drawn from wallet balance'
-            : carried
-              ? `Transfer from ${carried.ref}`
-              : source === 'bank'
-                ? 'Bank statement match'
-                : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
+          {isTransferOut
+            ? transferOutLabel(funding)
+            : isWallet
+              ? 'Drawn from wallet balance'
+              : carried
+                ? `Transfer from ${carried.ref}`
+                : source === 'bank'
+                  ? 'Bank statement match'
+                  : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
         </Badge>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">{naira(received)}</span>
+          <span className="text-sm font-semibold">
+            {received < 0 ? `(${naira(Math.abs(received))})` : naira(received)}
+          </span>
           {/* Unmatch — commented out, not removed. The handler, its confirm
               dialog and the mutation behind it are all still wired up below;
               only the way in is closed.
@@ -226,7 +231,17 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
         )} */}
         {!paystack && (
           <>
-            {isWallet ? (
+            {isTransferOut ? (
+              <Row
+                label="Where it went"
+                value={
+                  funding.toOrderRef
+                    ? `Surplus moved to ${funding.toOrderRef} — it appears there as money received`
+                    : 'Surplus moved to another order'
+                }
+                icon={Repeat}
+              />
+            ) : isWallet ? (
               <Row
                 label="Source"
                 value={`${walletOriginLabel(funding)}${fundingDepositor(funding) ? ` · originally paid in by ${fundingDepositor(funding)}` : ''}`}
@@ -790,30 +805,55 @@ function FinanceReportPage() {
           <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
 
           {/*
-            The three ways billed and received come apart, each with the count
-            behind it — a figure you can go and check, rather than a net number
-            you have to take on trust.
-          */}
+            Overpaid, Unaccounted surplus and Internal transfers are commented
+            out — Net Differential alone is the figure to read.
+
+            They were split apart to stop a single "Overpaid" number claiming
+            ₦234.9m was owed back to customers when ₦13,975,500 was actually in
+            wallets. The split is correct, but three more figures on a page is
+            three more things to reconcile, and most of what they were
+            reporting is noise in records that predate the allocation ledger —
+            duplicated legacy deposits (OG10190 carries two of each of its
+            four rows), orders whose rate × litres disagrees with their stored
+            total. Net Differential answers the question that matters without
+            inviting the others.
+
+            paymentBreakdown still computes all of it; restore any line below
+            and it is correct and reconciles — shortTotal − (overpaidTotal +
+            unaccountedTotal) === netDifferential.
+
           <SummaryItem
             icon={ArrowUpCircle}
             tone={breakdown.overpaidTotal > 0 ? 'over' : 'plain'}
-            label="Overpaid"
+            label="Overpaid (still in wallet)"
             value={naira(breakdown.overpaidTotal)}
-            // hint={`${breakdown.overpaidCount} order${breakdown.overpaidCount === 1 ? '' : 's'} received more than billed`}
+            hint={
+              breakdown.overpaidCount > 0
+                ? `${breakdown.overpaidCount} order${breakdown.overpaidCount === 1 ? '' : 's'} · money still held`
+                : undefined
+            }
           />
+          {breakdown.unaccountedTotal > 0 && (
+            <SummaryItem
+              icon={Info}
+              label="Unaccounted surplus"
+              value={naira(breakdown.unaccountedTotal)}
+              hint={`${breakdown.unaccountedCount} order${breakdown.unaccountedCount === 1 ? '' : 's'} · pre-ledger credits, destination unrecorded`}
+            />
+          )}
+          <SummaryItem
+            icon={Repeat}
+            tone={breakdown.internalCount > 0 ? 'internal' : 'plain'}
+            label="Internal transfers"
+            value={naira(breakdown.internalTotal)}
+          />
+          */}
           <SummaryItem
             icon={ArrowDownCircle}
             tone={breakdown.shortTotal > 0 ? 'owed' : 'plain'}
             label="Shortfall"
             value={naira(breakdown.shortTotal)}
             // hint={`${breakdown.shortCount} order${breakdown.shortCount === 1 ? '' : 's'} still owing`}
-          />
-          <SummaryItem
-            icon={Repeat}
-            tone={breakdown.internalCount > 0 ? 'internal' : 'plain'}
-            label="Internal transfers"
-            value={naira(breakdown.internalTotal)}
-            // hint={`${breakdown.internalCount} payment${breakdown.internalCount === 1 ? '' : 's'} moved inside the business`}
           />
           <SummaryItem
             icon={Scale}
@@ -1040,6 +1080,7 @@ function FinanceReportPage() {
                         // reference column that it came out of balance rather
                         // than landing in the bank on this order's account.
                         const isWallet = source === 'wallet'
+                        const isTransferOut = source === 'transfer_out'
                         const fundingCells: Record<string, React.ReactNode> = {
                           depositDate: (
                             <span className="whitespace-nowrap text-muted-foreground">
@@ -1050,7 +1091,9 @@ function FinanceReportPage() {
                             <span className={cn('flex items-center gap-1.5', internal && TONE_CLASS.internal)}>
                               {internal && <Repeat className="size-3 shrink-0" />}
                               <span className="block max-w-[11rem] truncate">
-                                {carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'}
+                                {isTransferOut
+                                  ? transferOutLabel(f)
+                                  : carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'}
                               </span>
                             </span>
                           ),
@@ -1068,16 +1111,24 @@ function FinanceReportPage() {
                                     : undefined
                               }
                             >
-                              {isWallet
-                                ? walletOriginLabel(f)
-                                : carried
-                                  ? `off ${fundingReference(f) || 'credit'}`
-                                  : internal ? 'Internal transfer' : fundingReference(f) || '—'}
+                              {isTransferOut
+                                ? `to ${f.toOrderRef || 'another order'}`
+                                : isWallet
+                                  ? walletOriginLabel(f)
+                                  : carried
+                                    ? `off ${fundingReference(f) || 'credit'}`
+                                    : internal ? 'Internal transfer' : fundingReference(f) || '—'}
                             </span>
                           ),
+                          // Money leaving reads as a negative, in brackets —
+                          // the same convention Differential already uses, so
+                          // the column can be added up down the page and land
+                          // on what the order actually kept.
                           amount: (
                             <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
-                              {naira(fundingAmount(f))}
+                              {fundingAmount(f) < 0
+                                ? `(${naira(Math.abs(fundingAmount(f)))})`
+                                : naira(fundingAmount(f))}
                             </span>
                           ),
                           recordedBy: <span className="block max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</span>,

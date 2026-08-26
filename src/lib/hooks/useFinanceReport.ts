@@ -18,7 +18,12 @@ export type { PaystackDetails }
  *           wallet oldest-credit-first. Nothing says why that credit and not
  *           another, and the report says so rather than implying otherwise.
  */
-export type FundingSource = 'bank' | 'wallet' | 'legacy'
+/**
+ *   transfer_out  the other leg of a surplus moved to another order — a
+ *                 NEGATIVE row, so the order it left nets down to what it
+ *                 actually kept instead of sitting there looking overpaid
+ */
+export type FundingSource = 'bank' | 'wallet' | 'legacy' | 'transfer_out'
 
 /** One credit deposit that contributed to an order's payment. */
 export interface OrderFunding {
@@ -35,6 +40,17 @@ export interface OrderFunding {
   /** What the order CONSUMED of it — capped at the order's own value. */
   appliedAmount?: string | number | null
   source?: FundingSource | null
+  /**
+   * What is left of this credit, or null where nothing tracks it.
+   *
+   * Tells a surplus still sitting in the wallet from one that has already
+   * gone somewhere else — the difference between a real overpayment and a
+   * pre-ledger credit whose remainder quietly paid for other orders.
+   */
+  depositRemaining?: string | number | null
+  /** transfer_out only: the order the money went to. */
+  toOrderId?: number | null
+  toOrderRef?: string | null
   /** What the payment actually was, before any split across orders or surplus to wallet. */
   depositAmount?: string | number | null
   depositReference: string | null
@@ -306,7 +322,7 @@ export function carriedFromOrder(
  * customer-to-customer transfer is the only record there is.
  */
 export function isInternalTransfer(f: OrderFunding): boolean {
-  if (fundingSource(f) === 'wallet') return true
+  if (fundingSource(f) === 'wallet' || fundingSource(f) === 'transfer_out') return true
   if (fundingSource(f) === 'bank') return false
   if (f.statementDepositor || f.depositReference) return false
   return /wallet transfer from customer|overpayment received from order/i.test(
@@ -325,8 +341,27 @@ export function isInternalTransfer(f: OrderFunding): boolean {
 export function walletOriginLabel(f: OrderFunding): string {
   const ref = f.depositReference || ''
   if (ref) return `Balance from ${ref}`
+  // A surplus moved off another order already writes that order's reference
+  // into its own description ("From TRF FROM ORDER AG11212 — …"). Pulling it
+  // out gives the incoming leg the same short name the outgoing leg uses, so
+  // the pair reads as one movement instead of a tidy row facing a paragraph.
+  const named = /TRF FROM ORDER\s+([A-Z0-9]+)/i.exec(f.depositDescription || '')
+  if (named) return `From ${named[1].toUpperCase()}`
   const from = internalSource(f)
   return from ? `Balance — ${from}` : 'Balance from wallet'
+}
+
+/**
+ * Where a surplus went — "Transferred to AA11214".
+ *
+ * The outgoing half of a movement whose incoming half was already on the
+ * report. Order 11212 received ₦180m across three bank lines against a
+ * ₦153.4m order and ₦26.6m of it was deliberately moved to order 11214 —
+ * which the report showed on 11214 and nowhere else, leaving 11212 reading as
+ * ₦26.6m overpaid with nothing to say otherwise.
+ */
+export function transferOutLabel(f: OrderFunding): string {
+  return f.toOrderRef ? `Transferred to ${f.toOrderRef}` : 'Transferred to another order'
 }
 
 function internalSource(f: OrderFunding): string {
@@ -446,6 +481,37 @@ export function fundingAmount(f: OrderFunding): number {
 /** What the order actually consumed of this payment — see appliedAmount. */
 export function fundingApplied(f: OrderFunding): number {
   return Number(f.appliedAmount ?? f.amount ?? 0)
+}
+
+/** Received against the order beyond what the order consumed. */
+export function fundingSurplus(f: OrderFunding): number {
+  if (fundingSource(f) !== 'bank') return 0
+  return Math.max(0, fundingAmount(f) - fundingApplied(f))
+}
+
+/**
+ * The part of a row's surplus that is demonstrably still in the wallet.
+ *
+ * A surplus is only an overpayment if the money is still there, and exactly
+ * one thing on the record says so: the credit's own remainder. Where it is
+ * null — a credit predating the allocation ledger — nothing is known, and
+ * "nothing is known" must not resolve to "the customer is owed this".
+ *
+ * The direction here is deliberate and was wrong the first time. Deriving the
+ * held figure as whatever was left over after the unexplainable part meant
+ * every surplus with no explanation at all defaulted into money-we-owe:
+ * ₦234.9m, against ₦13,975,500 actually sitting in wallets. Most of it was
+ * duplicated legacy deposits (order OG10190 carries ₦48,420,000 and
+ * ₦11,724,000 twice each) and orders whose rate × litres disagrees with their
+ * stored total — neither of which is anybody's money.
+ *
+ * So held is now the conservative, evidence-backed side, and everything
+ * unexplained falls to unaccounted, where it is visible and named.
+ */
+export function fundingHeldSurplus(f: OrderFunding): number {
+  const surplus = fundingSurplus(f)
+  if (surplus <= 0 || f.depositRemaining == null) return 0
+  return Math.min(surplus, Number(f.depositRemaining))
 }
 
 /** Sales value as the report computes it — rate × litres, not the stored total. */
@@ -614,8 +680,20 @@ export interface PaymentBreakdown {
   /** Orders whose payment matches their sales value to the kobo. */
   exactCount: number
   overpaidCount: number
-  /** Positive: how much was received beyond what was billed. */
+  /**
+   * Positive: surplus received beyond what was billed AND still in the wallet.
+   *
+   * This used to be every naira of surplus, which made it ₦961m when the money
+   * actually held was ₦17.7m — the rest being pre-ledger credits whose
+   * remainder had long since paid for other orders. A figure nobody could act
+   * on, sitting where the amount owed back to customers should be. The part
+   * that cannot be accounted for now travels separately, below.
+   */
   overpaidTotal: number
+  /** Orders carrying surplus on a credit that predates the allocation ledger. */
+  unaccountedCount: number
+  /** Positive: surplus with no record of where it went. Not money owed to anyone. */
+  unaccountedTotal: number
   shortCount: number
   /** Positive: how much is still owed. */
   shortTotal: number
@@ -630,6 +708,7 @@ export function paymentBreakdown(orders: FinanceReportOrder[]): PaymentBreakdown
   const b: PaymentBreakdown = {
     exactCount: 0,
     overpaidCount: 0, overpaidTotal: 0,
+    unaccountedCount: 0, unaccountedTotal: 0,
     shortCount: 0, shortTotal: 0,
     internalCount: 0, internalTotal: 0,
     netDifferential: 0,
@@ -641,16 +720,32 @@ export function paymentBreakdown(orders: FinanceReportOrder[]): PaymentBreakdown
     // Half a kobo, so a rounding artefact never reports as a shortfall.
     if (Math.abs(d) < 0.005) b.exactCount += 1
     else if (d > 0) { b.shortCount += 1; b.shortTotal += d }
-    else { b.overpaidCount += 1; b.overpaidTotal += Math.abs(d) }
+    else {
+      const surplus = Math.abs(d)
+      // Split, never double-counted: what the credits themselves prove is
+      // still unspent, capped at the surplus the order actually shows —
+      // everything else falls to unaccounted. The two halves always sum back
+      // to the surplus, so the summary still reconciles exactly as before:
+      // shortTotal − (overpaidTotal + unaccountedTotal) === netDifferential.
+      const held = Math.min(
+        surplus,
+        o.funding.reduce((sum, f) => sum + fundingHeldSurplus(f), 0),
+      )
+      if (held > 0.005) { b.overpaidCount += 1; b.overpaidTotal += held }
+      const unaccounted = surplus - held
+      if (unaccounted > 0.005) { b.unaccountedCount += 1; b.unaccountedTotal += unaccounted }
+    }
 
     for (const f of o.funding) {
-      // Both kinds of money that did not arrive from a bank on this order: a
-      // recorded wallet transfer, and a remainder carried off another order's
-      // credit. They are the same thing to a reader — money moved internally —
-      // and counting only the first understated it.
+      // Every kind of money that did not arrive from a bank on this order: a
+      // wallet draw, a surplus leaving for another order, and (on legacy rows)
+      // a remainder carried off another order's credit. They are the same
+      // thing to a reader — money moved inside the business — and counting
+      // only some of them understated it. Absolute value, so an outgoing leg
+      // adds to the total moved rather than cancelling an incoming one.
       if (!isInternalTransfer(f) && !carriedFromOrder(f, o.id)) continue
       b.internalCount += 1
-      b.internalTotal += fundingAmount(f)
+      b.internalTotal += Math.abs(fundingAmount(f))
     }
   }
 
