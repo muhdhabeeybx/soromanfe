@@ -389,8 +389,8 @@ export function ExpenseReviewDrawer({
               {expense.amount_ex_vat != null && (
                 <div className="py-2">
                   <h3 className="pb-1 text-sm font-bold tracking-tight">Invoice</h3>
-                  <Row label="Invoice no." value={expense.invoice_number} />
-                  <Row label="TIN" value={expense.tin_number} />
+                  {/* <Row label="Invoice no." value={expense.invoice_number} /> */}
+                  {/* <Row label="TIN" value={expense.tin_number} /> */}
                   <Row label="Amount ex VAT" value={naira(Number(expense.amount_ex_vat))} />
                   <Row
                     label="VAT"
@@ -433,7 +433,7 @@ export function ExpenseReviewDrawer({
                   </>
                 )}
                 <Row label="Paid from" value={expense.bank_paid_from} />
-                <Row label="Payment reference" value={expense.payment_reference} />
+                {/* <Row label="Payment reference" value={expense.payment_reference} /> */}
                 {settled != null && (
                   <>
                     <Row
@@ -444,13 +444,13 @@ export function ExpenseReviewDrawer({
                     {expense.payment_notes && <Row label="Payment notes" value={expense.payment_notes} />}
                   </>
                 )}
-                <Row label="To" value={expense.payee_account_name} />
+                <Row label="Account Name" value={expense.payee_account_name} />
                 <Row
-                  label="Account"
+                  label="Bank Details"
                   value={[expense.payee_bank_name, expense.bank_code, expense.payee_account_number]
                     .filter(Boolean).join(' · ')}
                 />
-                <Row label="Receipt reference" value={expense.receipt_reference} />
+                {/* <Row label="Receipt reference" value={expense.receipt_reference} /> */}
               </div>
 
               {/* Approvers ask for the invoice constantly, so the files live in
@@ -639,7 +639,7 @@ export function ExpenseReviewDrawer({
                           : ''}
                       </p>
                     </div>
-                    <div className="space-y-1.5">
+                    {/* <div className="space-y-1.5">
                       <label className={cn(MICRO, 'block text-muted-foreground')}>
                         Payment reference
                       </label>
@@ -648,7 +648,7 @@ export function ExpenseReviewDrawer({
                         onChange={(e) => setPay((p) => ({ ...p, payment_reference: e.target.value }))}
                         placeholder="Teller or transfer ref"
                       />
-                    </div>
+                    </div> */}
                     <div className="space-y-1.5">
                       <label className={cn(MICRO, 'block text-muted-foreground')}>Payment date</label>
                       <Input
@@ -657,7 +657,7 @@ export function ExpenseReviewDrawer({
                         onChange={(e) => setPay((p) => ({ ...p, payment_date: e.target.value }))}
                       />
                     </div>
-                    <div className="space-y-1.5">
+                    {/* <div className="space-y-1.5">
                       <label className={cn(MICRO, 'block text-muted-foreground')}>Payment method</label>
                       <NativeSelect
                         value={pay.payment_method}
@@ -666,10 +666,10 @@ export function ExpenseReviewDrawer({
                         <option value="">Select…</option>
                         {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
                       </NativeSelect>
-                    </div>
+                    </div> */}
                     <div className="space-y-1.5 sm:col-span-2">
                       <label className={cn(MICRO, 'block text-muted-foreground')}>
-                        Payment notes{payVariance !== 0 ? ' — required, amount differs from what was requested' : ' (optional)'}
+                        Remarks{payVariance !== 0 ? ' — required, amount differs from what was requested' : ' (optional)'}
                       </label>
                       <Textarea
                         rows={2}
@@ -678,7 +678,7 @@ export function ExpenseReviewDrawer({
                         placeholder={payVariance !== 0 ? 'Explain the difference' : 'Anything worth noting about this payment'}
                       />
                     </div>
-                    <div className="space-y-1.5 sm:col-span-2">
+                    {/* <div className="space-y-1.5 sm:col-span-2">
                       <div className="flex items-center justify-between gap-2">
                         <label className={cn(MICRO, 'block text-muted-foreground')}>
                           Payment evidence{evidence.length ? ` (${evidence.length})` : ' (optional)'}
@@ -698,7 +698,7 @@ export function ExpenseReviewDrawer({
                           ))}
                         </div>
                       )}
-                    </div>
+                    </div> */}
                   </div>
                 )}
 
