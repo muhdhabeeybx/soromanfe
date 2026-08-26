@@ -19,7 +19,7 @@ import {
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
   ChevronRight, ChevronLeft, SlidersHorizontal,
-  Loader2, Landmark, ArrowLeftRight,
+  Loader2, Landmark, ArrowLeftRight, Pencil, Trash2,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
@@ -31,11 +31,12 @@ import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
   RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, TransferOverpaymentDialog,
+  EditEntryDialog, DeleteConfirmDialog,
   type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
 import {
   toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate,
-  getCodeTheme, idKey, type TimePreset,
+  getCodeTheme, idKey, entityId, type TimePreset,
 } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, formatBankLabel, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
@@ -393,6 +394,14 @@ function SalesLedgerDashboard() {
   const [quickPaymentOpen, setQuickPaymentOpen] = useState(false)
   const [rowSetupOpen, setRowSetupOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
+  // Editing and deleting act on one payment, not on the truck-cycle, so they
+  // carry their own target rather than sharing quickTarget.
+  const [editOpen, setEditOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<DeliverySale | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<
+    { ids: string[]; loadingId?: string; mode: 'entry' | 'truck'; label: string } | null
+  >(null)
   const [assignMode, setAssignMode] = useState(false)
 
   const openPaymentDialog = (inAssignMode = false) => {
@@ -659,7 +668,7 @@ function SalesLedgerDashboard() {
       </div>
 
       {/* ═══ PFI CODE MANAGEMENT ═══ */}
-      {tripCodes.length > 0 && (
+      {/* {tripCodes.length > 0 && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="p-4">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
@@ -706,7 +715,7 @@ function SalesLedgerDashboard() {
             </div>
           </div>
         </div>
-      )}
+      )} */}
 
       {/* ═══ VIEW SWITCHER ═══ */}
       <div className="flex items-center gap-1 bg-card rounded-lg border border-border p-1 w-fit">
@@ -1065,7 +1074,38 @@ function SalesLedgerDashboard() {
                                 column answers on the row above — whether the
                                 truck is paid off. Two meanings, one heading. */}
                             <TableCell />
-                            <TableCell />
+                            {/* Correcting a mistyped payment meant opening the
+                                truck's own page to find the same row again.
+                                Same two dialogs that page uses, so an entry
+                                edits identically wherever it is found. */}
+                            <TableCell className="text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  size="sm" variant="outline"
+                                  className="h-6 gap-1 border-border px-1.5 text-xs"
+                                  title="Edit this payment"
+                                  onClick={() => { setEditTarget(sale); setEditOpen(true) }}
+                                >
+                                  <Pencil className="size-3" /> Edit
+                                </Button>
+                                <Button
+                                  size="sm" variant="outline"
+                                  className="h-6 gap-1 border-destructive/30 px-1.5 text-xs text-destructive hover:bg-destructive/10"
+                                  title="Delete this payment"
+                                  onClick={() => {
+                                    setDeleteTarget({
+                                      ids: [entityId(sale)],
+                                      mode: 'entry',
+                                      label: `${group.truckNumber} — ${fmt(Math.abs(amount))}`,
+                                    })
+                                    setDeleteOpen(true)
+                                  }}
+                                >
+                                  <Trash2 className="size-3" />
+                                  <span className="sr-only">Delete this payment</span>
+                                </Button>
+                              </div>
+                            </TableCell>
                           </TableRow>
                         )
                       })
@@ -1126,6 +1166,7 @@ function SalesLedgerDashboard() {
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Paid Into</TableHead>
                       <TableHead className="font-semibold text-accent text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Amount Paid</TableHead>
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Entered By</TableHead>
+                      <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1186,6 +1227,35 @@ function SalesLedgerDashboard() {
                                 : fmt(toNum(sale.paymentAmount))}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{sale.enteredBy || '—'}</TableCell>
+                          {/* stopPropagation: the row navigates to the truck. */}
+                          <TableCell className="text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm" variant="outline"
+                                className="h-6 gap-1 border-border px-1.5 text-xs"
+                                title="Edit this payment"
+                                onClick={() => { setEditTarget(sale); setEditOpen(true) }}
+                              >
+                                <Pencil className="size-3" /> Edit
+                              </Button>
+                              <Button
+                                size="sm" variant="outline"
+                                className="h-6 gap-1 border-destructive/30 px-1.5 text-xs text-destructive hover:bg-destructive/10"
+                                title="Delete this payment"
+                                onClick={() => {
+                                  setDeleteTarget({
+                                    ids: [entityId(sale)],
+                                    mode: 'entry',
+                                    label: `${sale.truckNumber || 'Payment'} — ${fmt(Math.abs(toNum(sale.paymentAmount)))}`,
+                                  })
+                                  setDeleteOpen(true)
+                                }}
+                              >
+                                <Trash2 className="size-3" />
+                                <span className="sr-only">Delete this payment</span>
+                              </Button>
+                            </div>
+                          </TableCell>
                         </TableRow>
                       )
                       })
@@ -1209,6 +1279,7 @@ function SalesLedgerDashboard() {
                           <TableCell className="text-right text-xs font-bold text-accent whitespace-nowrap tabular-nums">
                             {fmt(dayGroup.totals.paid)}
                           </TableCell>
+                          <TableCell />
                           <TableCell />
                         </TableRow>,
                       ]
@@ -1263,6 +1334,19 @@ function SalesLedgerDashboard() {
         onOpenChange={setTransferOpen}
         source={quickTarget}
         candidates={filteredLedgerGroups}
+      />
+
+      <EditEntryDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        target={editTarget}
+        tripCodes={tripCodes}
+      />
+
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        target={deleteTarget}
       />
 
       <ScopedBankAccountsDialog
