@@ -320,7 +320,7 @@ function ExpensesPage() {
                   <TableHead className="text-right">Amount paid</TableHead>
                   {/* <TableHead>GL code</TableHead> */}
                   {/* <TableHead>Bank code</TableHead> */}
-                  <TableHead>Paid to</TableHead>
+                  <TableHead>Vendor's account</TableHead>
                   <TableHead>Paid from</TableHead>
                   {/* The filter above is unreadable without this: you pick a
                       name and then cannot tell which rows are theirs. */}
@@ -409,16 +409,20 @@ function ExpensesPage() {
                     {/* The payee's three fields shown as the one fact they
                         are — you cannot pay against a number without the
                         bank, or a bank without the number. */}
-                    <TableCell className="min-w-[11rem] text-xs leading-snug">
+                    {/* Each line clipped rather than wrapped: an account name
+                        can run long, and three wrapping lines would make this
+                        row taller than every other one on the page. The whole
+                        thing is on hover and in both exports. */}
+                    <TableCell className="max-w-[11rem] text-xs leading-snug">
                       {(() => {
                         const p = payeeAccount(e)
                         if (!p.any) return <span className="text-muted-foreground">—</span>
                         return (
-                          <>
-                            {p.name && <span className="block font-medium uppercase">{p.name}</span>}
-                            {p.bank && <span className="block text-muted-foreground">{p.bank}</span>}
-                            {p.number && <span className="block font-mono text-muted-foreground">{p.number}</span>}
-                          </>
+                          <div title={p.line}>
+                            {p.name && <span className="block truncate font-medium uppercase">{p.name}</span>}
+                            {p.bank && <span className="block truncate text-muted-foreground">{p.bank}</span>}
+                            {p.number && <span className="block truncate font-mono text-muted-foreground">{p.number}</span>}
+                          </div>
                         )
                       })()}
                     </TableCell>

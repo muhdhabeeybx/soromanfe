@@ -101,7 +101,7 @@ const columns = (vatRate: number, resolve: BankResolver): Col[] => [
   { header: 'Amount paid', width: 16, align: 'right', fmt: NGN, get: (e) => paidFigure(e) },
   // The payee's three fields as one cell, wrapped onto three lines — they are
   // one fact, and split across three columns nobody reads them together.
-  { header: 'Paid to', width: 30, wrap: true, get: (e) => {
+  { header: "Vendor's account", width: 30, wrap: true, get: (e) => {
     const p = payeeAccount(e)
     return p.any ? [p.name, p.bank, p.number].filter(Boolean).join('\n') : ''
   } },
@@ -404,7 +404,7 @@ export async function exportExpensesPdf(rows: PfiExpense[], meta: ExpenseExportM
   // work in; this is the one they hand across a desk.
   const head = [
     'S/N', 'Reference', 'Date', 'Cost group', 'Category', 'PFI', 'Vendor', 'Purpose',
-    'Invoice', 'WHT', 'Requested', 'Paid', 'Paid to', 'Paid from', 'Raised by', 'Status',
+    'Invoice', 'WHT', 'Requested', 'Paid', "Vendor's account", 'Paid from', 'Raised by', 'Status',
   ]
   const resolve = meta.resolveBank ?? (() => null)
 
