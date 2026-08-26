@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
-import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
@@ -31,7 +30,7 @@ import {
   useExpenses, useExpenseCategories, useDeleteExpense,
   type PfiExpense, type ExpenseFilters, isExpenseDeletable, isExpenseEditable,
 } from '#/lib/hooks/usePfis'
-import { ExpenseDialog, cash, plain } from '#/components/ExpenseDialog'
+import { ExpenseDialog, cash } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
 // GL chart editor — commented out along with the rest of the GL chart for
 // now (it was never actually seeded in production, see ExpenseDialog).
@@ -125,7 +124,6 @@ function ExpensesPage() {
       description="Every request across the company — verify, approve and pay. For raising and tracking just your own, see My Requests."
       actions={
         <>
-          <div className="flex gap-2">
           {/* GL accounts editor — still commented out. The chart itself is now
               seeded and in use (migration 0007), but letting it be edited from
               here is a separate decision: an account carrying booked expenses
@@ -137,34 +135,49 @@ function ExpensesPage() {
           GL accounts
           </Button>
           )} */}
-          <Button variant="outline" onClick={() => setBankAccountsOpen(true)}>
-          <Landmark data-icon="inline-start" />
-          Bank accounts
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => runExport('excel')}
-            disabled={rows.length === 0 || exporting !== null}
-          >
-            {exporting === 'excel'
-              ? <Loader2 data-icon="inline-start" className="animate-spin" />
-              : <FileSpreadsheet data-icon="inline-start" />}
-            Excel
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => runExport('pdf')}
-            disabled={rows.length === 0 || exporting !== null}
-          >
-            {exporting === 'pdf'
-              ? <Loader2 data-icon="inline-start" className="animate-spin" />
-              : <Download data-icon="inline-start" />}
-            PDF
-          </Button>
-          <Button onClick={openNew}>
-          <Plus data-icon="inline-start" />
-          Record expense
-          </Button>
+          {/* Two rows on a phone, one on a desktop. Four buttons in a single
+              non-wrapping row ran off the side of the screen; splitting them
+              by what they are for — doing the work, then taking it away —
+              gives two pairs that each halve the width cleanly. */}
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <div className="flex gap-2">
+              <Button className="flex-1 sm:flex-none" onClick={openNew}>
+                <Plus data-icon="inline-start" />
+                Record expense
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => setBankAccountsOpen(true)}
+              >
+                <Landmark data-icon="inline-start" />
+                Bank accounts
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => runExport('excel')}
+                disabled={rows.length === 0 || exporting !== null}
+              >
+                {exporting === 'excel'
+                  ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                  : <FileSpreadsheet data-icon="inline-start" />}
+                Excel
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => runExport('pdf')}
+                disabled={rows.length === 0 || exporting !== null}
+              >
+                {exporting === 'pdf'
+                  ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                  : <Download data-icon="inline-start" />}
+                PDF
+              </Button>
+            </div>
           </div>
         </>
       }

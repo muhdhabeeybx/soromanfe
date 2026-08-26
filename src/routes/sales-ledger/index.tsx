@@ -437,44 +437,53 @@ function SalesLedgerDashboard() {
         title="Delivery Sales Ledger"
         description="Manage loaded trucks and track incremental payments."
         actions={
-          <>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => runExport('excel')}
-              disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
-            >
-              {exporting === 'excel'
-                ? <Loader2 className="size-4 animate-spin" />
-                : <FileSpreadsheet className="size-4" />}
-              <span className="hidden sm:inline">Export Excel</span>
-              <span className="sm:hidden">Excel</span>
-            </Button>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => runExport('pdf')}
-              disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
-            >
-              {exporting === 'pdf'
-                ? <Loader2 className="size-4 animate-spin" />
-                : <Download className="size-4" />}
-              <span className="hidden sm:inline">Export PDF</span>
-              <span className="sm:hidden">PDF</span>
-            </Button>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => setBankAccountsOpen(true)}
-            >
-              <Landmark className="size-4" />
-              <span className="hidden sm:inline">Bank Accounts</span>
-              <span className="sm:hidden">Banks</span>
-            </Button>
-            <Button className="gap-2 bg-accent hover:bg-accent/80" onClick={() => openPaymentDialog()}>
-              <Plus className="size-4" /> Record Payment
-            </Button>
-          </>
+          // Two rows on a phone, one on a desktop — four buttons in a single
+          // non-wrapping row ran off the side of the screen.
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <div className="flex gap-2">
+              <Button
+                className="flex-1 gap-2 bg-accent hover:bg-accent/80 sm:flex-none"
+                onClick={() => openPaymentDialog()}
+              >
+                <Plus className="size-4" /> Record Payment
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 gap-2 sm:flex-none"
+                onClick={() => setBankAccountsOpen(true)}
+              >
+                <Landmark className="size-4" />
+                <span className="hidden sm:inline">Bank Accounts</span>
+                <span className="sm:hidden">Banks</span>
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 gap-2 sm:flex-none"
+                onClick={() => runExport('excel')}
+                disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
+              >
+                {exporting === 'excel'
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : <FileSpreadsheet className="size-4" />}
+                <span className="hidden sm:inline">Export Excel</span>
+                <span className="sm:hidden">Excel</span>
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 gap-2 sm:flex-none"
+                onClick={() => runExport('pdf')}
+                disabled={exporting !== null || (activeView === 'ledger' ? filteredLedgerGroups.length === 0 : filteredSales.length === 0)}
+              >
+                {exporting === 'pdf'
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : <Download className="size-4" />}
+                <span className="hidden sm:inline">Export PDF</span>
+                <span className="sm:hidden">PDF</span>
+              </Button>
+            </div>
+          </div>
         }
       />
 

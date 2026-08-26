@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
-import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
@@ -99,32 +98,38 @@ function MyRequestsPage() {
         title="My requests"
         description="Raise a payment request and track it through Expenditure Officer, CFO and final approval."
         actions={(
-          <>
-            <Button
-              variant="outline"
-              onClick={() => runExport('excel')}
-              disabled={rows.length === 0 || exporting !== null}
-            >
-              {exporting === 'excel'
-                ? <Loader2 data-icon="inline-start" className="animate-spin" />
-                : <FileSpreadsheet data-icon="inline-start" />}
-              Excel
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => runExport('pdf')}
-              disabled={rows.length === 0 || exporting !== null}
-            >
-              {exporting === 'pdf'
-                ? <Loader2 data-icon="inline-start" className="animate-spin" />
-                : <Download data-icon="inline-start" />}
-              PDF
-            </Button>
-            <Button onClick={openNew}>
+          // Same split as Expenses: raising a request on one row, taking the
+          // register away on the next, so a phone gets two clean pairs.
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <Button className="sm:flex-none" onClick={openNew}>
               <Plus data-icon="inline-start" />
               Raise a request
             </Button>
-          </>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => runExport('excel')}
+                disabled={rows.length === 0 || exporting !== null}
+              >
+                {exporting === 'excel'
+                  ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                  : <FileSpreadsheet data-icon="inline-start" />}
+                Excel
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => runExport('pdf')}
+                disabled={rows.length === 0 || exporting !== null}
+              >
+                {exporting === 'pdf'
+                  ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                  : <Download data-icon="inline-start" />}
+                PDF
+              </Button>
+            </div>
+          </div>
         )}
       />
 
