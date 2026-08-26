@@ -9,6 +9,7 @@ import {
 } from '#/lib/report-theme'
 import {
   expenseTotals, categoryGrouping, statusXl, statusPdf, categoryXl, categoryPdf,
+  payeeAccount, paidFromParts,
 } from '#/lib/expense-presentation'
 import type { PfiExpense } from '#/lib/hooks/usePfis'
 
@@ -40,6 +41,12 @@ export interface ExpenseExportMeta {
   slug: string
   /** The VAT rate in force, for the column heading. */
   vatRate: number
+  /**
+   * Resolves the free-text "paid from" back to a managed account. Optional:
+   * without it those cells keep whatever text was recorded, which is what the
+   * screen does when an account cannot be matched either.
+   */
+  resolveBank?: BankResolver
 }
 
 type Col = {
@@ -48,8 +55,17 @@ type Col = {
   align?: 'left' | 'right' | 'center'
   /** Excel number format, when the value is written as a number. */
   fmt?: string
+  /** Cells that hold more than one line, so Excel is told to wrap them. */
+  wrap?: boolean
   get: (e: PfiExpense, i: number) => string | number | Date | null
 }
+
+/** Turns whatever spelling was typed into `bank_paid_from` into an account. */
+export type BankResolver = (raw: string | null | undefined) => {
+  accountName: string
+  bankName: string
+  accountNumber: string
+} | null
 
 const num = (v: unknown): number | null => {
   if (v === null || v === undefined || v === '') return null
@@ -63,7 +79,7 @@ const paidFigure = (e: PfiExpense): number | null => {
   return e.status === 'paid' ? num(e.amount) : null
 }
 
-const columns = (vatRate: number): Col[] => [
+const columns = (vatRate: number, resolve: BankResolver): Col[] => [
   { header: 'S/N', width: 6, align: 'right', fmt: COUNT, get: (_e, i) => i + 1 },
   { header: 'Reference', width: 18, get: (e) => e.reference_number || '' },
   { header: 'Date', width: 13, fmt: DATE_FMT, get: (e) => (e.expense_date ? new Date(e.expense_date) : null) },
@@ -83,8 +99,16 @@ const columns = (vatRate: number): Col[] => [
   { header: 'WHT deducted', width: 15, align: 'right', fmt: NGN, get: (e) => num(e.wht_deduction) },
   { header: 'Amount requested', width: 18, align: 'right', fmt: NGN, get: (e) => num(e.amount) },
   { header: 'Amount paid', width: 16, align: 'right', fmt: NGN, get: (e) => paidFigure(e) },
-  { header: 'Payee bank', width: 22, get: (e) => e.payee_bank_name || '' },
-  { header: 'Paid from', width: 24, get: (e) => e.bank_paid_from || '' },
+  // The payee's three fields as one cell, wrapped onto three lines — they are
+  // one fact, and split across three columns nobody reads them together.
+  { header: 'Paid to', width: 30, wrap: true, get: (e) => {
+    const p = payeeAccount(e)
+    return p.any ? [p.name, p.bank, p.number].filter(Boolean).join('\n') : ''
+  } },
+  { header: 'Paid from', width: 26, wrap: true, get: (e) => {
+    const p = paidFromParts(e.bank_paid_from, resolve(e.bank_paid_from))
+    return p.resolved ? [p.name, p.bank].filter(Boolean).join('\n') : p.line
+  } },
   { header: 'Raised by', width: 22, get: (e) => e.submitted_by_name || '' },
   { header: 'Status', width: 20, get: (e) => e.status_label || e.status },
 ]
@@ -110,7 +134,7 @@ export async function exportExpensesExcel(rows: PfiExpense[], meta: ExpenseExpor
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   })
 
-  const cols = columns(meta.vatRate)
+  const cols = columns(meta.vatRate, meta.resolveBank ?? (() => null))
   const t = expenseTotals(rows)
   const vatPct = (meta.vatRate * 100).toFixed(1)
 
@@ -205,7 +229,7 @@ export async function exportExpensesExcel(rows: PfiExpense[], meta: ExpenseExpor
       cell.alignment = {
         vertical: 'top',
         horizontal: c.align ?? 'left',
-        wrapText: c.header === 'Purpose' || c.header === 'Category' || c.header === 'PFI',
+        wrapText: c.wrap || c.header === 'Purpose' || c.header === 'Category' || c.header === 'PFI',
       }
     })
     // The status and category cells carry their own colour, so a printed
@@ -380,8 +404,9 @@ export async function exportExpensesPdf(rows: PfiExpense[], meta: ExpenseExportM
   // work in; this is the one they hand across a desk.
   const head = [
     'S/N', 'Reference', 'Date', 'Cost group', 'Category', 'PFI', 'Vendor', 'Purpose',
-    'Invoice', 'WHT', 'Requested', 'Paid', 'Paid from', 'Raised by', 'Status',
+    'Invoice', 'WHT', 'Requested', 'Paid', 'Paid to', 'Paid from', 'Raised by', 'Status',
   ]
+  const resolve = meta.resolveBank ?? (() => null)
 
   autoTable(doc, {
     startY: y,
@@ -399,14 +424,15 @@ export async function exportExpensesPdf(rows: PfiExpense[], meta: ExpenseExportM
       num(e.wht_deduction) ? pdfNaira(num(e.wht_deduction)!) : '—',
       pdfNaira(Number(e.amount) || 0),
       paidFigure(e) != null ? pdfNaira(paidFigure(e)!) : '—',
-      e.bank_paid_from || '—',
+      payeeAccount(e).line || '—',
+      paidFromParts(e.bank_paid_from, resolve(e.bank_paid_from)).line || '—',
       e.submitted_by_name || '—',
       e.status_label || e.status,
     ]),
     foot: rows.length
       ? [[
           'TOTAL', '', '', '', '', '', '', '',
-          '', pdfNaira(t.wht), pdfNaira(t.requested), pdfNaira(t.paid), '', '', '',
+          '', pdfNaira(t.wht), pdfNaira(t.requested), pdfNaira(t.paid), '', '', '', '',
         ]]
       : undefined,
     theme: 'grid',
@@ -422,17 +448,17 @@ export async function exportExpensesPdf(rows: PfiExpense[], meta: ExpenseExportM
       2: { cellWidth: 16 },
       3: { cellWidth: 22 },
       5: { cellWidth: 24 },
-      8: { halign: 'right', cellWidth: 20 },
-      9: { halign: 'right', cellWidth: 17 },
-      10: { halign: 'right', cellWidth: 22 },
-      11: { halign: 'right', cellWidth: 21 },
-      14: { cellWidth: 24 },
+      8: { halign: 'right', cellWidth: 18 },
+      9: { halign: 'right', cellWidth: 15 },
+      10: { halign: 'right', cellWidth: 20 },
+      11: { halign: 'right', cellWidth: 19 },
+      15: { cellWidth: 22 },
     },
     didParseCell: (data: any) => {
       if (data.section !== 'body') return
       const e = rows[data.row.index]
       if (!e) return
-      if (data.column.index === 14) {
+      if (data.column.index === 15) {
         const tone = statusPdf(e.status)
         data.cell.styles.fillColor = tone.fill
         data.cell.styles.textColor = tone.ink

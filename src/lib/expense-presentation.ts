@@ -134,6 +134,62 @@ export const categoryGrouping = (e: {
   pfi_id?: number | null
 }) => e.gl_subgroup || (e.gl_group === 'general' ? 'General Expenses' : CATEGORY_KINDS[categoryKind(e)].label)
 
+// ── Bank details ──────────────────────────────────────────────────────────
+
+/**
+ * Who the money went to: the payee's own bank details as recorded on the
+ * request.
+ *
+ * Three separate columns on the row, shown as one, because they are one fact
+ * — you cannot pay against an account number without the bank, or against a
+ * bank without the number. Returned as parts rather than a joined string so
+ * the table can set the account number in mono and the exports can put each
+ * on its own line.
+ */
+export function payeeAccount(e: {
+  payee_bank_name?: string | null
+  payee_account_number?: string | null
+  payee_account_name?: string | null
+}) {
+  const bank = (e.payee_bank_name || '').trim()
+  const number = (e.payee_account_number || '').trim()
+  const name = (e.payee_account_name || '').trim()
+  return {
+    bank,
+    number,
+    name,
+    /** Empty when the request never carried payee details at all. */
+    any: Boolean(bank || number || name),
+    /** One line, for a PDF cell or a CSV-shaped export. */
+    line: [name, bank, number].filter(Boolean).join(' · '),
+  }
+}
+
+/**
+ * Where the money went out from.
+ *
+ * `bank_paid_from` is free text and has been written seventeen different ways
+ * for about five accounts — "SRM FIDELITY EXPENSES ACCOUNT", "FIDELITY SRM
+ * MAIN", bare "UBA". Resolving it against the managed accounts turns whichever
+ * spelling was typed into the account's real name and bank; anything that
+ * resolves to nothing keeps its own text verbatim, so no historical row loses
+ * its label. Same rule, and the same reason, as formatBankLabel.
+ */
+export function paidFromParts(
+  raw: string | null | undefined,
+  resolved: { accountName: string; bankName: string; accountNumber: string } | null,
+) {
+  if (!raw) return { name: '', bank: '', number: '', line: '', resolved: false }
+  if (!resolved) return { name: raw, bank: '', number: '', line: raw, resolved: false }
+  return {
+    name: resolved.accountName,
+    bank: resolved.bankName,
+    number: resolved.accountNumber,
+    line: [resolved.accountName, resolved.bankName].filter(Boolean).join(' · '),
+    resolved: true,
+  }
+}
+
 // ── Totals ────────────────────────────────────────────────────────────────
 
 /**

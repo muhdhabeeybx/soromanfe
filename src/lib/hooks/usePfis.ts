@@ -401,7 +401,10 @@ export function useExpenses(filters?: ExpenseFilters) {
   return useQuery({
     queryKey: ['expenses', filters],
     queryFn: async () => {
-      const res = await api.get('/expenses', { params: { ...filters, limit: 50 } })
+      // Matches the repository's cap exactly. Asking for more than the server
+      // allows returns a short page rather than an error, so the two numbers
+      // have to be kept in step.
+      const res = await api.get('/expenses', { params: { ...filters, limit: 500 } })
       return res.data.data as {
         expenses: PfiExpense[]
         totals: {

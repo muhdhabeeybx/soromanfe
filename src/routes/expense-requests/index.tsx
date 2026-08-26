@@ -25,6 +25,7 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { routeGuard } from '#/lib/route-guard'
 import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
 import { statusRow, categoryChip, categoryGrouping } from '#/lib/expense-presentation'
+import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 import { useToast } from '#/lib/hooks/useToast'
 
 export const Route = createFileRoute('/expense-requests/')({
@@ -55,6 +56,7 @@ function MyRequestsPage() {
     setFilters((f) => ({ ...f, [k]: v || undefined }))
 
   const toast = useToast()
+  const { accounts: bankAccounts } = useBankAccountPicker()
 
   const openNew = () => { setEditing(null); setDialogOpen(true) }
   const openEdit = (e: PfiExpense) => { setEditing(e); setDialogOpen(true) }
@@ -70,7 +72,13 @@ function MyRequestsPage() {
   const runExport = async (kind: 'excel' | 'pdf') => {
     if (exporting) return
     setExporting(kind)
-    const meta = { title: 'My Requests', scope, slug: 'my-expense-requests', vatRate: 0.075 }
+    const meta = {
+      title: 'My Requests',
+      scope,
+      slug: 'my-expense-requests',
+      vatRate: 0.075,
+      resolveBank: (raw: string | null | undefined) => resolveBankAccount(bankAccounts, raw),
+    }
     try {
       if (kind === 'excel') await exportExpensesExcel(rows, meta)
       else await exportExpensesPdf(rows, meta)
@@ -235,7 +243,9 @@ function MyRequestsPage() {
                     <TableCell className="min-w-[9rem] whitespace-nowrap text-muted-foreground">
                       {e.pfi_number || '—'}
                     </TableCell>
-                    <TableCell className="min-w-[9rem] font-medium uppercase">{e.vendor || '—'}</TableCell>
+                    <TableCell className="max-w-[11rem] truncate font-medium uppercase" title={e.vendor || undefined}>
+                      {e.vendor || '—'}
+                    </TableCell>
                     {/* Clipped here too — hover and both exports carry it in full. */}
                     <TableCell className="max-w-[18rem] truncate uppercase" title={e.description || undefined}>
                       {e.description || '—'}

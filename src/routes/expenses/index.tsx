@@ -20,7 +20,10 @@ import { FilterBar } from '#/components/FilterBar'
 import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
 import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
-import { statusRow, categoryChip, categoryGrouping } from '#/lib/expense-presentation'
+import {
+  statusRow, categoryChip, categoryGrouping, payeeAccount, paidFromParts,
+} from '#/lib/expense-presentation'
+import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 import { useToast } from '#/lib/hooks/useToast'
 import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
@@ -55,6 +58,10 @@ function ExpensesPage() {
   const { data: cats } = useExpenseCategories()
   const remove = useDeleteExpense()
   const toast = useToast()
+  // Every account, not just the expense-tagged ones: a row may name an
+  // account since retired, and scoping the resolution set would turn a
+  // correctly labelled old entry back into raw text.
+  const { accounts: bankAccounts } = useBankAccountPicker()
 
   const rows = data?.expenses || []
   const totals = data?.totals
@@ -82,7 +89,13 @@ function ExpensesPage() {
     return parts.length ? `Filtered: ${parts.join(' · ')}` : 'All requests'
   })()
 
-  const exportMeta = { title: 'Expenses', scope, slug: 'expenses', vatRate }
+  const exportMeta = {
+    title: 'Expenses',
+    scope,
+    slug: 'expenses',
+    vatRate,
+    resolveBank: (raw: string | null | undefined) => resolveBankAccount(bankAccounts, raw),
+  }
 
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
   const runExport = async (kind: 'excel' | 'pdf') => {
@@ -307,7 +320,7 @@ function ExpensesPage() {
                   <TableHead className="text-right">Amount paid</TableHead>
                   {/* <TableHead>GL code</TableHead> */}
                   {/* <TableHead>Bank code</TableHead> */}
-                  <TableHead>Bank name</TableHead>
+                  <TableHead>Paid to</TableHead>
                   <TableHead>Paid from</TableHead>
                   {/* The filter above is unreadable without this: you pick a
                       name and then cannot tell which rows are theirs. */}
@@ -355,7 +368,9 @@ function ExpensesPage() {
                     <TableCell className="min-w-[9rem] whitespace-nowrap text-muted-foreground">
                       {e.pfi_number || '—'}
                     </TableCell>
-                    <TableCell className="min-w-[10rem] font-medium uppercase">{e.vendor || '—'}</TableCell>
+                    <TableCell className="max-w-[11rem] truncate font-medium uppercase" title={e.vendor || undefined}>
+                      {e.vendor || '—'}
+                    </TableCell>
                     {/* <TableCell className="whitespace-nowrap text-muted-foreground">{e.tin_number || '—'}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">{e.invoice_number || '—'}</TableCell> */}
                     {/* The one column with no natural length — clipped so it
@@ -391,11 +406,39 @@ function ExpensesPage() {
                     </TableCell>
                     {/* <TableCell className="text-muted-foreground">{e.gl_code || '—'}</TableCell> */}
                     {/* <TableCell className="text-muted-foreground">{e.bank_code || '—'}</TableCell> */}
-                    <TableCell className="min-w-[9rem] text-muted-foreground">
-                      {e.payee_bank_name || '—'}
+                    {/* The payee's three fields shown as the one fact they
+                        are — you cannot pay against a number without the
+                        bank, or a bank without the number. */}
+                    <TableCell className="min-w-[11rem] text-xs leading-snug">
+                      {(() => {
+                        const p = payeeAccount(e)
+                        if (!p.any) return <span className="text-muted-foreground">—</span>
+                        return (
+                          <>
+                            {p.name && <span className="block font-medium uppercase">{p.name}</span>}
+                            {p.bank && <span className="block text-muted-foreground">{p.bank}</span>}
+                            {p.number && <span className="block font-mono text-muted-foreground">{p.number}</span>}
+                          </>
+                        )
+                      })()}
                     </TableCell>
-                    <TableCell className="min-w-[9rem] text-muted-foreground">
-                      {e.bank_paid_from || '—'}
+                    {/* Free text resolved back to the managed account, so the
+                        seventeen spellings of the expenses account all read
+                        as the same account. Unresolvable text keeps itself. */}
+                    <TableCell className="min-w-[10rem] text-xs leading-snug">
+                      {(() => {
+                        const p = paidFromParts(
+                          e.bank_paid_from,
+                          resolveBankAccount(bankAccounts, e.bank_paid_from),
+                        )
+                        if (!p.line) return <span className="text-muted-foreground">—</span>
+                        return (
+                          <>
+                            <span className="block font-medium uppercase">{p.name}</span>
+                            {p.bank && <span className="block text-muted-foreground">{p.bank}</span>}
+                          </>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell className="min-w-[9rem] text-muted-foreground">
                       {e.submitted_by_name || '—'}
