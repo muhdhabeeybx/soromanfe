@@ -70,7 +70,11 @@ export function useGateMovements(params: GateMovementParams) {
   return useQuery({
     queryKey: ['gate-movements', params],
     queryFn: async () => {
-      const res = await api.get('/reporting/gate-movements', { params })
+      // Mounted at /api/reports, not /api/reporting — the router file is
+      // named reporting.route.js but app.js mounts it under "reports", and
+      // nothing in the dashboard called it before this, so the mismatch had
+      // never had a chance to show up.
+      const res = await api.get('/reports/gate-movements', { params })
       return res.data?.data as { trucks: GateMovement[]; totals: GateTotals }
     },
     placeholderData: (prev) => prev,
