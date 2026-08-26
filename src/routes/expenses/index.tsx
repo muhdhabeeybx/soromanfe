@@ -4,7 +4,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
   Search, Plus, Receipt, Banknote, Building2, Hourglass, Download, X, Trash2, Pencil, Lock,
-  Landmark,
+  Landmark, FileSpreadsheet, Loader2,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -19,6 +19,9 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
 import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
+import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
+import { statusRow, categoryChip, categoryGrouping } from '#/lib/expense-presentation'
+import { useToast } from '#/lib/hooks/useToast'
 import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
@@ -51,6 +54,7 @@ function ExpensesPage() {
   const { data, isLoading, isError, error, refetch } = useExpenses(filters)
   const { data: cats } = useExpenseCategories()
   const remove = useDeleteExpense()
+  const toast = useToast()
 
   const rows = data?.expenses || []
   const totals = data?.totals
@@ -60,53 +64,38 @@ function ExpensesPage() {
   const set = (k: keyof ExpenseFilters, v: string) =>
     setFilters((f) => ({ ...f, [k]: v || undefined }))
 
-  /**
-   * The payment schedule, column for column — the same columns as the table.
-   * TIN, invoice number and GL code/name are commented out below along with
-   * their form fields — see ExpenseDialog — rather than deleted, in case the
-   * chart of accounts gets seeded for real later.
-   */
-  const exportCsv = () => {
-    const head = [
-      'S/N', 'Reference', 'Date', 'Vendor', /* 'TIN NUMBER', 'Invoice No.', */ 'Purpose',
-      'Amount-Ex VAT', `${(vatRate * 100).toFixed(1)}%`, 'Invoice Amount',
-      'WHT rate %', 'WHT deduction', 'Amount requested', 'Amount paid',
-      /* 'GL code', */ 'Category', /* 'Bank code', */ 'Bank Name', 'Paid from',
-      'Added by', 'PFI', 'Status',
-    ]
-    const body = rows.map((e, i) => [
-      String(i + 1),
-      e.reference_number || '',
-      format(new Date(e.expense_date), 'yyyy-MM-dd'),
-      e.vendor,
-      // e.tin_number || '',
-      // e.invoice_number || '',
-      e.description,
-      plain(e.amount_ex_vat),
-      plain(e.vat_amount),
-      plain(e.invoice_amount),
-      e.wht_rate ? String(Number(e.wht_rate)) : '',
-      plain(e.wht_deduction),
-      Number(e.amount).toFixed(2),
-      e.amount_paid != null ? plain(e.amount_paid) : (e.status === 'paid' ? Number(e.amount).toFixed(2) : ''),
-      // e.gl_code || '',
-      e.category_name,
-      // e.bank_code || '',
-      e.payee_bank_name || '',
-      e.bank_paid_from || '',
-      e.submitted_by_name || '',
-      e.pfi_number || '',
-      e.status_label,
-    ])
-    const csv = [head, ...body]
-      .map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `expenses_${format(new Date(), 'yyyy-MM-dd')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  /** Reads back the filters in force, so the file says what it is a view of. */
+  const scope = (() => {
+    const parts: string[] = []
+    if (filters.search) parts.push(`matching “${filters.search}”`)
+    if (filters.status) parts.push(`status ${filters.status}`)
+    if (filters.type) parts.push(filters.type === 'pfi' ? 'PFI attached' : 'general only')
+    if (filters.group) parts.push('one cost group')
+    if (filters.category) parts.push('one category')
+    if (filters.pfi) parts.push('one PFI')
+    if (filters.submitter) parts.push('one requester')
+    if (filters.bank) parts.push('one account')
+    if (filters.month) parts.push(filters.month)
+    if (filters.dateFrom || filters.dateTo) {
+      parts.push(`${filters.dateFrom || 'start'} to ${filters.dateTo || 'today'}`)
+    }
+    return parts.length ? `Filtered: ${parts.join(' · ')}` : 'All requests'
+  })()
+
+  const exportMeta = { title: 'Expenses', scope, slug: 'expenses', vatRate }
+
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
+  const runExport = async (kind: 'excel' | 'pdf') => {
+    if (exporting) return
+    setExporting(kind)
+    try {
+      if (kind === 'excel') await exportExpensesExcel(rows, exportMeta)
+      else await exportExpensesPdf(rows, exportMeta)
+    } catch (err) {
+      toast.error(getErrorMessage(err))
+    } finally {
+      setExporting(null)
+    }
   }
 
   const openNew = () => { setEditing(null); setDialogOpen(true) }
@@ -139,9 +128,25 @@ function ExpensesPage() {
           <Landmark data-icon="inline-start" />
           Bank accounts
           </Button>
-          <Button variant="outline" onClick={exportCsv} disabled={rows.length === 0}>
-          <Download data-icon="inline-start" />
-          Export CSV
+          <Button
+            variant="outline"
+            onClick={() => runExport('excel')}
+            disabled={rows.length === 0 || exporting !== null}
+          >
+            {exporting === 'excel'
+              ? <Loader2 data-icon="inline-start" className="animate-spin" />
+              : <FileSpreadsheet data-icon="inline-start" />}
+            Excel
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runExport('pdf')}
+            disabled={rows.length === 0 || exporting !== null}
+          >
+            {exporting === 'pdf'
+              ? <Loader2 data-icon="inline-start" className="animate-spin" />
+              : <Download data-icon="inline-start" />}
+            PDF
           </Button>
           <Button onClick={openNew}>
           <Plus data-icon="inline-start" />
@@ -289,6 +294,7 @@ function ExpensesPage() {
                   <TableHead>Reference</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>PFI</TableHead>
                   <TableHead>Vendor</TableHead>
                   {/* <TableHead>TIN number</TableHead>
                   <TableHead>Invoice no.</TableHead> */}
@@ -311,8 +317,16 @@ function ExpensesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((e, i) => (
-                  <TableRow key={e.id} className="cursor-pointer" onClick={() => setReviewing(e.id)}>
+                {rows.map((e, i) => {
+                  const tone = statusRow(e.status)
+                  return (
+                  <TableRow
+                    key={e.id}
+                    // The rail is the signal — a solid edge reads down a long
+                    // page in a way a faint wash behind text never does.
+                    className={cn('cursor-pointer border-l-4 align-top', tone.rail, tone.wash)}
+                    onClick={() => setReviewing(e.id)}
+                  >
                     <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                       {e.reference_number || '—'}
@@ -320,15 +334,36 @@ function ExpensesPage() {
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {format(new Date(e.expense_date), 'd MMM yyyy')}
                     </TableCell>
-                    <TableCell className="max-w-[14rem] truncate">
-                      <Badge variant={e.pfi_id ? 'default' : 'secondary'} className="max-w-[13rem]">
-                        {e.category_name}
-                      </Badge>
+                    {/* Category shows its cost group above the account itself:
+                        70 accounts are too many to recognise by name, six
+                        groups are not. Both wrap — a category clipped at
+                        13rem was the column most often unreadable. */}
+                    <TableCell className="min-w-[13rem]">
+                      <span
+                        className={cn(
+                          'inline-block rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',
+                          categoryChip(e),
+                        )}
+                      >
+                        {categoryGrouping(e)}
+                      </span>
+                      <span className="mt-1 block text-sm leading-snug">{e.category_name}</span>
                     </TableCell>
-                    <TableCell className="max-w-[12rem] truncate font-medium">{e.vendor || '—'}</TableCell>
+                    {/* The cargo gets its own column rather than being implied
+                        by the category — the category says what the money
+                        bought, which batch it lands on is a separate fact. */}
+                    <TableCell className="min-w-[9rem] whitespace-nowrap text-muted-foreground">
+                      {e.pfi_number || '—'}
+                    </TableCell>
+                    <TableCell className="min-w-[10rem] font-medium uppercase">{e.vendor || '—'}</TableCell>
                     {/* <TableCell className="whitespace-nowrap text-muted-foreground">{e.tin_number || '—'}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">{e.invoice_number || '—'}</TableCell> */}
-                    <TableCell className="max-w-[16rem] truncate">{e.description || '—'}</TableCell>
+                    {/* The one column with no natural length — clipped so it
+                        cannot push every figure off-screen. Hover and both
+                        exports carry it in full. */}
+                    <TableCell className="max-w-[18rem] truncate uppercase" title={e.description || undefined}>
+                      {e.description || '—'}
+                    </TableCell>
                     <TableCell className="text-right text-muted-foreground">{cash(e.amount_ex_vat) || '—'}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{cash(e.vat_amount) || '—'}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{cash(e.invoice_amount) || '—'}</TableCell>
@@ -338,26 +373,31 @@ function ExpensesPage() {
                         <span className="ml-1 opacity-60">({Number(e.wht_rate)}%)</span>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-right font-semibold whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
+                    {/* Asked for and actually paid are the two figures anyone
+                        compares, so they are the two that get a colour —
+                        blue for the claim, green for the money that moved. */}
+                    <TableCell className="text-right font-semibold whitespace-nowrap text-blue-700 dark:text-blue-400">
+                      {naira(Number(e.amount))}
+                    </TableCell>
                     {/* Blank until it is settled — a request awaiting payment
                         has not paid ₦0. Once actually paid, a still-blank
                         amount_paid (legacy rows recorded before that column
                         existed) falls back to the requested figure rather
                         than showing a paid row as if nothing had cleared. */}
-                    <TableCell className="text-right whitespace-nowrap font-medium">
+                    <TableCell className="text-right whitespace-nowrap font-semibold text-success">
                       {e.amount_paid != null
                         ? cash(e.amount_paid)
-                        : (e.status === 'paid' ? naira(Number(e.amount)) : '—')}
+                        : (e.status === 'paid' ? naira(Number(e.amount)) : <span className="font-normal text-muted-foreground">—</span>)}
                     </TableCell>
                     {/* <TableCell className="text-muted-foreground">{e.gl_code || '—'}</TableCell> */}
                     {/* <TableCell className="text-muted-foreground">{e.bank_code || '—'}</TableCell> */}
-                    <TableCell className="max-w-[10rem] truncate text-muted-foreground">
+                    <TableCell className="min-w-[9rem] text-muted-foreground">
                       {e.payee_bank_name || '—'}
                     </TableCell>
-                    <TableCell className="max-w-[10rem] truncate text-muted-foreground">
+                    <TableCell className="min-w-[9rem] text-muted-foreground">
                       {e.bank_paid_from || '—'}
                     </TableCell>
-                    <TableCell className="max-w-[10rem] truncate whitespace-nowrap text-muted-foreground">
+                    <TableCell className="min-w-[9rem] text-muted-foreground">
                       {e.submitted_by_name || '—'}
                     </TableCell>
                     <TableCell><StepBadge expense={e} /></TableCell>
@@ -393,7 +433,8 @@ function ExpensesPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>

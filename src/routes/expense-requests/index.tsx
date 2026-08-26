@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
-import { Search, Plus, Receipt, Hourglass, CheckCircle2, X, Trash2, Pencil, Lock } from 'lucide-react'
+import {
+  Search, Plus, Receipt, Hourglass, CheckCircle2, X, Trash2, Pencil, Lock,
+  Download, FileSpreadsheet, Loader2,
+} from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { Badge } from '#/components/ui/badge'
@@ -20,6 +23,9 @@ import { ExpenseDialog } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { routeGuard } from '#/lib/route-guard'
+import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
+import { statusRow, categoryChip, categoryGrouping } from '#/lib/expense-presentation'
+import { useToast } from '#/lib/hooks/useToast'
 
 export const Route = createFileRoute('/expense-requests/')({
   beforeLoad: () => routeGuard('/expense-requests'),
@@ -48,8 +54,32 @@ function MyRequestsPage() {
   const set = (k: keyof typeof filters, v: string) =>
     setFilters((f) => ({ ...f, [k]: v || undefined }))
 
+  const toast = useToast()
+
   const openNew = () => { setEditing(null); setDialogOpen(true) }
   const openEdit = (e: PfiExpense) => { setEditing(e); setDialogOpen(true) }
+
+  const scope = (() => {
+    const parts: string[] = []
+    if (filters.search) parts.push(`matching “${filters.search}”`)
+    if (filters.status) parts.push(`status ${filters.status}`)
+    return parts.length ? `Raised by me · ${parts.join(' · ')}` : 'Everything I have raised'
+  })()
+
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
+  const runExport = async (kind: 'excel' | 'pdf') => {
+    if (exporting) return
+    setExporting(kind)
+    const meta = { title: 'My Requests', scope, slug: 'my-expense-requests', vatRate: 0.075 }
+    try {
+      if (kind === 'excel') await exportExpensesExcel(rows, meta)
+      else await exportExpensesPdf(rows, meta)
+    } catch (err) {
+      toast.error(getErrorMessage(err))
+    } finally {
+      setExporting(null)
+    }
+  }
 
   if (isLoading) return <PageLoader />
   if (isError) return <PageError message={getErrorMessage(error)} onRetry={() => refetch()} />
@@ -61,10 +91,32 @@ function MyRequestsPage() {
         title="My requests"
         description="Raise a payment request and track it through Expenditure Officer, CFO and final approval."
         actions={(
-          <Button onClick={openNew}>
-            <Plus data-icon="inline-start" />
-            Raise a request
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              onClick={() => runExport('excel')}
+              disabled={rows.length === 0 || exporting !== null}
+            >
+              {exporting === 'excel'
+                ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                : <FileSpreadsheet data-icon="inline-start" />}
+              Excel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => runExport('pdf')}
+              disabled={rows.length === 0 || exporting !== null}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                : <Download data-icon="inline-start" />}
+              PDF
+            </Button>
+            <Button onClick={openNew}>
+              <Plus data-icon="inline-start" />
+              Raise a request
+            </Button>
+          </>
         )}
       />
 
@@ -144,6 +196,7 @@ function MyRequestsPage() {
                   <TableHead>Reference</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>PFI</TableHead>
                   <TableHead>Vendor</TableHead>
                   <TableHead>Purpose</TableHead>
                   <TableHead className="text-right">Requested</TableHead>
@@ -153,8 +206,14 @@ function MyRequestsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((e, i) => (
-                  <TableRow key={e.id} className="cursor-pointer" onClick={() => setReviewing(e.id)}>
+                {rows.map((e, i) => {
+                  const tone = statusRow(e.status)
+                  return (
+                  <TableRow
+                    key={e.id}
+                    className={cn('cursor-pointer border-l-4 align-top', tone.rail, tone.wash)}
+                    onClick={() => setReviewing(e.id)}
+                  >
                     <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                       {e.reference_number || '—'}
@@ -162,18 +221,32 @@ function MyRequestsPage() {
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {format(new Date(e.expense_date), 'd MMM yyyy')}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant={e.pfi_id ? 'default' : 'secondary'}>
-                        {e.category_name}
-                      </Badge>
+                    <TableCell className="min-w-[13rem]">
+                      <span
+                        className={cn(
+                          'inline-block rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',
+                          categoryChip(e),
+                        )}
+                      >
+                        {categoryGrouping(e)}
+                      </span>
+                      <span className="mt-1 block text-sm leading-snug">{e.category_name}</span>
                     </TableCell>
-                    <TableCell className="max-w-[10rem] truncate font-medium">{e.vendor || '—'}</TableCell>
-                    <TableCell className="max-w-[16rem] truncate">{e.description || '—'}</TableCell>
-                    <TableCell className="text-right font-semibold whitespace-nowrap">{naira(Number(e.amount))}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap font-medium">
+                    <TableCell className="min-w-[9rem] whitespace-nowrap text-muted-foreground">
+                      {e.pfi_number || '—'}
+                    </TableCell>
+                    <TableCell className="min-w-[9rem] font-medium uppercase">{e.vendor || '—'}</TableCell>
+                    {/* Clipped here too — hover and both exports carry it in full. */}
+                    <TableCell className="max-w-[18rem] truncate uppercase" title={e.description || undefined}>
+                      {e.description || '—'}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap text-blue-700 dark:text-blue-400">
+                      {naira(Number(e.amount))}
+                    </TableCell>
+                    <TableCell className="text-right whitespace-nowrap font-semibold text-success">
                       {e.amount_paid != null
                         ? naira(Number(e.amount_paid))
-                        : (e.status === 'paid' ? naira(Number(e.amount)) : '—')}
+                        : (e.status === 'paid' ? naira(Number(e.amount)) : <span className="font-normal text-muted-foreground">—</span>)}
                     </TableCell>
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>
@@ -204,7 +277,8 @@ function MyRequestsPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
