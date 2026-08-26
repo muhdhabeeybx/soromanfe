@@ -2,7 +2,7 @@ import { CreditCard, Landmark } from 'lucide-react'
 import { Input } from '#/components/ui/input'
 import { cn } from '#/lib/utils'
 import { fmt, formatWithCommas } from '#/lib/sales-ledger-utils'
-import { useBankAccountPicker } from '#/lib/bank-accounts'
+import { useBankAccountPicker, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import {
   DEPOSIT_CHANNELS,
   bankCharges,
@@ -93,7 +93,7 @@ export function BankAccountSelect({
   legacyLabel?: string | null
   required?: boolean
 }) {
-  const { options, isLoading } = useBankAccountPicker()
+  const { options, isLoading } = useBankAccountPicker({ usage: BANK_ACCOUNT_USAGE.truckSales })
   const known = options.some((o) => o.id === value)
 
   return (

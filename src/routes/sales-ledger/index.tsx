@@ -17,7 +17,7 @@ import {
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
   ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal,
-  Loader2,
+  Loader2, Landmark,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
@@ -34,7 +34,8 @@ import {
   toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate,
   getCodeTheme, idKey, type TimePreset,
 } from '#/lib/sales-ledger-utils'
-import { useBankAccountPicker, formatBankLabel } from '#/lib/bank-accounts'
+import { useBankAccountPicker, formatBankLabel, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
+import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
 import { routeGuard } from '#/lib/route-guard'
 import {
   exportSalesLedgerExcel, exportSalesLedgerPdf,
@@ -380,6 +381,7 @@ function SalesLedgerDashboard() {
 
   // ── Dialog State ───────────────────────────────────────────────────
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [bankAccountsOpen, setBankAccountsOpen] = useState(false)
   const [assignMode, setAssignMode] = useState(false)
 
   const openPaymentDialog = (inAssignMode = false) => {
@@ -459,6 +461,15 @@ function SalesLedgerDashboard() {
                 : <Download className="size-4" />}
               <span className="hidden sm:inline">Export PDF</span>
               <span className="sm:hidden">PDF</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => setBankAccountsOpen(true)}
+            >
+              <Landmark className="size-4" />
+              <span className="hidden sm:inline">Bank Accounts</span>
+              <span className="sm:hidden">Banks</span>
             </Button>
             <Button className="gap-2 bg-accent hover:bg-accent/80" onClick={() => openPaymentDialog()}>
               <Plus className="size-4" /> Record Payment
@@ -1087,6 +1098,14 @@ function SalesLedgerDashboard() {
         getCycleKey={getCycleKey}
         normalizeCycleDate={normalizeCycleDate}
         assignMode={assignMode}
+      />
+
+      <ScopedBankAccountsDialog
+        open={bankAccountsOpen}
+        onOpenChange={setBankAccountsOpen}
+        usage={BANK_ACCOUNT_USAGE.truckSales}
+        title="Truck Sales Bank Accounts"
+        description="The accounts offered when recording a truck sale payment or a station remittance. Only the accounts ticked here appear in those dropdowns."
       />
     </div>
   )

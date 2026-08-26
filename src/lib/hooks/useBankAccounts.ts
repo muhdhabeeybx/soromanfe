@@ -6,7 +6,19 @@ import type { BankAccount } from '#/lib/types'
 
 export type { BankAccount }
 
-export function useBankAccounts(params?: { search?: string; status?: string; depotId?: string | number; lpgStationId?: string | number }) {
+export function useBankAccounts(params?: {
+  search?: string
+  status?: string
+  depotId?: string | number
+  lpgStationId?: string | number
+  /**
+   * Narrows to accounts tagged for one area — see BANK_ACCOUNT_USAGE in
+   * lib/bank-accounts. Omitting it returns every account, which is what the
+   * pickers outside truck sales and expenses still want. Typed loosely here
+   * rather than importing the union, so this module stays a leaf.
+   */
+  usage?: string
+}) {
   return useQuery({
     queryKey: ['bank-accounts', params],
     queryFn: async () => {

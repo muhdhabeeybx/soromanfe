@@ -596,6 +596,8 @@ export interface BankAccount {
     country?: string
     status?: string
   }>
+  /** Areas allowed to collect into this account — see BANK_ACCOUNT_USAGE. */
+  usage?: string[]
   notes?: string
   createdAt?: string
   updatedAt?: string

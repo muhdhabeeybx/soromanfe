@@ -16,7 +16,7 @@ import { useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation, idKey, entityId } from '#/lib/sales-ledger-utils'
-import { useBankAccountPicker, bankAccountToString } from '#/lib/bank-accounts'
+import { useBankAccountPicker, bankAccountToString, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 
 // Bank accounts come from the managed table via #/lib/bank-accounts — they
 // used to be three literals right here. See that module for why resolution
@@ -903,7 +903,7 @@ interface EditEntryDialogProps {
 export function EditEntryDialog({ open, onOpenChange, target, tripCodes }: EditEntryDialogProps) {
   const toast = useToast()
   const updateSale = useUpdateDeliverySale()
-  const { options: bankOptions } = useBankAccountPicker()
+  const { options: bankOptions } = useBankAccountPicker({ usage: BANK_ACCOUNT_USAGE.truckSales })
   const [saving, setSaving] = useState(false)
   const [editTripCode, setEditTripCode] = useState('')
   const [form, setForm] = useState<{

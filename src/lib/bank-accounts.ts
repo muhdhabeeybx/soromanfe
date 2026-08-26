@@ -81,25 +81,50 @@ export interface BankAccountOption {
 }
 
 /**
+ * The areas that keep their own shortlist of collection accounts.
+ *
+ * Every dropdown used to offer all 15 active accounts — the refinery account
+ * and a customer's personal account sat next to the one actually wanted, and
+ * picking wrong is silent until someone reconciles against a statement the
+ * money was never going to appear on.
+ */
+export const BANK_ACCOUNT_USAGE = {
+  truckSales: 'truck_sales',
+  expenses: 'expenses',
+} as const
+
+export type BankAccountUsage = (typeof BANK_ACCOUNT_USAGE)[keyof typeof BANK_ACCOUNT_USAGE]
+
+/**
  * Accounts for a picker: active ones only, since an inactive account is one
  * the company has stopped collecting into and offering it invites a payment
  * being recorded against a closed account.
  *
  * Sorted by account name so the list reads the same on every page, with the
  * default account first — it is the one most entries go to.
+ *
+ * `usage` narrows the OPTIONS to the accounts tagged for that area. It
+ * deliberately does not narrow `accounts`, which callers use to resolve the
+ * bank string on historical rows: those rows may name an account since
+ * retired or never tagged, and scoping the resolution set would turn a
+ * correctly-labelled old entry back into a raw number. Filtering client-side
+ * keeps one cached query behind every picker for the same reason — the full
+ * list has to be there regardless.
  */
-export function useBankAccountPicker() {
+export function useBankAccountPicker(opts?: { usage?: BankAccountUsage }) {
   const { data: accounts = [], isLoading, isError, refetch } = useBankAccounts()
+  const usage = opts?.usage
 
   const active = useMemo(
     () =>
       accounts
         .filter((a) => a.status === 'Active')
+        .filter((a) => !usage || (a.usage ?? []).includes(usage))
         .sort((a, b) => {
           if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1
           return a.accountName.localeCompare(b.accountName)
         }),
-    [accounts],
+    [accounts, usage],
   )
 
   const options: BankAccountOption[] = useMemo(
