@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
@@ -291,12 +291,12 @@ function ExpensesPage() {
         {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </optgroup>
         ))}
-        {/* Retired vocabulary, kept selectable so older lines stay findable. */}
-        {cats?.unmapped?.length ? (
-        <optgroup label="Retired (pre-chart)">
-        {cats.unmapped.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </optgroup>
-        ) : null}
+        {/* No "pre-chart" group here. Nothing is booked to the old vocabulary
+            any more — 0007 moved the live expenses and 0009 the deleted ones —
+            so offering those 49 accounts would be 49 options that can only
+            return an empty table. They still exist as rows, and are still
+            visible in the GL accounts editor, because deleted expenses point
+            at them. */}
         </NativeSelect>
         {/* Which cargo. The backend has always accepted this filter; there was
             simply never a control for it, and now that an expense names its

@@ -62,7 +62,7 @@ function MyRequestsPage() {
   const toast = useToast()
   const { accounts: bankAccounts } = useBankAccountPicker()
   const { data: pfiData } = usePfiList({ limit: 500 })
-  const { cats, subgroupOptions, categoryPickerGroups } = useExpenseCategoryPickers(filters)
+  const { subgroupOptions, categoryPickerGroups } = useExpenseCategoryPickers(filters)
 
   const openNew = () => { setEditing(null); setDialogOpen(true) }
   const openEdit = (e: PfiExpense) => { setEditing(e); setDialogOpen(true) }
@@ -220,11 +220,7 @@ function MyRequestsPage() {
               {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </optgroup>
           ))}
-          {cats?.unmapped?.length ? (
-            <optgroup label="Retired (pre-chart)">
-              {cats.unmapped.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </optgroup>
-          ) : null}
+          {/* No pre-chart group — see the note on the Expenses page. */}
         </NativeSelect>
         {filters.type !== 'general' && (
           <NativeSelect className="w-48" value={filters.pfi || ''} onChange={(e) => set('pfi', e.target.value)}>
