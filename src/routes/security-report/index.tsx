@@ -308,14 +308,16 @@ function GateRow({ truck, index }: { truck: GateMovement; index: number }) {
   const cells: Record<string, React.ReactNode> = {
     truck: <span className="font-mono whitespace-nowrap">{v.truck}</span>,
     driver: (
-      <span className="flex items-center gap-1.5 whitespace-nowrap">
-        {driver.name || '—'}
-        {/* The allocated driver and the one who turned up are both recorded.
-            Where they differ that is worth seeing, not quietly resolving. */}
+      // The driver who presented at the gate, and — where it is not the same
+      // person the load was ticketed to — who that was. 161 of 1,337 gate-ins
+      // differ, so it is common enough to matter and too common to flag with
+      // a warning. Both names are simply shown; no badge, no jargon.
+      <span className="whitespace-nowrap">
+        {v.driver || '—'}
         {driver.swapped && (
-          <Badge className="bg-warning/15 text-warning border-warning/30 font-normal" title={`Ticketed to ${truck.driverName}`}>
-            swapped
-          </Badge>
+          <span className="block text-xs text-muted-foreground">
+            Ticketed: {(truck.driverName || '').toUpperCase()}
+          </span>
         )}
       </span>
     ),

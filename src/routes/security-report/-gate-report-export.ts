@@ -33,6 +33,11 @@ const TIME_PATTERN = 'h:mm a'
 const time = (iso: string | null) => (iso ? format(new Date(iso), TIME_PATTERN) : '—')
 const day = (iso: string | null) => (iso ? format(new Date(iso), 'd MMM yyyy') : '—')
 
+/**
+ * The sheet's columns. Customer and Company are separate here — a spreadsheet
+ * gets filtered and pivoted on them one at a time, so joining them would only
+ * force someone to split the column back apart.
+ */
 const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string }> = [
   { header: 'S/N', key: 'sn', width: 6 },
   { header: 'Date', key: 'date', width: 14 },
@@ -41,15 +46,12 @@ const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string 
   { header: 'Driver', key: 'driver', width: 20 },
   { header: 'Driver Phone', key: 'driverPhone', width: 16 },
   { header: 'Loader', key: 'loader', width: 18 },
-  { header: 'Loader Phone', key: 'loaderPhone', width: 16 },
-  { header: 'Gantry', key: 'gantry', width: 9 },
+  { header: 'Gantry Arm', key: 'gantry', width: 12 },
   { header: 'Quantity', key: 'qty', width: 13, fmt: QTY },
   { header: 'Product', key: 'product', width: 12 },
-  { header: 'Order Ref', key: 'ref', width: 20 },
-  { header: 'Company', key: 'company', width: 20 },
-  { header: 'Customer', key: 'customer', width: 20 },
-  { header: 'Customer Phone', key: 'customerPhone', width: 16 },
-  { header: 'PFI', key: 'pfi', width: 26 },
+  { header: 'Order Ref', key: 'ref', width: 14 },
+  { header: 'Customer', key: 'customer', width: 22 },
+  { header: 'Company', key: 'company', width: 22 },
   { header: 'Time In', key: 'timeIn', width: 12 },
   { header: 'Entered By', key: 'enteredBy', width: 20 },
   { header: 'Time Out', key: 'timeOut', width: 12 },
@@ -58,30 +60,62 @@ const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string 
   { header: 'Status', key: 'status', width: 14 },
 ]
 
-export const GATE_COLUMNS = COLUMNS.map((c) => ({ header: c.header, key: c.key }))
+/**
+ * The screen's columns. Same set, except Customer and Company share one cell
+ * — on a table this wide two near-identical name columns side by side cost
+ * more width than they earn, and a reader takes them in as one thing anyway.
+ */
+export const GATE_COLUMNS = [
+  { header: 'S/N', key: 'sn' },
+  { header: 'Date', key: 'date' },
+  { header: 'Location', key: 'location' },
+  { header: 'Truck No', key: 'truck' },
+  { header: 'Driver', key: 'driver' },
+  { header: 'Driver Phone', key: 'driverPhone' },
+  { header: 'Loader', key: 'loader' },
+  { header: 'Gantry Arm', key: 'gantry' },
+  { header: 'Quantity', key: 'qty' },
+  { header: 'Product', key: 'product' },
+  { header: 'Order Ref', key: 'ref' },
+  { header: 'Customer / Company', key: 'customerCompany' },
+  { header: 'Time In', key: 'timeIn' },
+  { header: 'Entered By', key: 'enteredBy' },
+  { header: 'Time Out', key: 'timeOut' },
+  { header: 'Exited By', key: 'exitedBy' },
+  { header: 'Time On Site', key: 'onSite' },
+  { header: 'Status', key: 'status' },
+]
 
 /** Right-aligned on screen — the numeric ones. */
 export const GATE_NUMERIC = new Set(['qty'])
 
 export function gateRowValues(t: GateMovement, index: number) {
   const driver = gateDriver(t)
+  const customer = (t.customerName || '').trim()
+  const company = (t.companyName || '').trim()
   return {
     sn: index + 1,
     date: day(t.enteredAt),
     location: t.depotName || '—',
     truck: t.truckNumber || `Truck ${t.truckIndex}`,
-    driver: driver.name || '—',
+    // Names in upper case: they are read off a wide table at a glance, and
+    // what gets typed at the gate arrives in every casing there is.
+    driver: driver.name.toUpperCase() || '—',
     driverPhone: driver.phone || '—',
-    loader: t.loaderName || '—',
-    loaderPhone: t.loaderPhone || '—',
+    loader: (t.loaderName || '').toUpperCase() || '—',
     gantry: t.gantry || '—',
     qty: gateQuantity(t),
     product: t.productName || '—',
-    ref: t.orderNumber || '—',
-    company: t.companyName || '—',
-    customer: t.customerName || '—',
-    customerPhone: t.customerPhone || '—',
-    pfi: t.pfiNumber || '—',
+    // The reference people actually quote — "AA11214", not the internal
+    // ORD-768CF4D000B7 the row carries underneath.
+    ref: t.reference || t.orderNumber || '—',
+    customer: customer || '—',
+    company: company || '—',
+    // Screen only. Upper case because these are names read at a glance off a
+    // wide table, and the two are the same fact often enough that repeating
+    // one of them would be noise.
+    customerCompany:
+      [customer, company].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ').toUpperCase() || '—',
     timeIn: time(t.enteredAt),
     enteredBy: officerName(t.enteredByFirstName, t.enteredBySurname) || '—',
     timeOut: time(t.exitedAt),

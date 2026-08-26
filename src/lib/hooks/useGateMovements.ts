@@ -33,6 +33,8 @@ export interface GateMovement {
   exitedByFirstName: string | null
   exitedBySurname: string | null
   orderNumber: string | null
+  /** The reference people quote — "AA11214", from the order's company initials. */
+  reference: string | null
   companyName: string | null
   customerName: string | null
   customerPhone: string | null
