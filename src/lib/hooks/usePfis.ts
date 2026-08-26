@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '#/lib/api/http'
 import { useToast } from '#/lib/hooks/useToast'
@@ -219,8 +220,16 @@ export const isExpenseEditable = (e: { status: ExpenseStatus }): boolean =>
   e.status !== 'paid'
 
 /** The four groups an expense may be booked to, plus income, which it may not. */
-export type GlGroupCode =
-  | 'pfi_direct' | 'administrative' | 'depot' | 'sales_distribution' | 'income'
+/**
+ * The two halves of the chart — see GL_GROUPS on the server.
+ *
+ * Was five: pfi_direct plus administrative, depot, sales_distribution and
+ * income. Those were dropped when the chart was actually seeded, because a
+ * cost either belongs to a cargo or it does not, and splitting the overhead
+ * side further only asked the requester to classify their own spending before
+ * they were allowed to describe it. Nothing was ever booked to the four.
+ */
+export type GlGroupCode = 'general' | 'pfi_direct'
 
 /** A GL account. `gl_code` is null only on the pre-chart per-PFI categories. */
 export type ExpenseCategory = {
@@ -382,6 +391,8 @@ export type ExpenseFilters = {
   category?: string
   /** A whole section of the chart at once — see GlGroupCode. */
   group?: string
+  /** One heading inside a section — "Cargo / Vessel Costs", "Insurance". */
+  subgroup?: string
   pfi?: string
   bank?: string
   /** Staff id of whoever raised the expense — see `submitters` on the response. */
@@ -450,6 +461,55 @@ export function useExpenseCategories() {
       }
     },
   })
+}
+
+/**
+ * The chart, narrowed to what the current filters can actually return.
+ *
+ * Shared by Expenses and My Requests so the two pages cannot offer different
+ * category lists for the same data. Everything is a narrowing of `groups`,
+ * which already arrives as group → subgroup → accounts in GL-code order, so
+ * these lists cannot disagree with the pickers on the request form either.
+ *
+ * The point of narrowing rather than always listing all seventy: a cargo
+ * account selected under "General only" filters to nothing, and an empty
+ * table reads as no data rather than as two filters that cannot both be true.
+ */
+export function useExpenseCategoryPickers(filters: {
+  type?: 'pfi' | 'general' | ''
+  subgroup?: string
+}) {
+  const { data: cats } = useExpenseCategories()
+
+  const visibleGroups = useMemo(() => {
+    const wanted: GlGroupCode | null =
+      filters.type === 'pfi' ? 'pfi_direct' : filters.type === 'general' ? 'general' : null
+    return (cats?.groups || []).filter((g) => !wanted || g.code === wanted)
+  }, [cats?.groups, filters.type])
+
+  /** The cost-group headings. General accounts sit under one flat label. */
+  const subgroupOptions = useMemo(() => {
+    const out: string[] = []
+    for (const g of visibleGroups) {
+      for (const s of g.subgroups) {
+        const label = s.label || g.label
+        if (!out.includes(label)) out.push(label)
+      }
+    }
+    return out
+  }, [visibleGroups])
+
+  /** Accounts under their heading, narrowed by type AND cost group. */
+  const categoryPickerGroups = useMemo(
+    () =>
+      visibleGroups
+        .flatMap((g) => g.subgroups.map((s) => ({ label: s.label || g.label, accounts: s.accounts })))
+        .filter((s) => !filters.subgroup || s.label === filters.subgroup)
+        .filter((s) => s.accounts.length > 0),
+    [visibleGroups, filters.subgroup],
+  )
+
+  return { cats, visibleGroups, subgroupOptions, categoryPickerGroups }
 }
 
 /**

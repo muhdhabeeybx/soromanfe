@@ -17,7 +17,12 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { useExpenses, useDeleteExpense, isExpenseDeletable, isExpenseEditable, type PfiExpense, type ExpenseFilters } from '#/lib/hooks/usePfis'
+import {
+  useExpenses, useDeleteExpense, isExpenseDeletable, isExpenseEditable,
+  usePfiList, useExpenseCategoryPickers,
+  type PfiExpense, type ExpenseFilters,
+} from '#/lib/hooks/usePfis'
+import { NativeSelect } from '#/components/ui/native-select'
 import { ExpenseDialog } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
 import { naira } from '#/routes/pfi/-pfi-utils'
@@ -56,6 +61,8 @@ function MyRequestsPage() {
 
   const toast = useToast()
   const { accounts: bankAccounts } = useBankAccountPicker()
+  const { data: pfiData } = usePfiList({ limit: 500 })
+  const { cats, subgroupOptions, categoryPickerGroups } = useExpenseCategoryPickers(filters)
 
   const openNew = () => { setEditing(null); setDialogOpen(true) }
   const openEdit = (e: PfiExpense) => { setEditing(e); setDialogOpen(true) }
@@ -177,6 +184,56 @@ function MyRequestsPage() {
             value={filters.search || ''} onChange={(e) => set('search', e.target.value)}
           />
         </div>
+        {/* The same three that matter on Expenses, minus the ones that only
+            make sense across the whole company — there is no "raised by"
+            filter on a page that already shows only what you raised. */}
+        <NativeSelect
+          className="w-40"
+          value={filters.type || ''}
+          onChange={(e) => {
+            const type = e.target.value
+            setFilters((f) => ({
+              ...f,
+              type: (type || undefined) as typeof f.type,
+              subgroup: undefined,
+              category: undefined,
+              pfi: type === 'general' ? undefined : f.pfi,
+            }))
+          }}
+        >
+          <option value="">All spend</option>
+          <option value="pfi">PFI attached</option>
+          <option value="general">General only</option>
+        </NativeSelect>
+        <NativeSelect
+          className="w-52"
+          value={filters.subgroup || ''}
+          onChange={(e) => setFilters((f) => ({ ...f, subgroup: e.target.value || undefined, category: undefined }))}
+        >
+          <option value="">All cost groups</option>
+          {subgroupOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+        </NativeSelect>
+        <NativeSelect className="w-56" value={filters.category || ''} onChange={(e) => set('category', e.target.value)}>
+          <option value="">All categories</option>
+          {categoryPickerGroups.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </optgroup>
+          ))}
+          {cats?.unmapped?.length ? (
+            <optgroup label="Retired (pre-chart)">
+              {cats.unmapped.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </optgroup>
+          ) : null}
+        </NativeSelect>
+        {filters.type !== 'general' && (
+          <NativeSelect className="w-48" value={filters.pfi || ''} onChange={(e) => set('pfi', e.target.value)}>
+            <option value="">Any cargo</option>
+            {(pfiData?.pfis || []).map((p) => (
+              <option key={p.id} value={String(p.id)}>{p.pfiNumber || `PFI ${p.id}`}</option>
+            ))}
+          </NativeSelect>
+        )}
         <Input
           type="date" className="w-36" value={filters.dateFrom || ''}
           onChange={(e) => set('dateFrom', e.target.value)}

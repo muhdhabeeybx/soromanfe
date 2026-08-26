@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
@@ -27,7 +27,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
-  useExpenses, useExpenseCategories, useDeleteExpense,
+  useExpenses, useExpenseCategories, useDeleteExpense, usePfiList, useExpenseCategoryPickers,
   type PfiExpense, type ExpenseFilters, isExpenseDeletable, isExpenseEditable,
 } from '#/lib/hooks/usePfis'
 import { ExpenseDialog, cash } from '#/components/ExpenseDialog'
@@ -55,6 +55,8 @@ function ExpensesPage() {
 
   const { data, isLoading, isError, error, refetch } = useExpenses(filters)
   const { data: cats } = useExpenseCategories()
+  // Every PFI, so a closed cargo's costs stay findable.
+  const { data: pfiData } = usePfiList({ limit: 500 })
   const remove = useDeleteExpense()
   const toast = useToast()
   // Every account, not just the expense-tagged ones: a row may name an
@@ -70,13 +72,15 @@ function ExpensesPage() {
   const set = (k: keyof ExpenseFilters, v: string) =>
     setFilters((f) => ({ ...f, [k]: v || undefined }))
 
+  const { subgroupOptions, categoryPickerGroups } = useExpenseCategoryPickers(filters)
+
   /** Reads back the filters in force, so the file says what it is a view of. */
   const scope = (() => {
     const parts: string[] = []
     if (filters.search) parts.push(`matching “${filters.search}”`)
     if (filters.status) parts.push(`status ${filters.status}`)
     if (filters.type) parts.push(filters.type === 'pfi' ? 'PFI attached' : 'general only')
-    if (filters.group) parts.push('one cost group')
+    if (filters.subgroup) parts.push(filters.subgroup)
     if (filters.category) parts.push('one category')
     if (filters.pfi) parts.push('one PFI')
     if (filters.submitter) parts.push('one requester')
@@ -242,36 +246,71 @@ function ExpensesPage() {
         value={filters.search || ''} onChange={(e) => set('search', e.target.value)}
         />
         </div>
-        <NativeSelect className="w-36" value={filters.type || ''} onChange={(e) => set('type', e.target.value)}>
+        {/* Type narrows the two below it: picking General empties the cargo
+            picker of meaning and leaves only general accounts to choose from.
+            The old "group" dropdown is gone — since the chart was seeded it
+            held exactly General and PFI Attached, which is what this is. */}
+        <NativeSelect
+          className="w-40"
+          value={filters.type || ''}
+          onChange={(e) => {
+            const type = e.target.value
+            // Clearing the dependants matters: a cargo category left selected
+            // under "General only" filters to nothing, and reads as no data
+            // rather than as two filters that cannot both be true.
+            setFilters((f) => ({
+              ...f,
+              type: (type || undefined) as ExpenseFilters['type'],
+              subgroup: undefined,
+              category: undefined,
+              pfi: type === 'general' ? undefined : f.pfi,
+            }))
+          }}
+        >
         <option value="">All spend</option>
-        <option value="pfi">PFI only</option>
+        <option value="pfi">PFI attached</option>
         <option value="general">General only</option>
         </NativeSelect>
-        <NativeSelect className="w-44" value={filters.group || ''} onChange={(e) => set('group', e.target.value)}>
-        <option value="">All categories</option>
-        {(cats?.groups || []).map((g) => <option key={g.code} value={g.code}>{g.label}</option>)}
+        {/* The six cost groups — the same six the table chips and both exports
+            colour by, so what you filter on is what you can see. */}
+        <NativeSelect
+          className="w-52"
+          value={filters.subgroup || ''}
+          onChange={(e) => setFilters((f) => ({ ...f, subgroup: e.target.value || undefined, category: undefined }))}
+        >
+        <option value="">All cost groups</option>
+        {subgroupOptions.map((s) => <option key={s} value={s}>{s}</option>)}
         </NativeSelect>
-        {/* Accounts are listed under their group, in GL-code order. The legacy
-            categories keep an optgroup of their own so older lines stay
-            findable. */}
-        <NativeSelect className="w-48" value={filters.category || ''} onChange={(e) => set('category', e.target.value)}>
-        <option value="">All GL accounts</option>
-        {(cats?.groups || []).map((g) => (
-        <optgroup key={g.code} label={g.label}>
-        {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.gl_code} · {c.name}</option>)}
+        {/* Accounts under their own heading, in GL-code order. Narrowed by
+            whatever type and cost group are set, so the list is only ever the
+            accounts that can actually return a row. */}
+        <NativeSelect className="w-56" value={filters.category || ''} onChange={(e) => set('category', e.target.value)}>
+        <option value="">All categories</option>
+        {categoryPickerGroups.map((g) => (
+        <optgroup key={g.label} label={g.label}>
+        {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </optgroup>
         ))}
+        {/* Retired vocabulary, kept selectable so older lines stay findable. */}
         {cats?.unmapped?.length ? (
-        <optgroup label="Pre-chart categories">
+        <optgroup label="Retired (pre-chart)">
         {cats.unmapped.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </optgroup>
         ) : null}
-        <optgroup label="PFIs">
-        {cats?.pfi.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </optgroup>
         </NativeSelect>
-        <NativeSelect className="w-36" value={filters.bank || ''} onChange={(e) => set('bank', e.target.value)}>
-        <option value="">All banks</option>
+        {/* Which cargo. The backend has always accepted this filter; there was
+            simply never a control for it, and now that an expense names its
+            PFI separately from its category it is the obvious way in. */}
+        {filters.type !== 'general' && (
+        <NativeSelect className="w-48" value={filters.pfi || ''} onChange={(e) => set('pfi', e.target.value)}>
+        <option value="">Any cargo</option>
+        {(pfiData?.pfis || []).map((p) => (
+        <option key={p.id} value={String(p.id)}>{p.pfiNumber || `PFI ${p.id}`}</option>
+        ))}
+        </NativeSelect>
+        )}
+        <NativeSelect className="w-40" value={filters.bank || ''} onChange={(e) => set('bank', e.target.value)}>
+        <option value="">Paid from any account</option>
         {data?.banks.map((b) => <option key={b} value={b}>{b}</option>)}
         </NativeSelect>
         {/* Only the people who have actually raised something in view are
