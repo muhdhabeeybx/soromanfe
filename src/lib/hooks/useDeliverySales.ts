@@ -36,6 +36,53 @@ export function useDeliverySaleDetails(id: string) {
   })
 }
 
+/** One end of a transfer — a truck-cycle, not a single payment row. */
+export interface TransferCycle {
+  truckNumber: string
+  dateLoaded?: string
+  depotLoaded?: string
+  customerId?: number | null
+  customerName?: string
+  location?: string
+  allocationCode?: string
+}
+
+/**
+ * Move a truck's overpayment onto other trucks.
+ *
+ * One call rather than a debit and a credit issued separately: the server
+ * writes both legs in a transaction, because a credit that lands without its
+ * matching debit is money created out of nothing. It also recomputes the
+ * available surplus from the table, so an amount this client got wrong is
+ * refused rather than recorded.
+ */
+export function useTransferOverpayment() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (body: {
+      from: TransferCycle
+      to: Array<TransferCycle & { amount: number }>
+    }) => {
+      const res = await api.post('/delivery-sales/transfer', body)
+      return res.data as {
+        data: { transferGroupId: string; moved: number; remaining: number }
+        message: string
+      }
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      toast.success(res.message)
+    },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err))
+    },
+  })
+}
+
 export function useCreateDeliverySale() {
   const queryClient = useQueryClient()
   const toast = useToast()

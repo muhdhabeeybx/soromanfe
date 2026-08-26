@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
@@ -7,16 +7,19 @@ import {
 } from '#/components/ui/dialog'
 import {
   Plus, Loader2, Trash2, Pencil, UserPlus, X,
-  Fuel, Banknote, Tag, Truck,
+  Fuel, Banknote, Tag, Truck, ArrowLeftRight,
   Calendar as CalendarIcon, FileText,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
-import { useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale } from '#/lib/hooks/useDeliverySales'
+import {
+  useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale, useTransferOverpayment,
+} from '#/lib/hooks/useDeliverySales'
 import { useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation, idKey, entityId } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, bankAccountToString, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
+import { NativeSelect } from '#/components/ui/native-select'
 
 // Bank accounts come from the managed table via #/lib/bank-accounts — they
 // used to be three literals right here. See that module for why resolution
@@ -545,17 +548,21 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
   const toast = useToast()
   const createSale = useCreateDeliverySale()
   const [saving, setSaving] = useState(false)
+  const { options: bankOptions, byId: bankById } = useBankAccountPicker({
+    usage: BANK_ACCOUNT_USAGE.truckSales,
+  })
   const [form, setForm] = useState({
     payment_amount: '',
     payer_name: '',
     phone_number: '',
     date_of_payment: format(new Date(), 'yyyy-MM-dd'),
+    bank_account_id: '',
   })
 
   // Closing clears the form. Otherwise the next row this dialog opens on
   // arrives with the previous row's amount and payer already typed in.
   const closeDialog = useCallback((next: boolean) => {
-    if (!next) setForm({ payment_amount: '', payer_name: '', phone_number: '', date_of_payment: format(new Date(), 'yyyy-MM-dd') })
+    if (!next) setForm({ payment_amount: '', payer_name: '', phone_number: '', date_of_payment: format(new Date(), 'yyyy-MM-dd'), bank_account_id: '' })
     onOpenChange(next)
   }, [onOpenChange])
 
@@ -584,6 +591,13 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
         payerName: payerName || undefined,
         dateOfPayment: form.date_of_payment || format(new Date(), 'yyyy-MM-dd'),
         phoneNumber: form.phone_number.trim() || undefined,
+        // Both are written: the id links the row properly, and the string is
+        // what every row predating that column resolves by, so historical and
+        // new entries keep reading the same way.
+        bankAccountId: form.bank_account_id ? Number(form.bank_account_id) : undefined,
+        bank: form.bank_account_id
+          ? bankAccountToString(bankById.get(form.bank_account_id)!)
+          : undefined,
         enteredBy: currentUser,
         paymentMethod: 'manual',
       } as Partial<DeliverySale>)
@@ -594,7 +608,7 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
     } finally {
       setSaving(false)
     }
-  }, [target, form, createSale, toast, closeDialog])
+  }, [target, form, createSale, toast, closeDialog, bankById])
 
   const amountTyped = Number(stripCommas(form.payment_amount)) || 0
   const remainingBalance = target ? target.balance - amountTyped : 0
@@ -669,6 +683,21 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
               <Label>Phone Number</Label>
               <Input value={form.phone_number} onChange={e => setForm(prev => ({ ...prev, phone_number: e.target.value }))} />
             </div>
+          </div>
+
+          {/* Which account the money landed in. The same shortlist the full
+              Record Payment dialog offers — nine truck-collection accounts,
+              not the company's whole banking — so a payment recorded here can
+              be reconciled against the statement it will actually appear on. */}
+          <div className="space-y-1">
+            <Label>Paid Into</Label>
+            <NativeSelect
+              value={form.bank_account_id}
+              onChange={e => setForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
+            >
+              <option value="">Select the account…</option>
+              {bankOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </NativeSelect>
           </div>
 
         </div>
@@ -1167,6 +1196,234 @@ export function DeleteConfirmDialog({ open, onOpenChange, target }: DeleteConfir
           <Button variant="destructive" onClick={handleDelete} disabled={deleting} className="gap-2">
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
             {deleting ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Transfer Overpayment Dialog
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface TransferOverpaymentDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The overpaid cycle the surplus is leaving. */
+  source: LedgerGroup | null
+  /** Every other cycle on the ledger, to choose destinations from. */
+  candidates: LedgerGroup[]
+}
+
+/**
+ * Move a truck's surplus onto other trucks.
+ *
+ * The destinations are chosen from the ledger's own groups rather than typed,
+ * so a transfer can only ever land on a truck-cycle that exists. Trucks still
+ * owing money are offered first and their outstanding balance shown, because
+ * settling a debt is what the surplus is nearly always for — but a fully paid
+ * truck is not hidden, since a customer may well want the credit sitting
+ * against a specific load.
+ *
+ * The server recomputes the available surplus and refuses anything above it.
+ * This dialog caps the inputs to the same figure so that refusal is a
+ * backstop rather than the normal way of finding out.
+ */
+export function TransferOverpaymentDialog({
+  open, onOpenChange, source, candidates,
+}: TransferOverpaymentDialogProps) {
+  const toast = useToast()
+  const transfer = useTransferOverpayment()
+  const [rows, setRows] = useState<Array<{ uid: string; key: string; amount: string }>>([])
+
+  const available = source ? Math.abs(Math.min(source.balance, 0)) : 0
+
+  const closeDialog = useCallback((next: boolean) => {
+    if (!next) setRows([])
+    onOpenChange(next)
+  }, [onOpenChange])
+
+  // Seeded with one empty destination whenever the dialog opens on a new row,
+  // so it is usable without first having to work out that a row must be
+  // added. Adjusted during render rather than in an effect — the same pattern
+  // the rest of the app uses — so the first paint already has the row instead
+  // of rendering empty and then correcting itself.
+  const seedKey = open ? source?.key ?? '' : null
+  const [seeded, setSeeded] = useState<string | null>(null)
+  if (seeded !== seedKey) {
+    setSeeded(seedKey)
+    setRows(seedKey === null ? [] : [{ uid: Math.random().toString(36).slice(2), key: '', amount: '' }])
+  }
+
+  const options = useMemo(() => {
+    const rest = candidates.filter(c => c.key !== source?.key)
+    const owing = rest.filter(c => c.balance > 0).sort((a, b) => b.balance - a.balance)
+    const settled = rest.filter(c => c.balance <= 0)
+    return { owing, settled }
+  }, [candidates, source?.key])
+
+  const byKey = useMemo(() => new Map(candidates.map(c => [c.key, c])), [candidates])
+
+  const allocated = rows.reduce((s, r) => s + (Number(stripCommas(r.amount)) || 0), 0)
+  const left = Math.round((available - allocated) * 100) / 100
+
+  const setRow = (uid: string, patch: Partial<{ key: string; amount: string }>) =>
+    setRows(prev => prev.map(r => (r.uid === uid ? { ...r, ...patch } : r)))
+
+  const handleSave = async () => {
+    if (!source) return
+    const chosen = rows.filter(r => r.key && Number(stripCommas(r.amount)) > 0)
+    if (chosen.length === 0) { toast.error('Choose a truck and an amount to move'); return }
+    if (left < -0.005) { toast.error('That is more than this truck has over'); return }
+
+    const cycleOf = (g: LedgerGroup) => ({
+      truckNumber: g.truckNumber,
+      dateLoaded: g.dateLoaded,
+      depotLoaded: g.depot,
+      customerId: g.customerId ? Number(g.customerId) : null,
+      customerName: g.customerName,
+      location: g.location,
+      allocationCode: g.allocationCode || undefined,
+    })
+
+    try {
+      await transfer.mutateAsync({
+        from: cycleOf(source),
+        to: chosen.map(r => ({
+          ...cycleOf(byKey.get(r.key)!),
+          amount: Number(stripCommas(r.amount)),
+        })),
+      })
+      closeDialog(false)
+    } catch {
+      // useTransferOverpayment already surfaced it.
+    }
+  }
+
+  const label = (g: LedgerGroup) =>
+    `${g.truckNumber} · ${g.customerName || 'No customer'}${g.balance > 0 ? ` — owes ${fmt(g.balance)}` : ' — settled'}`
+
+  return (
+    <Dialog open={open} onOpenChange={closeDialog}>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-info/10">
+              <ArrowLeftRight className="size-5 text-info" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">Move Overpayment</h2>
+              <p className="text-sm font-normal text-muted-foreground mt-0.5">
+                {source ? `${source.truckNumber} · ${source.customerName || 'Customer pending'}` : ''}
+              </p>
+            </div>
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            Move a truck's surplus onto other trucks
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="rounded-lg border border-info/25 bg-info/5 p-3">
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Overpaid by</p>
+                <p className="mt-0.5 font-semibold text-info">{fmt(available)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Allocated</p>
+                <p className="mt-0.5 font-semibold">{fmt(allocated)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Still to place</p>
+                <p className={`mt-0.5 font-semibold ${left < 0 ? 'text-destructive' : left === 0 ? 'text-accent' : 'text-muted-foreground'}`}>
+                  {left < 0 ? `${fmt(Math.abs(left))} over` : fmt(left)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {rows.map((row) => {
+              const dest = row.key ? byKey.get(row.key) : null
+              return (
+                <div key={row.uid} className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <NativeSelect value={row.key} onChange={e => setRow(row.uid, { key: e.target.value })}>
+                      <option value="">Move to which truck…</option>
+                      {options.owing.length > 0 && (
+                        <optgroup label="Still owing">
+                          {options.owing.map(g => <option key={g.key} value={g.key}>{label(g)}</option>)}
+                        </optgroup>
+                      )}
+                      {options.settled.length > 0 && (
+                        <optgroup label="Already settled">
+                          {options.settled.map(g => <option key={g.key} value={g.key}>{label(g)}</option>)}
+                        </optgroup>
+                      )}
+                    </NativeSelect>
+                    {dest && dest.balance > 0 && (
+                      <button
+                        type="button"
+                        className="text-xs text-info hover:underline"
+                        onClick={() => setRow(row.uid, {
+                          // Never offer more than is actually left to place.
+                          amount: formatWithCommas(String(Math.min(dest.balance, Math.max(left + (Number(stripCommas(row.amount)) || 0), 0)))),
+                        })}
+                      >
+                        Fill its balance ({fmt(dest.balance)})
+                      </button>
+                    )}
+                  </div>
+                  <div className="w-40">
+                    <Input
+                      inputMode="decimal"
+                      placeholder="Amount"
+                      value={row.amount}
+                      onChange={e => setRow(row.uid, { amount: formatWithCommas(e.target.value) })}
+                    />
+                  </div>
+                  {rows.length > 1 && (
+                    <Button
+                      variant="ghost" size="icon"
+                      onClick={() => setRows(prev => prev.filter(r => r.uid !== row.uid))}
+                      title="Remove"
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+
+            <Button
+              variant="outline" size="sm" className="gap-1.5"
+              disabled={left <= 0}
+              onClick={() => setRows(prev => [...prev, { uid: Math.random().toString(36).slice(2), key: '', amount: '' }])}
+            >
+              <Plus className="size-3.5" />
+              Another truck
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Both trucks keep a record: this one shows the amount leaving, the other
+            shows where it came from. Nothing already received is edited away.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => closeDialog(false)} disabled={transfer.isPending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            disabled={transfer.isPending || allocated <= 0 || left < -0.005}
+            className="gap-2"
+          >
+            {transfer.isPending ? <Loader2 className="size-4 animate-spin" /> : <ArrowLeftRight className="size-4" />}
+            {transfer.isPending ? 'Moving…' : `Move ${allocated > 0 ? fmt(allocated) : ''}`}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -17,7 +17,7 @@ import {
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
   ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal,
-  Loader2, Landmark,
+  Loader2, Landmark, ArrowLeftRight,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
@@ -28,7 +28,8 @@ import { useSalesLedgerFilters } from '#/lib/hooks/useSalesLedgerFilters'
 import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
-  RecordPaymentDialog,
+  RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, TransferOverpaymentDialog,
+  type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
 import {
   toNum, fmt, fmtQty, normalizeCycleDate, getCycleKey, safeFormatDate,
@@ -382,6 +383,12 @@ function SalesLedgerDashboard() {
   // ── Dialog State ───────────────────────────────────────────────────
   const [dialogOpen, setDialogOpen] = useState(false)
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false)
+  // The row the three row-level dialogs act on. One target, because only one
+  // of them is ever open.
+  const [quickTarget, setQuickTarget] = useState<LedgerGroup | null>(null)
+  const [quickPaymentOpen, setQuickPaymentOpen] = useState(false)
+  const [rowSetupOpen, setRowSetupOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
   const [assignMode, setAssignMode] = useState(false)
 
   const openPaymentDialog = (inAssignMode = false) => {
@@ -841,6 +848,7 @@ function SalesLedgerDashboard() {
                     <TableHead className="font-semibold text-accent text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Payment</TableHead>
                     <TableHead className="font-semibold text-destructive text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Balance</TableHead>
                     <TableHead className="font-semibold text-muted-foreground text-center whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Status</TableHead>
+                    <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -929,6 +937,40 @@ function SalesLedgerDashboard() {
                               </Badge>
                             )}
                           </TableCell>
+                          {/* Everything the detail page offers, on the row
+                              itself — the whole point of opening that page was
+                              usually one of these three. stopPropagation
+                              because the row itself navigates. */}
+                          <TableCell className="text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-0.5">
+                              <Button
+                                variant="ghost" size="icon-sm" title="Add a payment"
+                                onClick={() => { setQuickTarget(group); setQuickPaymentOpen(true) }}
+                              >
+                                <Plus className="size-3.5" />
+                                <span className="sr-only">Add a payment</span>
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon-sm" title="Set up this row"
+                                onClick={() => { setQuickTarget(group); setRowSetupOpen(true) }}
+                              >
+                                <SlidersHorizontal className="size-3.5" />
+                                <span className="sr-only">Set up this row</span>
+                              </Button>
+                              {/* Only where there is actually a surplus to move. */}
+                              {group.balance < 0 && (
+                                <Button
+                                  variant="ghost" size="icon-sm"
+                                  className="text-blue-700 hover:bg-blue-50 hover:text-blue-800 dark:text-blue-400 dark:hover:bg-blue-950"
+                                  title={`Move the ${fmt(Math.abs(group.balance))} overpayment`}
+                                  onClick={() => { setQuickTarget(group); setTransferOpen(true) }}
+                                >
+                                  <ArrowLeftRight className="size-3.5" />
+                                  <span className="sr-only">Move the overpayment</span>
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
                         </TableRow>
                       )
 
@@ -957,15 +999,22 @@ function SalesLedgerDashboard() {
                             <TableCell className="whitespace-nowrap text-muted-foreground">
                               {formatBankLabel(bankAccounts, sale.bank) || '—'}
                             </TableCell>
-                            <TableCell className="text-right text-muted-foreground whitespace-nowrap tabular-nums">
-                              {toNum(sale.quantity) > 0 ? `${fmtQty(toNum(sale.quantity))} L` : ''}
+                            {/* Quantity and rate belong to the load, not to a
+                                payment against it. Repeating them on every
+                                sub-row restated the same 33,000 L four times
+                                and read as four separate loads. */}
+                            <TableCell colSpan={3} className="text-muted-foreground text-right whitespace-nowrap">
+                              {sale.transferCounterparty && (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
+                                  <ArrowLeftRight className="size-3" />
+                                  {amount < 0 ? 'to' : 'from'} {sale.transferCounterparty}
+                                </span>
+                              )}
                             </TableCell>
-                            <TableCell className="text-right text-muted-foreground whitespace-nowrap tabular-nums">
-                              {toNum(sale.rate) > 0 ? fmt(toNum(sale.rate)) : ''}
-                            </TableCell>
-                            <TableCell />
-                            <TableCell className="text-right font-semibold text-accent whitespace-nowrap tabular-nums">
-                              {amount > 0 ? fmt(amount) : '—'}
+                            {/* A transfer out is money leaving this truck, so
+                                it is shown as such rather than as a payment. */}
+                            <TableCell className={`text-right font-semibold whitespace-nowrap tabular-nums ${amount < 0 ? 'text-blue-700 dark:text-blue-400' : 'text-accent'}`}>
+                              {amount === 0 ? '—' : amount < 0 ? `(${fmt(Math.abs(amount))})` : fmt(amount)}
                             </TableCell>
                             <TableCell className={`text-right whitespace-nowrap tabular-nums ${balanceAfter > 0 ? 'text-destructive/80' : 'text-muted-foreground'}`}>
                               {group.expected > 0
@@ -981,6 +1030,9 @@ function SalesLedgerDashboard() {
                                 <span className="text-xs text-muted-foreground">{sale.enteredBy || '—'}</span>
                               )}
                             </TableCell>
+                            {/* Keeps the sub-row the same width as the main
+                                one now that Actions exists. */}
+                            <TableCell />
                           </TableRow>
                         )
                       })
@@ -1107,6 +1159,30 @@ function SalesLedgerDashboard() {
         getCycleKey={getCycleKey}
         normalizeCycleDate={normalizeCycleDate}
         assignMode={assignMode}
+      />
+
+      <QuickPaymentDialog
+        open={quickPaymentOpen}
+        onOpenChange={setQuickPaymentOpen}
+        target={quickTarget}
+      />
+
+      <RowSetupDialog
+        open={rowSetupOpen}
+        onOpenChange={setRowSetupOpen}
+        target={quickTarget}
+        customers={customers}
+        customerMap={customerMap}
+        tripCodes={tripCodes}
+      />
+
+      {/* Destinations come from the whole filtered ledger, not the page:
+          the truck a surplus should go to is very often not on screen. */}
+      <TransferOverpaymentDialog
+        open={transferOpen}
+        onOpenChange={setTransferOpen}
+        source={quickTarget}
+        candidates={filteredLedgerGroups}
       />
 
       <ScopedBankAccountsDialog

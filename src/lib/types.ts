@@ -517,6 +517,14 @@ export interface DeliverySale {
   bankAccountId?: number | null
   /** How the money reached the bank. Null on every row that predates the split, and on rows that are not remittances. */
   depositChannel?: DepositChannel | null
+  /**
+   * The two legs of an overpayment moved between trucks share this id. Null
+   * on an ordinary payment — a transfer is a pair of rows, one negative on
+   * the truck the surplus left and one positive where it landed.
+   */
+  transferGroupId?: string | null
+  /** The other truck and customer — "BWR810XB · Musa Damaturu". */
+  transferCounterparty?: string | null
   dateOfPayment: string | null
   depositStatus?: 'pending' | 'partial' | 'paid' | string
   phoneNumber: string
