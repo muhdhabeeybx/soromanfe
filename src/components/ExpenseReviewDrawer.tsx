@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { format } from 'date-fns'
-import { Loader2, Send, ExternalLink, Pencil, Trash2, Lock } from 'lucide-react'
+import { Loader2, Send, ExternalLink, Pencil, Trash2, Lock, Check, Clock } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 
 import {
@@ -21,6 +21,7 @@ import {
 } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
 import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
+import { categoryChip, categoryGrouping } from '#/lib/expense-presentation'
 import { ExpenseAttachments, FileButton, FileRow, type PendingFile } from '#/components/ExpenseAttachments'
 import { uploadExpenseFile } from '#/lib/hooks/useCloudinaryUpload'
 import { useToast } from '#/lib/hooks/useToast'
@@ -49,11 +50,105 @@ const HISTORY_LABELS: Record<string, string> = {
 }
 const historyLabel = (action: string) => HISTORY_LABELS[action] || action.replace(/_/g, ' ')
 
+/**
+ * Which history entries are a stage being reached, and which are chatter.
+ *
+ * The rail marks a stage reached only when the audit trail says it happened —
+ * never inferred from the current status. A request that was sent back and
+ * resubmitted has genuinely been verified once, and a rail that recomputed
+ * itself from "where is it now" would erase that.
+ */
+const STAGES = [
+  { key: 'created', label: 'Raised' },
+  { key: 'verified', label: 'Verified' },
+  { key: 'audit_approved', label: 'CFO' },
+  { key: 'admin_approved', label: 'Approved' },
+  { key: 'paid', label: 'Paid' },
+] as const
+
+/** Where a request stopped, when it did not simply move forward. */
+const HALTED: Record<string, { label: string; dot: string; text: string }> = {
+  rejected: { label: 'Rejected', dot: 'bg-destructive', text: 'text-destructive' },
+  changes_requested: { label: 'Sent back', dot: 'bg-warning', text: 'text-warning' },
+}
+
+/**
+ * The approval chain as a rail, so "how much further" is answered by looking
+ * rather than by counting.
+ *
+ * The step counter on the badge said "2 of 4" — true, but it does not say
+ * which two, or who has it now. This does both in the same space.
+ */
+function TrackingRail({ expense }: { expense: PfiExpense }) {
+  const reached = new Set((expense.history || []).map((h) => h.action))
+  // Every request was raised, whether or not the row survived.
+  reached.add('created')
+  const halted = HALTED[expense.status]
+
+  return (
+    <div className="rounded-xl border border-foreground/10 bg-muted/30 p-3">
+      <div className="flex items-start">
+        {STAGES.map((stage, i) => {
+          const done = reached.has(stage.key)
+          const current = !halted && !reached.has(STAGES[i + 1]?.key ?? '__none') && done
+          return (
+            <div key={stage.key} className="flex min-w-0 flex-1 flex-col items-center gap-1.5">
+              <div className="flex w-full items-center">
+                {/* Connectors, drawn either side so the dots line up under
+                    their own labels rather than drifting left. */}
+                <span className={cn('h-0.5 flex-1', i === 0 ? 'bg-transparent' : done ? 'bg-success' : 'bg-foreground/15')} />
+                <span
+                  className={cn(
+                    'flex size-5 shrink-0 items-center justify-center rounded-full ring-2 ring-background transition-colors',
+                    done ? 'bg-success text-success-foreground' : 'bg-foreground/15',
+                    current && 'ring-4 ring-success/25',
+                  )}
+                >
+                  {done && <Check className="size-3" />}
+                </span>
+                <span
+                  className={cn(
+                    'h-0.5 flex-1',
+                    i === STAGES.length - 1 ? 'bg-transparent'
+                      : reached.has(STAGES[i + 1].key) ? 'bg-success' : 'bg-foreground/15',
+                  )}
+                />
+              </div>
+              <span
+                className={cn(
+                  'truncate text-[10px] font-medium uppercase tracking-wide',
+                  done ? 'text-foreground' : 'text-muted-foreground/60',
+                )}
+              >
+                {stage.label}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* A halt is not a stage — it is the chain stopping, so it is said in
+          words underneath rather than drawn as another dot on the line. */}
+      {halted ? (
+        <p className={cn('mt-2.5 flex items-center gap-1.5 border-t border-foreground/10 pt-2.5 text-xs font-semibold', halted.text)}>
+          <span className={cn('size-1.5 rounded-full', halted.dot)} />
+          {halted.label} — waiting on {expense.submitted_by_name || 'the person who raised it'} to correct it
+        </p>
+      ) : expense.status !== 'paid' ? (
+        <p className="mt-2.5 flex items-center gap-1.5 border-t border-foreground/10 pt-2.5 text-xs text-muted-foreground">
+          <Clock className="size-3" />
+          Step {expense.status_step} of {expense.total_steps} · with {expense.status_label}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
       <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm">{value || '—'}</span>
+      <span className="text-sm font-medium">{value || <span className="font-normal text-muted-foreground/60">—</span>}</span>
     </div>
   )
 }
@@ -226,19 +321,27 @@ export function ExpenseReviewDrawer({
           <div className="flex justify-center py-16"><Loader2 className="animate-spin" /></div>
         ) : (
           <>
-            <DialogHeader>
+            <DialogHeader className="space-y-3">
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   {expense.reference_number && (
                     <p className={cn(MICRO, 'font-mono text-muted-foreground')}>{expense.reference_number}</p>
                   )}
                   {/* Once settled, the headline figure is what actually left
                       the bank — not what was asked for. */}
-                  <DialogTitle>{naira(settled ?? requested)}</DialogTitle>
-                  <DialogDescription className="flex items-center gap-1.5">
-                    <span>
-                      {expense.vendor || 'Unnamed payee'} ·{' '}
-                      {[expense.gl_code, expense.category_name].filter(Boolean).join(' · ')}
+                  <DialogTitle className="text-2xl font-bold tracking-tight">
+                    {naira(settled ?? requested)}
+                  </DialogTitle>
+                  {/* Said out loud when the two differ, because the headline
+                      silently changing meaning once paid is otherwise invisible. */}
+                  {settled != null && variance !== 0 && (
+                    <p className={cn('text-xs font-semibold', variance < 0 ? 'text-warning' : 'text-info')}>
+                      paid · {naira(Math.abs(variance))} {variance < 0 ? 'less' : 'more'} than the {naira(requested)} requested
+                    </p>
+                  )}
+                  <DialogDescription className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <span className="font-medium text-foreground uppercase">
+                      {expense.vendor || 'Unnamed payee'}
                     </span>
                     {expense.vendor_id && (
                       <button
@@ -250,9 +353,25 @@ export function ExpenseReviewDrawer({
                       </button>
                     )}
                   </DialogDescription>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={cn(
+                        'rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1 ring-inset',
+                        categoryChip(expense),
+                      )}
+                    >
+                      {categoryGrouping(expense)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{expense.category_name}</span>
+                    {expense.pfi_number && (
+                      <span className="text-xs text-muted-foreground">· {expense.pfi_number}</span>
+                    )}
+                  </div>
                 </div>
                 <StepBadge expense={expense} />
               </div>
+
+              <TrackingRail expense={expense} />
             </DialogHeader>
 
             <div className="divide-y divide-foreground/10">
@@ -269,7 +388,7 @@ export function ExpenseReviewDrawer({
                   invoice rather than as no invoice at all. */}
               {expense.amount_ex_vat != null && (
                 <div className="py-2">
-                  <p className={cn(MICRO, 'pb-1 text-muted-foreground')}>Invoice</p>
+                  <h3 className="pb-1 text-sm font-bold tracking-tight">Invoice</h3>
                   <Row label="Invoice no." value={expense.invoice_number} />
                   <Row label="TIN" value={expense.tin_number} />
                   <Row label="Amount ex VAT" value={naira(Number(expense.amount_ex_vat))} />
@@ -294,7 +413,7 @@ export function ExpenseReviewDrawer({
               )}
 
               <div className="py-2">
-                <p className={cn(MICRO, 'pb-1 text-muted-foreground')}>Payment</p>
+                <h3 className="pb-1 text-sm font-bold tracking-tight">Payment</h3>
                 <Row label="Amount requested" value={naira(requested)} />
                 {settled != null && (
                   <>
@@ -345,42 +464,119 @@ export function ExpenseReviewDrawer({
                   audit trail, not review_note — that column holds only the
                   latest one and is wiped when a corrected request is
                   resubmitted. Comments sit in the same timeline. */}
-              <div className="space-y-2 py-3">
-                <p className={cn(MICRO, 'text-muted-foreground')}>Tracking</p>
+              <div className="space-y-3 py-3">
+                <h3 className="text-sm font-bold tracking-tight">Tracking</h3>
                 {thread.length === 0 && (
                   <p className="text-sm text-muted-foreground/70">Nothing recorded yet.</p>
                 )}
-                {thread.map((t, i) => (
-                  <div key={i} className="rounded-lg border border-foreground/15 p-2.5">
-                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className="font-normal text-foreground">{t.who}</span>
-                      {t.label && (
-                        <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                          {t.label}
-                        </Badge>
-                      )}
-                      <span>· {format(new Date(t.at), 'd MMM yyyy, HH:mm')}</span>
-                    </p>
-                    {t.body && <p className="mt-1 whitespace-pre-wrap text-sm">{t.body}</p>}
-                  </div>
-                ))}
 
-                <div className="flex items-start gap-2 pt-1">
-                  <Textarea
-                    rows={2}
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    placeholder="Reply to the request…"
-                  />
-                  <Button
-                    size="icon" variant="outline" title="Send"
-                    disabled={!comment.trim() || addComment.isPending}
-                    onClick={say}
-                  >
-                    {addComment.isPending ? <Loader2 className="animate-spin" /> : <Send />}
-                    <span className="sr-only">Send</span>
-                  </Button>
+                {/* One continuous rail down the left, so the thread reads as a
+                    sequence rather than as a stack of unrelated cards. The
+                    stage that stopped the chain is the one worth colouring —
+                    a timeline where every entry is tinted has no emphasis. */}
+                <div className="space-y-0">
+                  {thread.map((t, i) => {
+                    const halt = t.label === 'Rejected' ? 'destructive'
+                      : t.label === 'Sent back for changes' ? 'warning'
+                      : null
+                    const last = i === thread.length - 1
+                    return (
+                      <div key={i} className="relative flex gap-3 pb-3">
+                        <div className="flex flex-col items-center">
+                          <span
+                            className={cn(
+                              'mt-1 size-2.5 shrink-0 rounded-full ring-4 ring-background',
+                              halt === 'destructive' ? 'bg-destructive'
+                                : halt === 'warning' ? 'bg-warning'
+                                : t.label ? 'bg-accent'
+                                : 'bg-foreground/25',
+                            )}
+                          />
+                          {!last && <span className="w-px flex-1 bg-foreground/15" />}
+                        </div>
+                        <div
+                          className={cn(
+                            'min-w-0 flex-1 rounded-lg border px-2.5 py-2',
+                            halt === 'destructive' ? 'border-destructive/30 bg-destructive/5'
+                              : halt === 'warning' ? 'border-warning/30 bg-warning/5'
+                              : 'border-foreground/10',
+                          )}
+                        >
+                          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                            <span className="font-semibold text-foreground">{t.who}</span>
+                            {t.label && (
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  'px-1.5 py-0 text-[10px] font-medium',
+                                  halt === 'destructive' && 'bg-destructive/15 text-destructive',
+                                  halt === 'warning' && 'bg-warning/15 text-warning',
+                                )}
+                              >
+                                {t.label}
+                              </Badge>
+                            )}
+                            <span>· {format(new Date(t.at), 'd MMM yyyy, HH:mm')}</span>
+                          </p>
+                          {t.body && <p className="mt-1 whitespace-pre-wrap text-sm">{t.body}</p>}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
+
+                {/* The reply box takes its cue from where the request stands.
+                    After a reject or a send-back the submitter owes an answer,
+                    and a box labelled "Reply to the request…" gives no hint
+                    that anything is being waited on. */}
+                {(() => {
+                  const owed = HALTED[expense.status]
+                  return (
+                    <div
+                      className={cn(
+                        'space-y-2 rounded-lg border p-2.5',
+                        owed
+                          ? expense.status === 'rejected'
+                            ? 'border-destructive/30 bg-destructive/5'
+                            : 'border-warning/30 bg-warning/5'
+                          : 'border-foreground/10',
+                      )}
+                    >
+                      <label className="block text-xs font-semibold">
+                        {owed
+                          ? `Respond to why this was ${owed.label.toLowerCase()}`
+                          : 'Add a note to this request'}
+                      </label>
+                      <div className="flex items-start gap-2">
+                        <Textarea
+                          rows={2}
+                          value={comment}
+                          onChange={(e) => setComment(e.target.value)}
+                          placeholder={
+                            owed
+                              ? 'Explain what you have changed, or ask what is needed…'
+                              : 'Anyone following this request will see it…'
+                          }
+                        />
+                        <Button
+                          size="icon" variant="outline" title="Send"
+                          disabled={!comment.trim() || addComment.isPending}
+                          onClick={say}
+                        >
+                          {addComment.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+                          <span className="sr-only">Send</span>
+                        </Button>
+                      </div>
+                      {owed && (
+                        <p className="text-xs text-muted-foreground">
+                          A note alone does not resend it — use
+                          {' '}<span className="font-semibold">Correct and resubmit</span>{' '}
+                          below once the request itself is fixed.
+                        </p>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             </div>
 
@@ -506,25 +702,36 @@ export function ExpenseReviewDrawer({
                   </div>
                 )}
 
+                {/* Every action wears its own colour. Reject and send-back
+                    used to render as plain outline buttons because they ask
+                    for a note first — so the two most consequential choices
+                    on the screen were the two hardest to pick out. They are
+                    now red and amber like everywhere else; the note is asked
+                    for on the first click either way. */}
                 <div className="flex flex-wrap gap-2">
-                  {expense.available_actions.map((a) => (
-                    <Button
-                      key={a}
-                      className={cn(!ACTION_META[a].needsNote && ACTION_META[a].tone)}
-                      variant={ACTION_META[a].needsNote ? 'outline' : 'default'}
-                      disabled={
-                        review.isPending ||
-                        (pending === a && ACTION_META[a].needsNote && !note.trim()) ||
-                        (pending === a && ACTION_META[a].capturesPayment && !payReady)
-                      }
-                      onClick={() => run(a)}
-                    >
-                      {review.isPending && <Loader2 className="animate-spin" />}
-                      {pending === a && ACTION_META[a].capturesPayment
-                        ? 'Confirm payment'
-                        : ACTION_META[a].label}
-                    </Button>
-                  ))}
+                  {expense.available_actions.map((a) => {
+                    const meta = ACTION_META[a]
+                    const armed = pending === a
+                    return (
+                      <Button
+                        key={a}
+                        className={cn(meta.tone, 'font-semibold', armed && 'ring-2 ring-foreground/20')}
+                        disabled={
+                          review.isPending ||
+                          (armed && meta.needsNote && !note.trim()) ||
+                          (armed && meta.capturesPayment && !payReady)
+                        }
+                        onClick={() => run(a)}
+                      >
+                        {review.isPending && <Loader2 className="animate-spin" />}
+                        {armed && meta.capturesPayment
+                          ? 'Confirm payment'
+                          : armed && meta.needsNote
+                            ? `Confirm ${meta.label.toLowerCase()}`
+                            : meta.label}
+                      </Button>
+                    )
+                  })}
                 </div>
               </div>
             ) : (
@@ -540,53 +747,71 @@ export function ExpenseReviewDrawer({
               wrong, and having to close it and find the row again to act on
               that decision is the wrong way round.
             */}
-            <DialogFooter className="gap-2 sm:gap-2">
+            <DialogFooter className="border-t border-foreground/10 pt-3 sm:justify-between sm:gap-2">
               {confirmDelete ? (
-                <div className="mr-auto flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">Delete this request?</span>
-                  <Button
-                    variant="destructive" size="sm" disabled={remove.isPending}
-                    onClick={async () => {
-                      await remove.mutateAsync(expense.id)
-                      setConfirmDelete(false)
-                      onOpenChange(false)
-                    }}
-                  >
-                    {remove.isPending && <Loader2 className="animate-spin" />}
-                    Yes, delete
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+                // The confirm takes over the whole footer rather than sitting
+                // beside the buttons it is asking about — a destructive
+                // question next to the thing that triggers it is how the wrong
+                // one gets clicked.
+                <div className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 pl-3">
+                  <span className="text-sm font-semibold text-destructive">
+                    Delete this request permanently?
+                  </span>
+                  <div className="flex gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+                      Keep it
+                    </Button>
+                    <Button
+                      variant="destructive" size="sm" disabled={remove.isPending}
+                      onClick={async () => {
+                        await remove.mutateAsync(expense.id)
+                        setConfirmDelete(false)
+                        onOpenChange(false)
+                      }}
+                    >
+                      {remove.isPending && <Loader2 className="animate-spin" />}
+                      <Trash2 data-icon="inline-start" />
+                      Yes, delete
+                    </Button>
+                  </div>
                 </div>
               ) : (
-                <div className="mr-auto flex items-center gap-2">
-                  {isExpenseEditable(expense) ? (
-                    <Button variant="outline" onClick={() => { onOpenChange(false); onEdit(expense) }}>
-                      <Pencil data-icon="inline-start" />
-                      {/* After a reject or send-back, correcting it is the
-                          submitter's next move, so the label says so. */}
-                      {expense.status === 'rejected' || expense.status === 'changes_requested'
-                        ? 'Correct and resubmit'
-                        : 'Edit'}
-                    </Button>
-                  ) : (
-                    <Button variant="outline" disabled title="Paid — this expense is closed">
-                      <Lock data-icon="inline-start" />
-                      Paid — locked
-                    </Button>
-                  )}
-                  {isExpenseDeletable(expense) && (
-                    <Button
-                      variant="ghost"
-                      className="text-muted-foreground hover:text-destructive"
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      <Trash2 data-icon="inline-start" />
-                      Delete
-                    </Button>
-                  )}
-                </div>
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isExpenseEditable(expense) ? (
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          'font-semibold',
+                          // After a reject or send-back this is the whole point
+                          // of opening the drawer, so it stops looking neutral.
+                          HALTED[expense.status] && 'border-accent text-accent hover:bg-accent/10',
+                        )}
+                        onClick={() => { onOpenChange(false); onEdit(expense) }}
+                      >
+                        <Pencil data-icon="inline-start" />
+                        {HALTED[expense.status] ? 'Correct and resubmit' : 'Edit'}
+                      </Button>
+                    ) : (
+                      <Button variant="outline" disabled title="Paid — this expense is closed">
+                        <Lock data-icon="inline-start" />
+                        Paid — locked
+                      </Button>
+                    )}
+                    {isExpenseDeletable(expense) && (
+                      <Button
+                        variant="outline"
+                        className="border-destructive/40 font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setConfirmDelete(true)}
+                      >
+                        <Trash2 data-icon="inline-start" />
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                  <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+                </>
               )}
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
             </DialogFooter>
           </>
         )}
