@@ -1,460 +1,351 @@
 import { useMemo, useState } from 'react'
-import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
-import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
-import { Truck, Droplets, FileSpreadsheet, FileText, Loader2, ClipboardList } from 'lucide-react'
+import { format } from 'date-fns'
+import {
+  Truck, Droplets, FileSpreadsheet, FileText, Loader2, Search, X,
+  LogIn, LogOut, Clock,
+} from 'lucide-react'
 
+import { PageHeader } from '#/components/PageHeader'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import { Badge } from '#/components/ui/badge'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { NativeSelect } from '#/components/ui/native-select'
-import { Textarea } from '#/components/ui/textarea'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import { PageLoader } from '#/components/PageLoader'
+import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
+import { FilterBar } from '#/components/FilterBar'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn } from '#/lib/utils'
-import { useAllOrders } from '#/lib/hooks/useOrders'
-import { useAuthStore } from '#/modules/auth'
-import api from '#/lib/api/http'
 import { routeGuard } from '#/lib/route-guard'
+import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
+import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import {
+  useGateMovements, gateDriver, gateQuantity, timeOnSite, officerName,
+  type GateMovement,
+} from '#/lib/hooks/useGateMovements'
+import {
+  exportGateReportExcel, exportGateReportPdf, GATE_COLUMNS, GATE_NUMERIC, gateRowValues,
+  type GateReportFilters,
+} from './-gate-report-export'
 
 export const Route = createFileRoute('/security-report/')({
   beforeLoad: () => routeGuard('/security-report'),
   component: SecurityReportPage,
 })
 
-const ALL = 'all'
+const ALL = ''
 const fmt = (n: unknown) => Number(n || 0).toLocaleString('en-NG')
 
-type ExitRow = {
-  id: number
-  date: string
-  truckNumber: string
-  orderRef: string
-  quantity: number
-  exitedAt: string
-  gantry: string
-  loader: string
-}
+/** 12-hour throughout, so a shift reads it the way it speaks it. */
+const clock = (iso: string | null) => (iso ? format(new Date(iso), 'h:mm a') : null)
 
+type FilterOption = { id?: string | number; _id?: string; name?: string; pfiNumber?: string; locationId?: string | number | null }
+const idOf = (x: FilterOption) => String(x?.id ?? x?._id ?? '')
+
+/**
+ * The gate register.
+ *
+ * Every truck security handled — in, out, by whom, and everything recorded
+ * about the load. It shows today on arrival: there is no "Run report" button
+ * because there is no longer anything to wait for. The page used to fetch
+ * every order in the book, guess which might hold a load in range, then issue
+ * one request per candidate; a single endpoint does it now.
+ *
+ * Anchored on entry, not exit. A truck that came in and has not left is the
+ * one an officer most needs to see, and keying the report on exit hid them
+ * completely.
+ */
 function SecurityReportPage() {
-  const user = useAuthStore((s) => s.user)
-  const today = format(new Date(), 'yyyy-MM-dd')
-
-  const [from, setFrom] = useState(today)
-  const [to, setTo] = useState(today)
-  const [pfi, setPfi] = useState(ALL)
-  const [location, setLocation] = useState(ALL)
-  const [rows, setRows] = useState<ExitRow[] | null>(null)
-  const [loadingRows, setLoadingRows] = useState(false)
+  const [search, setSearch] = useState('')
+  const [datePreset, setDatePreset] = useState<DatePreset>('today')
+  const [customDate, setCustomDate] = useState('')
+  const [locationId, setLocationId] = useState(ALL)
+  const [pfiId, setPfiId] = useState(ALL)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
-  const { data, isLoading } = useAllOrders()
-  const orders: any[] = data?.orders || []
+  const range = useMemo(
+    () => resolveRange(datePreset, { from: customDate ? new Date(customDate) : undefined }),
+    [datePreset, customDate],
+  )
+  const dateFrom = range ? range.from.toISOString() : undefined
+  const dateTo = range ? range.to.toISOString() : undefined
+  const periodLabel = datePreset === 'custom'
+    ? (customDate ? format(new Date(customDate), 'd MMM yyyy') : 'Custom date')
+    : (DATE_PRESETS.find((p) => p.value === datePreset)?.label ?? 'All Time')
 
-  const options = useMemo(() => {
-    const uniq = (v: (string | null | undefined)[]) =>
-      [...new Set(v.filter((x): x is string => Boolean(x)))].sort()
-    return {
-      pfis: uniq(orders.map((o) => o.pfiNumber)),
-      locations: uniq(orders.map((o) => o.depotName || o.state)),
-    }
-  }, [orders])
+  const { data, isLoading, isError, error, refetch, isFetching } = useGateMovements({
+    dateFrom,
+    dateTo,
+    depotId: locationId || undefined,
+    pfiId: pfiId || undefined,
+    search: search || undefined,
+  })
 
-  /**
-   * One row per truck exit.
-   *
-   * Loads are fetched per order rather than from a reporting endpoint — this
-   * backend has none. That is fine at this volume and the obvious thing to
-   * move server-side first.
-   */
-  const build = async () => {
-    setLoadingRows(true)
-    try {
-      const range = { start: startOfDay(new Date(from)), end: endOfDay(new Date(to)) }
+  const { data: depots = [] } = useDepotsForFilter()
+  const { data: pfiData } = usePfiList({ limit: 500 })
+  const pfis: PfiWithFinancials[] = useMemo(() => pfiData?.pfis || [], [pfiData])
 
-      // Narrow by date before fetching loads. Without this the report would
-      // issue one request per loaded order in the whole book; the exit can
-      // only fall in range if the order itself was touched by then.
-      const candidates = orders.filter((o) => {
-        if (!['Loading', 'Completed'].includes(String(o.status))) return false
-        if (pfi !== ALL && o.pfiNumber !== pfi) return false
-        if (location !== ALL && (o.depotName || o.state) !== location) return false
-        const touched = o.updatedAt || o.loadingStartedAt || o.createdAt
-        if (touched && new Date(touched) < range.start) return false
-        if (o.loadingStartedAt && new Date(o.loadingStartedAt) > range.end) return false
-        return true
-      })
+  const pfiOptions = useMemo(() => {
+    if (!locationId) return pfis
+    return pfis.filter((p) => String(p.locationId ?? '') === String(locationId))
+  }, [pfis, locationId])
 
-      const out: ExitRow[] = []
+  const trucks = useMemo(() => data?.trucks || [], [data])
+  const totals = data?.totals
+  const hasFilters = !!(search || locationId || pfiId || datePreset !== 'today')
 
-      const batches = await Promise.all(
-        candidates.map((o) =>
-          api.get(`/orders/${o.id}/trucks`)
-            .then((r) => ({ order: o, loads: r.data.data.trucks || [] }))
-            .catch(() => ({ order: o, loads: [] })),
-        ),
-      )
+  const selectedDepot = useMemo(() => depots.find((d) => idOf(d) === locationId), [depots, locationId])
+  const selectedPfi = useMemo(() => pfis.find((p) => idOf(p) === pfiId), [pfis, pfiId])
 
-      for (const { order, loads } of batches) {
-        for (const l of loads) {
-          if (!l.securityExitedAt) continue
-          const when = new Date(l.securityExitedAt)
-          if (!isWithinInterval(when, range)) continue
-          out.push({
-            id: l.id,
-            date: format(when, 'd MMM yyyy'),
-            // Falls back to the truck index when no plate was recorded.
-            truckNumber: l.truckNumber || `Truck ${l.truckIndex}`,
-            orderRef: order.orderNumber,
-            quantity: Number(l.quantity || 0),
-            exitedAt: format(when, 'HH:mm'),
-            gantry: l.gantry || '—',
-            loader: l.loaderName || '—',
-          })
-        }
-      }
-
-      out.sort((a, b) => a.orderRef.localeCompare(b.orderRef))
-      setRows(out)
-    } finally {
-      setLoadingRows(false)
-    }
+  const exportFilters: GateReportFilters = {
+    periodLabel,
+    dateFrom: range ? format(range.from, 'yyyy-MM-dd') : '',
+    dateTo: range ? format(range.to, 'yyyy-MM-dd') : '',
+    locationName: selectedDepot?.name || 'All locations',
+    pfiNumber: selectedPfi?.pfiNumber || 'All PFIs',
+    search,
   }
 
-  // Period figures beside the running total, so both are visible at once.
-  const totals = useMemo(() => {
-    const period = rows ?? []
-    return {
-      trucksDay: period.length,
-      qtyDay: period.reduce((s, r) => s + r.quantity, 0),
-    }
-  }, [rows])
-
-  const cumulative = useMemo(() => {
-    const done = orders.filter((o) => ['Loading', 'Completed'].includes(String(o.status)))
-    return {
-      trucks: done.length,
-      qty: done.reduce((s, o) => s + Number(o.quantity || 0), 0),
-    }
-  }, [orders])
-
-  const exportExcel = async () => {
-    if (!rows?.length) return
-    setExporting('excel')
-    try {
-      const ExcelJS = (await import('exceljs')).default
-      const wb = new ExcelJS.Workbook()
-      const ws = wb.addWorksheet('Security exits')
-      ws.columns = [
-        { header: 'S/N', key: 'sn', width: 6 },
-        { header: 'Date', key: 'date', width: 16 },
-        { header: 'Truck No', key: 'truck', width: 18 },
-        { header: 'Order Ref', key: 'ref', width: 20 },
-        { header: 'Quantity', key: 'qty', width: 14 },
-        { header: 'Time of Exit', key: 'time', width: 14 },
-        { header: 'Gantry', key: 'gantry', width: 10 },
-        { header: 'Loader', key: 'loader', width: 22 },
-      ]
-      ws.getRow(1).font = { bold: true }
-      rows.forEach((r, i) =>
-        ws.addRow({
-          sn: i + 1, date: r.date, truck: r.truckNumber, ref: r.orderRef,
-          qty: r.quantity, time: r.exitedAt, gantry: r.gantry, loader: r.loader,
-        }),
-      )
-      const buf = await wb.xlsx.writeBuffer()
-      download(new Blob([buf], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      }), `security-exits_${from}_${to}.xlsx`)
-    } finally {
-      setExporting(null)
-    }
+  const clearFilters = () => {
+    setSearch(''); setLocationId(ALL); setPfiId(ALL); setDatePreset('today'); setCustomDate('')
   }
 
-  const exportPdf = async () => {
-    if (!rows?.length) return
-    setExporting('pdf')
+  const runExport = async (kind: 'excel' | 'pdf') => {
+    if (!trucks.length || !totals) return
+    setExporting(kind)
     try {
-      const { jsPDF } = await import('jspdf')
-      const autoTable = (await import('jspdf-autotable')).default
-      const doc = new jsPDF()
-      doc.setFontSize(14)
-      doc.text('Soroman — Security Exits', 14, 16)
-      doc.setFontSize(9)
-      doc.text(`${from} to ${to} · ${rows.length} trucks · ${fmt(totals.qtyDay)} litres`, 14, 22)
-      autoTable(doc, {
-        startY: 28,
-        head: [['S/N', 'Date', 'Truck No', 'Order Ref', 'Quantity', 'Time of Exit', 'Gantry', 'Loader']],
-        body: rows.map((r, i) => [
-          i + 1, r.date, r.truckNumber, r.orderRef, fmt(r.quantity), r.exitedAt, r.gantry, r.loader,
-        ]),
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [0, 122, 85], textColor: 255 },
-      })
-      doc.save(`security-exits_${from}_${to}.pdf`)
+      if (kind === 'excel') await exportGateReportExcel(trucks, totals, exportFilters)
+      else await exportGateReportPdf(trucks, totals, exportFilters)
     } finally {
       setExporting(null)
     }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       <PageHeader
-      eyebrow="Security"
-      title="Security report"
-      description="List of trucks cleared by security, with a summary for the selected period."
+        eyebrow="Security"
+        title="Gate register"
+        description="Every truck security handled — when it came in, when it left, and who cleared it."
+        actions={
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => runExport('excel')} disabled={!trucks.length || exporting !== null}>
+              {exporting === 'excel' ? <Loader2 className="animate-spin" /> : <FileSpreadsheet data-icon="inline-start" />}
+              Excel
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runExport('pdf')} disabled={!trucks.length || exporting !== null}>
+              {exporting === 'pdf' ? <Loader2 className="animate-spin" /> : <FileText data-icon="inline-start" />}
+              PDF
+            </Button>
+          </div>
+        }
       />
 
-      <StatCardGrid count={4}>
-                <StatCard icon={<Truck />} label="Total trucks for the day" value={fmt(totals.trucksDay)} />
-                <StatCard icon={<Truck />} label="Cumulative trucks out" value={fmt(cumulative.trucks)} />
-                <StatCard icon={<Droplets />} label="Total quantity for the day" value={fmt(totals.qtyDay)} />
-                <StatCard icon={<Droplets />} label="Cumulative quantity" value={fmt(cumulative.qty)} />
-                </StatCardGrid>
-                <section className={PANEL}>
-                <div className={PANEL_RAIL}>
-                <span className={MICRO}>Filters</span>
-                </div>
-                <div className={cn(PANEL_BODY, 'space-y-4')}>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')} htmlFor="from">Date from</label>
-                <Input id="from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')} htmlFor="to">Date to</label>
-                <Input id="to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>PFI</label>
-                <NativeSelect value={pfi} onChange={(e) => setPfi(e.target.value)}>
-                <option value={ALL}>All PFIs</option>
-                {options.pfis.map((p) => <option key={p} value={p}>{p}</option>)}
-                </NativeSelect>
-                </div>
-                <div className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>Location</label>
-                <NativeSelect value={location} onChange={(e) => setLocation(e.target.value)}>
-                <option value={ALL}>All locations</option>
-                {options.locations.map((l) => <option key={l} value={l}>{l}</option>)}
-                </NativeSelect>
-                </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={build} disabled={isLoading || loadingRows}>
-                {loadingRows && <Loader2 className="animate-spin" />}
-                Run report
-                </Button>
-                <Button variant="outline" size="sm" onClick={exportExcel} disabled={!rows?.length || exporting !== null}>
-                {exporting === 'excel' ? <Loader2 className="animate-spin" /> : <FileSpreadsheet data-icon="inline-start" />}
-                Excel
-                </Button>
-                <Button variant="outline" size="sm" onClick={exportPdf} disabled={!rows?.length || exporting !== null}>
-                {exporting === 'pdf' ? <Loader2 className="animate-spin" /> : <FileText data-icon="inline-start" />}
-                PDF
-                </Button>
-                </div>
-                </div>
-                </section>
-                <section className={PANEL}>
-                <div className={PANEL_RAIL}>
-                <span className={MICRO}>
-                {rows ? `${fmt(rows.length)} truck${rows.length === 1 ? '' : 's'} cleared` : 'Trucks cleared'}
-                </span>
-                </div>
-                {isLoading ? (
-                <PageLoader message="Loading orders…" />
-                ) : !rows ? (
-                <PageEmpty title="Run the report" description="Choose a period and press Run report." />
-                ) : rows.length === 0 ? (
-                <PageEmpty title="No trucks cleared in that period" description="Widen the dates or clear a filter." />
-                ) : (
-                <div className="px-2 pb-2">
-                <Table>
-                <TableHeader>
+      {!isLoading && !isError && totals && (
+        <StatCardGrid count={4}>
+          <StatCard
+            icon={<LogIn />} label="Trucks entered" value={fmt(totals.entered)}
+            description={periodLabel}
+          />
+          <StatCard icon={<LogOut />} label="Trucks exited" value={fmt(totals.exited)} />
+          {/* The only figure on this page that is about right now rather than
+              about the period: what security still has inside. */}
+          <StatCard
+            tone={totals.onSite > 0 ? 'amber' : 'green'}
+            icon={<Truck />} label="Still on site" value={fmt(totals.onSite)}
+            description={totals.onSite > 0 ? 'Entered, not yet gated out' : 'Everything cleared'}
+          />
+          <StatCard
+            icon={<Droplets />} label="Litres exited" value={fmt(totals.quantityExited)}
+            description={`${fmt(totals.quantityEntered)} entered`}
+          />
+        </StatCardGrid>
+      )}
+
+      <FilterBar>
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search truck number, driver, phone, loader, order or customer…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <NativeSelect
+          className="w-44"
+          value={locationId}
+          onChange={(e) => { setLocationId(e.target.value); setPfiId(ALL) }}
+        >
+          <option value={ALL}>All locations</option>
+          {depots.map((d) => <option key={idOf(d)} value={idOf(d)}>{d.name}</option>)}
+        </NativeSelect>
+        <NativeSelect
+          className="w-48"
+          value={pfiId}
+          onChange={(e) => {
+            const next = e.target.value
+            setPfiId(next)
+            if (next) {
+              const chosen = pfis.find((p) => idOf(p) === next)
+              if (chosen?.locationId != null) setLocationId(String(chosen.locationId))
+            }
+          }}
+        >
+          <option value={ALL}>All PFIs</option>
+          {pfiOptions.map((p) => <option key={idOf(p)} value={idOf(p)}>{p.pfiNumber}</option>)}
+        </NativeSelect>
+        <div className="flex flex-wrap items-center gap-2">
+          {DATE_PRESETS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => { setDatePreset(p.value); setCustomDate('') }}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs transition-colors duration-250 ease-luxe outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+                datePreset === p.value
+                  ? 'border-accent/40 bg-accent/10 text-accent'
+                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <Input
+          type="date"
+          value={customDate}
+          aria-label="Custom date"
+          onChange={(e) => { setCustomDate(e.target.value); setDatePreset('custom') }}
+          className="w-40"
+        />
+        {hasFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <X data-icon="inline-start" />
+            Clear
+          </Button>
+        )}
+      </FilterBar>
+
+      <section className={PANEL}>
+        <div className={PANEL_RAIL}>
+          <span className={MICRO}>
+            {totals
+              ? `${fmt(totals.entered)} truck${totals.entered === 1 ? '' : 's'} · ${periodLabel}`
+              : 'Gate register'}
+          </span>
+          {isFetching && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+        </div>
+        {isLoading ? (
+          <PageLoader message="Loading the gate register…" />
+        ) : isError ? (
+          <PageError message={(error as Error)?.message || 'Failed to load'} onRetry={() => refetch()} />
+        ) : trucks.length === 0 ? (
+          <PageEmpty
+            icon={<Truck />}
+            title={hasFilters ? 'No trucks match those filters' : 'No trucks through the gate yet'}
+            description={
+              hasFilters
+                ? 'Try widening the date range or clearing a filter.'
+                : 'Trucks appear here the moment security gates them in.'
+            }
+          />
+        ) : (
+          <div className={cn(PANEL_BODY, 'overflow-x-auto p-0')}>
+            <Table>
+              <TableHeader>
                 <TableRow>
-                <TableHead className="w-12">S/N</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Truck No</TableHead>
-                <TableHead>Order Ref</TableHead>
-                <TableHead className="text-right">Quantity</TableHead>
-                <TableHead>Time of Exit</TableHead>
-                <TableHead>Gantry</TableHead>
-                <TableHead>Loader</TableHead>
+                  {GATE_COLUMNS.map((c) => (
+                    <TableHead
+                      key={c.key}
+                      className={cn(
+                        c.key === 'sn' && 'w-10',
+                        GATE_NUMERIC.has(c.key) && 'text-right',
+                        'whitespace-nowrap',
+                      )}
+                    >
+                      {c.header}
+                    </TableHead>
+                  ))}
                 </TableRow>
-                </TableHeader>
-                <TableBody>
-                {rows.map((r, i) => (
-                <TableRow key={r.id}>
-                <TableCell className="text-muted-foreground">{i + 1}</TableCell>
-                <TableCell>{r.date}</TableCell>
-                <TableCell className="font-mono">{r.truckNumber}</TableCell>
-                <TableCell className="font-normal text-accent">{r.orderRef}</TableCell>
-                <TableCell className="text-right">{fmt(r.quantity)}</TableCell>
-                <TableCell>{r.exitedAt}</TableCell>
-                <TableCell>{r.gantry}</TableCell>
-                <TableCell>{r.loader}</TableCell>
-                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {trucks.map((t, i) => (
+                  <GateRow key={t.id} truck={t} index={i} />
                 ))}
-                </TableBody>
-                </Table>
-                </div>
-                )}
-                </section>
-                <DailyGateReport
-                locations={options.locations}
-                pfis={options.pfis}
-                staffName={user ? `${user.firstName} ${user.surname}` : ''}
-                outstanding={0}
-                />
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
+
+      {/* The hand-filled Daily Gate Report is commented out — it lives under
+          My Report now, and having two places to produce the same document
+          meant two versions of it going out. The component is gone rather
+          than parked here: `git log -- src/routes/security-report` has it if
+          it is ever wanted back on this page.
+      <DailyGateReport … />
+      */}
     </div>
   )
 }
 
 /**
- * The Daily Gate Report.
+ * One truck's row.
  *
- * Filled in by hand rather than derived — the officer's own count, signed off
- * at the end of a shift. Nothing here is written back to the system.
+ * The values come from gateRowValues — the same function both exports use —
+ * so the screen and the sheet cannot say different things. Only the handful
+ * of cells that carry extra meaning on screen are rendered specially.
  */
-function DailyGateReport({
-  locations, pfis, staffName,
-}: {
-  locations: string[]
-  pfis: string[]
-  staffName: string
-  outstanding: number
-}) {
-  const today = format(new Date(), 'yyyy-MM-dd')
-  const [form, setForm] = useState({
-    location: '', pfi: '', date: today,
-    carriedOver: '', exitedToday: '', leftOver: '',
-    staff: staffName, staffDate: today, remarks: '',
-  })
-  const [busy, setBusy] = useState(false)
-  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+function GateRow({ truck, index }: { truck: GateMovement; index: number }) {
+  const v = gateRowValues(truck, index) as Record<string, string | number>
+  const driver = gateDriver(truck)
+  const onSite = !truck.exitedAt
 
-  const generate = async () => {
-    setBusy(true)
-    try {
-      const { jsPDF } = await import('jspdf')
-      const doc = new jsPDF({ format: 'a4' })
-      doc.setFontSize(15)
-      doc.text('Soroman Energy — Daily Gate Report', 20, 22)
-      doc.setFontSize(10)
-      let y = 36
-      const line = (label: string, value: string) => {
-        doc.setTextColor(120)
-        doc.text(label, 20, y)
-        doc.setTextColor(0)
-        doc.text(value || '—', 85, y)
-        y += 9
-      }
-      line('Location', form.location)
-      line('PFI', form.pfi)
-      line('Date', form.date)
-      y += 3
-      line('Trucks carried over from yesterday', form.carriedOver)
-      line('Trucks exited today', form.exitedToday)
-      line('Trucks left over today', form.leftOver)
-      y += 3
-      line('Officer', form.staff)
-      line('Date', form.staffDate)
-      y += 5
-      doc.setTextColor(120)
-      doc.text('Remarks', 20, y); y += 7
-      doc.setTextColor(0)
-      doc.text(doc.splitTextToSize(form.remarks || '—', 170), 20, y)
-      doc.save(`daily-gate-report_${form.date}.pdf`)
-    } finally {
-      setBusy(false)
-    }
+  const cells: Record<string, React.ReactNode> = {
+    truck: <span className="font-mono whitespace-nowrap">{v.truck}</span>,
+    driver: (
+      <span className="flex items-center gap-1.5 whitespace-nowrap">
+        {driver.name || '—'}
+        {/* The allocated driver and the one who turned up are both recorded.
+            Where they differ that is worth seeing, not quietly resolving. */}
+        {driver.swapped && (
+          <Badge className="bg-warning/15 text-warning border-warning/30 font-normal" title={`Ticketed to ${truck.driverName}`}>
+            swapped
+          </Badge>
+        )}
+      </span>
+    ),
+    qty: <span className="whitespace-nowrap font-medium">{fmt(gateQuantity(truck))}</span>,
+    ref: <span className="font-mono text-xs whitespace-nowrap text-accent">{v.ref}</span>,
+    timeIn: <span className="whitespace-nowrap">{clock(truck.enteredAt)}</span>,
+    timeOut: onSite
+      ? <span className="text-muted-foreground">—</span>
+      : <span className="whitespace-nowrap">{clock(truck.exitedAt)}</span>,
+    enteredBy: (
+      <span className="whitespace-nowrap">{officerName(truck.enteredByFirstName, truck.enteredBySurname) || '—'}</span>
+    ),
+    exitedBy: (
+      <span className="whitespace-nowrap">{officerName(truck.exitedByFirstName, truck.exitedBySurname) || '—'}</span>
+    ),
+    onSite: onSite
+      ? <span className="flex items-center gap-1.5 whitespace-nowrap text-warning"><Clock className="size-3" />On site</span>
+      : <span className="whitespace-nowrap text-muted-foreground">{timeOnSite(truck)}</span>,
+    status: onSite
+      ? <Badge className="bg-warning/15 text-warning border-warning/30 font-normal">On site</Badge>
+      : <Badge className="bg-success/15 text-success border-success/30 font-normal">Cleared</Badge>,
   }
 
   return (
-    <section className={PANEL}>
-      <div className={PANEL_RAIL}>
-        <span className={MICRO}>Daily gate report</span>
-        <span className="text-xs text-muted-foreground">Filled in by hand</span>
-      </div>
-      <div className={cn(PANEL_BODY, 'space-y-4')}>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Location</label>
-            <NativeSelect value={form.location} onChange={(e) => set('location', e.target.value)}>
-              <option value="">Choose…</option>
-              {locations.map((l) => <option key={l} value={l}>{l}</option>)}
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>PFI</label>
-            <NativeSelect value={form.pfi} onChange={(e) => set('pfi', e.target.value)}>
-              <option value="">Choose…</option>
-              {pfis.map((p) => <option key={p} value={p}>{p}</option>)}
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Date</label>
-            <Input type="date" value={form.date} onChange={(e) => set('date', e.target.value)} />
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          {([
-            ['carriedOver', 'Carried over from yesterday'],
-            ['exitedToday', 'Trucks exited today'],
-            ['leftOver', 'Trucks left over today'],
-          ] as const).map(([key, label]) => (
-            <div key={key} className="space-y-1.5">
-              <label className={cn(MICRO, 'block text-muted-foreground')}>{label}</label>
-              <Input
-                type="number" inputMode="numeric"
-                value={form[key]} onChange={(e) => set(key, e.target.value)}
-              />
-            </div>
-          ))}
-        </div>
-
-        {/* These are the officer's own counts. The system knows how many trucks
-            entered and have not exited, but the two are never reconciled — a
-            disagreement is visible to a reader, not caught by the app. */}
-        <p className="text-xs text-muted-foreground/70">
-          These counts are typed by hand and are not reconciled against the truck
-          records above.
-        </p>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Officer</label>
-            <Input value={form.staff} onChange={(e) => set('staff', e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <label className={cn(MICRO, 'block text-muted-foreground')}>Date</label>
-            <Input type="date" value={form.staffDate} onChange={(e) => set('staffDate', e.target.value)} />
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className={cn(MICRO, 'block text-muted-foreground')}>Remarks</label>
-          <Textarea value={form.remarks} onChange={(e) => set('remarks', e.target.value)} rows={3} />
-        </div>
-
-        <Button onClick={generate} disabled={busy}>
-          {busy ? <Loader2 className="animate-spin" /> : <ClipboardList data-icon="inline-start" />}
-          Generate gate report
-        </Button>
-      </div>
-    </section>
+    <TableRow className={cn(onSite && 'bg-warning/5 hover:bg-warning/10')}>
+      {GATE_COLUMNS.map((c) => (
+        <TableCell key={c.key} className={cn(GATE_NUMERIC.has(c.key) && 'text-right')}>
+          {cells[c.key] ?? <span className="whitespace-nowrap">{v[c.key] ?? '—'}</span>}
+        </TableCell>
+      ))}
+    </TableRow>
   )
-}
-
-function download(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }
