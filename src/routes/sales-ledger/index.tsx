@@ -255,7 +255,6 @@ function SalesLedgerDashboard() {
     )
   }
 
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
 
   // ── Totals ─────────────────────────────────────────────────────────
   const totals = useMemo(() => {
@@ -532,27 +531,19 @@ function SalesLedgerDashboard() {
             </div>
           )}
 
-          {/* Advanced Filters Toggle */}
+          {/* The filters are the page's controls, not a feature of it. Behind
+              a toggle they were a thing to remember existed, and the toggle
+              itself carried an "Active" badge to say something was hidden —
+              which is the shape of a problem, not a solution. */}
           <div className="border-t border-border pt-3">
-            <button
-              type="button"
-              onClick={() => setShowAdvancedFilters(prev => !prev)}
-              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors duration-250 ease-luxe"
-            >
+            <span className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
               <SlidersHorizontal className="size-3.5" />
-              Advanced Filters
-              {hasActiveFilters && (
-                <Badge className="ml-1 h-5 px-1.5 text-xs bg-primary text-primary-foreground">
-                  Active
-                </Badge>
-              )}
-              {showAdvancedFilters ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-            </button>
+              Filters
+            </span>
           </div>
 
-          {/* Collapsible Advanced Filters */}
-          {showAdvancedFilters && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          {(
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
                   <Truck className="size-3 text-muted-foreground" /> Truck
@@ -743,73 +734,86 @@ function SalesLedgerDashboard() {
       {/* ═══ SUMMARY CARDS ═══ */}
       <SummaryCards cards={summaryCards} />
 
-      {/* ═══ PFI SUMMARY TABLE ═══ */}
-      {activeView === 'ledger' && totals.codeSummaries.length > 0 && (
+      {/* ═══ PFI SUMMARY TABLE — commented out ═══
+
+          A per-code breakdown of qty, expected, paid and balance. Taken out
+          on request: the ledger below already answers the same questions per
+          truck, and the summary was showing every allocation code the data
+          has ever carried — including closed ones like PFI-14B and PFI-19B
+          from April and May — so the page opened on a wall of settled history
+          before reaching the rows anyone was looking for.
+
+          Kept rather than deleted: totals.codeSummaries is still computed and
+          the PFI Code filter still uses those codes, so this only needs
+          uncommenting to come back.
+
+        {activeView === 'ledger' && totals.codeSummaries.length > 0 && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="p-4 border-b border-border">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5 uppercase">
-                  <FileText className="size-4 text-muted-foreground" /> PFI Summary
-                </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Payment status breakdown by PFI allocation code.</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
-                <span className="inline-flex items-center rounded-md bg-accent/10 px-2.5 py-1 text-accent ring-1 ring-inset ring-accent/20 gap-1.5">
-                  <span className="size-1.5 rounded-full bg-accent"></span> Sold: <strong>{totals.soldCount}</strong>
-                </span>
-                <span className="inline-flex items-center rounded-md bg-warning/10 px-2.5 py-1 text-warning ring-1 ring-inset ring-warning/20 gap-1.5">
-                  <span className="size-1.5 rounded-full bg-warning"></span> With Balance: <strong>{totals.withBalanceCount}</strong>
-                </span>
-                <span className="inline-flex items-center rounded-md bg-muted px-2.5 py-1 text-muted-foreground ring-1 ring-inset ring-border gap-1.5">
-                  <span className="size-1.5 rounded-full bg-muted-foreground/60"></span> Not Sold: <strong>{totals.notSoldCount}</strong>
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <Table className="text-xs">
-              <TableHeader>
-                <TableRow className="bg-muted/60 hover:bg-muted/60">
-                  <TableHead className="font-semibold text-muted-foreground w-[160px]">PFI Code</TableHead>
-                  <TableHead className="font-semibold text-muted-foreground w-[140px]">Qty Loaded</TableHead>
-                  <TableHead className="font-semibold text-muted-foreground w-[100px] text-center">Fully Paid</TableHead>
-                  <TableHead className="font-semibold text-muted-foreground w-[110px] text-center">With Balance</TableHead>
-                  <TableHead className="font-semibold text-muted-foreground w-[100px] text-center">Not Sold</TableHead>
-                  <TableHead className="font-semibold text-muted-foreground text-right w-[150px]">Expected Revenue</TableHead>
-                  <TableHead className="font-semibold text-accent text-right w-[140px]">Total Paid</TableHead>
-                  <TableHead className="font-semibold text-destructive text-right w-[150px]">Balance</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {totals.codeSummaries.map(s => {
-                  const hasOutstanding = s.balance > 0; const isOverpaid = s.balance < 0
-                  return (
-                    <TableRow key={s.code || 'unassigned'} className="hover:bg-muted/50 bg-card">
-                      <TableCell className="font-semibold text-foreground uppercase whitespace-nowrap">{s.code || 'UNASSIGNED'}</TableCell>
-                      <TableCell className="font-semibold text-foreground whitespace-nowrap">{s.qty > 0 ? `${s.qty.toLocaleString()} Ltrs` : '—'}</TableCell>
-                      <TableCell className="text-center">
-                        <span className="inline-flex items-center justify-center rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent ring-1 ring-inset ring-accent/20">{s.soldCount}</span>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <span className="inline-flex items-center justify-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-semibold text-warning ring-1 ring-inset ring-warning/20">{s.withBalanceCount}</span>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <span className="inline-flex items-center justify-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold text-muted-foreground ring-1 ring-inset ring-border">{s.notSoldCount}</span>
-                      </TableCell>
-                      <TableCell className="text-right font-semibold text-foreground whitespace-nowrap tabular-nums">{s.expected > 0 ? fmt(s.expected) : '—'}</TableCell>
-                      <TableCell className="text-right font-semibold text-accent whitespace-nowrap tabular-nums">{s.paid > 0 ? fmt(s.paid) : '—'}</TableCell>
-                      <TableCell className={`text-right font-semibold whitespace-nowrap ${hasOutstanding ? 'text-destructive' : isOverpaid ? 'text-muted-foreground' : 'text-accent'}`}>
-                        {s.balance === 0 ? '₦0' : isOverpaid ? `+${fmt(Math.abs(s.balance))}` : fmt(s.balance)}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
+        <div className="p-4 border-b border-border">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5 uppercase">
+        <FileText className="size-4 text-muted-foreground" /> PFI Summary
+        </h3>
+        <p className="text-xs text-muted-foreground mt-0.5">Payment status breakdown by PFI allocation code.</p>
         </div>
-      )}
+        <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
+        <span className="inline-flex items-center rounded-md bg-accent/10 px-2.5 py-1 text-accent ring-1 ring-inset ring-accent/20 gap-1.5">
+        <span className="size-1.5 rounded-full bg-accent"></span> Sold: <strong>{totals.soldCount}</strong>
+        </span>
+        <span className="inline-flex items-center rounded-md bg-warning/10 px-2.5 py-1 text-warning ring-1 ring-inset ring-warning/20 gap-1.5">
+        <span className="size-1.5 rounded-full bg-warning"></span> With Balance: <strong>{totals.withBalanceCount}</strong>
+        </span>
+        <span className="inline-flex items-center rounded-md bg-muted px-2.5 py-1 text-muted-foreground ring-1 ring-inset ring-border gap-1.5">
+        <span className="size-1.5 rounded-full bg-muted-foreground/60"></span> Not Sold: <strong>{totals.notSoldCount}</strong>
+        </span>
+        </div>
+        </div>
+        </div>
+        <div className="overflow-x-auto">
+        <Table className="text-xs">
+        <TableHeader>
+        <TableRow className="bg-muted/60 hover:bg-muted/60">
+        <TableHead className="font-semibold text-muted-foreground w-[160px]">PFI Code</TableHead>
+        <TableHead className="font-semibold text-muted-foreground w-[140px]">Qty Loaded</TableHead>
+        <TableHead className="font-semibold text-muted-foreground w-[100px] text-center">Fully Paid</TableHead>
+        <TableHead className="font-semibold text-muted-foreground w-[110px] text-center">With Balance</TableHead>
+        <TableHead className="font-semibold text-muted-foreground w-[100px] text-center">Not Sold</TableHead>
+        <TableHead className="font-semibold text-muted-foreground text-right w-[150px]">Expected Revenue</TableHead>
+        <TableHead className="font-semibold text-accent text-right w-[140px]">Total Paid</TableHead>
+        <TableHead className="font-semibold text-destructive text-right w-[150px]">Balance</TableHead>
+        </TableRow>
+        </TableHeader>
+        <TableBody>
+        {totals.codeSummaries.map(s => {
+        const hasOutstanding = s.balance > 0; const isOverpaid = s.balance < 0
+        return (
+        <TableRow key={s.code || 'unassigned'} className="hover:bg-muted/50 bg-card">
+        <TableCell className="font-semibold text-foreground uppercase whitespace-nowrap">{s.code || 'UNASSIGNED'}</TableCell>
+        <TableCell className="font-semibold text-foreground whitespace-nowrap">{s.qty > 0 ? `${s.qty.toLocaleString()} Ltrs` : '—'}</TableCell>
+        <TableCell className="text-center">
+        <span className="inline-flex items-center justify-center rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent ring-1 ring-inset ring-accent/20">{s.soldCount}</span>
+        </TableCell>
+        <TableCell className="text-center">
+        <span className="inline-flex items-center justify-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-semibold text-warning ring-1 ring-inset ring-warning/20">{s.withBalanceCount}</span>
+        </TableCell>
+        <TableCell className="text-center">
+        <span className="inline-flex items-center justify-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold text-muted-foreground ring-1 ring-inset ring-border">{s.notSoldCount}</span>
+        </TableCell>
+        <TableCell className="text-right font-semibold text-foreground whitespace-nowrap tabular-nums">{s.expected > 0 ? fmt(s.expected) : '—'}</TableCell>
+        <TableCell className="text-right font-semibold text-accent whitespace-nowrap tabular-nums">{s.paid > 0 ? fmt(s.paid) : '—'}</TableCell>
+        <TableCell className={`text-right font-semibold whitespace-nowrap ${hasOutstanding ? 'text-destructive' : isOverpaid ? 'text-muted-foreground' : 'text-accent'}`}>
+        {s.balance === 0 ? '₦0' : isOverpaid ? `+${fmt(Math.abs(s.balance))}` : fmt(s.balance)}
+        </TableCell>
+        </TableRow>
+        )
+        })}
+        </TableBody>
+        </Table>
+        </div>
+        </div>
+        )}
+      */}
 
       {/* ═══ LEDGER TABLE ═══ */}
       {activeView === 'ledger' && (
@@ -1107,12 +1111,15 @@ function SalesLedgerDashboard() {
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Truck No.</TableHead>
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Customer</TableHead>
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Destination</TableHead>
-                      <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Volume (L)</TableHead>
-                      <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Rate</TableHead>
-                      <TableHead className="font-semibold text-muted-foreground text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Expected</TableHead>
-                      <TableHead className="font-semibold text-accent text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Amount Paid</TableHead>
+                      {/* Volume, Rate and Expected are gone. This is a list of
+                          payments, and those three belong to the load: a truck
+                          paid in four instalments printed its 33,000 L and its
+                          full expected value on all four lines, which reads as
+                          four loads and four invoices. The Ledger tab is where
+                          a load's own figures live. */}
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Payer</TableHead>
-                      <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Payment Method</TableHead>
+                      <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Paid Into</TableHead>
+                      <TableHead className="font-semibold text-accent text-right whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Amount Paid</TableHead>
                       <TableHead className="font-semibold text-muted-foreground whitespace-nowrap sticky top-0 bg-muted/90 backdrop-blur-sm">Entered By</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1145,13 +1152,27 @@ function SalesLedgerDashboard() {
                           </TableCell>
                           <TableCell className="font-normal text-foreground uppercase whitespace-nowrap text-xs">{customerName}</TableCell>
                           <TableCell className="text-muted-foreground uppercase whitespace-nowrap text-xs">{sale.location || '—'}</TableCell>
-                          <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{toNum(sale.quantity) > 0 ? fmtQty(toNum(sale.quantity)) : '—'}</TableCell>
-                          <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{toNum(sale.rate) > 0 ? fmt(toNum(sale.rate)) : '—'}</TableCell>
-                          <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{toNum(sale.salesValue) > 0 ? fmt(toNum(sale.salesValue)) : '—'}</TableCell>
-                          <TableCell className="text-right font-semibold text-accent whitespace-nowrap text-xs tabular-nums">{toNum(sale.paymentAmount) > 0 ? fmt(toNum(sale.paymentAmount)) : '—'}</TableCell>
-                          <TableCell className="text-muted-foreground whitespace-nowrap text-xs">{sale.payerName || '—'}</TableCell>
+                          <TableCell className="text-muted-foreground whitespace-nowrap text-xs uppercase">
+                            {sale.payerName || '—'}
+                            {sale.transferCounterparty && (
+                              <span className="ml-1.5 inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
+                                <ArrowLeftRight className="size-3" />
+                                transfer
+                              </span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                             {formatBankLabel(bankAccounts, sale.bank) || '—'}
+                          </TableCell>
+                          {/* Signed, because a transfer out is a real row on
+                              this list and showing it as a dash would hide
+                              money leaving. */}
+                          <TableCell className={`text-right font-semibold whitespace-nowrap text-xs tabular-nums ${toNum(sale.paymentAmount) < 0 ? 'text-blue-700 dark:text-blue-400' : 'text-accent'}`}>
+                            {toNum(sale.paymentAmount) === 0
+                              ? '—'
+                              : toNum(sale.paymentAmount) < 0
+                                ? `-${fmt(Math.abs(toNum(sale.paymentAmount)))}`
+                                : fmt(toNum(sale.paymentAmount))}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{sale.enteredBy || '—'}</TableCell>
                         </TableRow>
