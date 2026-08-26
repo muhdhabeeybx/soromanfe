@@ -24,12 +24,22 @@ function formatCurrency(v: number) {
 
 /**
  * Confirm payment on one specific pending order — the point this whole flow
- * exists for. Existing wallet balance applies first; any shortfall is closed
- * by matching a bank statement line (or several), tagged with this order's
- * id (see createDeposit's orderId) so the funding trail names this order
- * explicitly rather than leaving a later FIFO walk to land on it by
- * coincidence. Anything matched beyond what the order needs simply stays in
- * the customer's wallet.
+ * exists for.
+ *
+ * The statement match comes first and is what the order is recorded as being
+ * paid by: the lines picked here are tagged with this order's id (see
+ * createDeposit's orderId), and the server now allocates those exact deposits
+ * to this order, at their face value, before it will touch wallet balance for
+ * anything. That tag was already being written; it was simply never read
+ * back, so the funding trail was assembled afterwards by walking the wallet
+ * oldest-credit-first and an order confirmed against one ₦18m credit was
+ * written up as slices of three unrelated ones.
+ *
+ * Wallet balance is drawn on only for a shortfall, only for the amount asked
+ * for below, and the report shows what it drew on by name. Anything matched
+ * beyond what the order needs stays in the customer's wallet, and shows on
+ * the finance report as an overpayment against this order rather than being
+ * quietly trimmed to fit.
  *
  * Statement only, deliberately — no manual-amount fallback. A line's bank
  * reference is what makes it trustworthy; typing a figure by hand has none
@@ -298,7 +308,7 @@ export function ConfirmOrderPaymentDialog({
               {(newDeposit > 0 || walletApplied > 0) && stillShort <= 0 && (
                 <p className="text-xs leading-tight text-muted-foreground">
                   {excess > 0
-                    ? `Covers the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet.`
+                    ? `Covers the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet, under the reference it came in on, and shows on the finance report as an overpayment against this order.`
                     : 'Covers the order exactly.'}
                 </p>
               )}

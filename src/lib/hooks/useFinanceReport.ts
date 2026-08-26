@@ -6,11 +6,35 @@ import type { PaystackDetails } from '#/lib/types'
 
 export type { PaystackDetails }
 
+/**
+ * How money reached an order, as the allocation records it.
+ *
+ *   bank    a statement line matched to THIS order when it was confirmed —
+ *           recorded at the line's face value, so it reconciles against the
+ *           bank statement one line at a time
+ *   wallet  a draw from balance already in the wallet, carrying the reference
+ *           the money originally arrived under
+ *   legacy  written before any of this was recorded, by a walk over the
+ *           wallet oldest-credit-first. Nothing says why that credit and not
+ *           another, and the report says so rather than implying otherwise.
+ */
+export type FundingSource = 'bank' | 'wallet' | 'legacy'
+
 /** One credit deposit that contributed to an order's payment. */
 export interface OrderFunding {
   depositId: number
-  /** The slice of the deposit FIFO attributed to this order — not what landed. */
+  /**
+   * What was RECEIVED against this order.
+   *
+   * On a bank row this is the statement line at face value — deliberately not
+   * a slice of it. An 18,075,000 payment against a 10,224,500 order reads as
+   * 18,075,000 here and the surplus lands in the Differential column, which
+   * is what someone holding the statement is looking for.
+   */
   amount: string | number
+  /** What the order CONSUMED of it — capped at the order's own value. */
+  appliedAmount?: string | number | null
+  source?: FundingSource | null
   /** What the payment actually was, before any split across orders or surplus to wallet. */
   depositAmount?: string | number | null
   depositReference: string | null
@@ -235,35 +259,74 @@ export function fundingDepositor(f: OrderFunding): string {
  * from "no bank reference because nobody filled it in".
  */
 /**
+ * How this money reached the order.
+ *
+ * Rows written before the source was recorded carry none, and are read as
+ * 'legacy' — which is what they are: an oldest-credit-first guess with
+ * nothing behind it. Never silently promoted to 'bank'; an unverifiable
+ * attribution has to look unverifiable.
+ */
+export function fundingSource(f: OrderFunding): FundingSource {
+  return f.source === 'bank' || f.source === 'wallet' ? f.source : 'legacy'
+}
+
+/**
  * A remainder carried off another order's bank credit.
  *
  * One credit can settle one order and leave a tail that pays for the next. The
  * report prints a row per (order, credit) pair, so that tail appeared under
  * the second order carrying the SAME bank reference as the first — which reads
- * as one statement line being spent twice. It never was: the slices sum to the
- * credit exactly, on every one of the 23 cases in the book.
+ * as one statement line being spent twice.
  *
- * The money is real and the reference is real; what was missing was any way to
- * tell a fresh bank payment from a remainder. So the remainder is now labelled
- * for what it is — "TRF FROM KN11400" — and the bank reference appears as a
- * bank line exactly once, against the order that took the bulk of it.
- *
- * Nothing about the ledger changes. This is what the row is called.
+ * Legacy rows only, now. Where the source is recorded there is nothing to
+ * infer: a wallet draw says it is a wallet draw and names the reference its
+ * balance arrived under, which is both more specific than this and actually
+ * checkable. This survives for the rows that predate that, where largest-share
+ * remains the only clue available.
  */
 export function carriedFromOrder(
   f: OrderFunding,
   orderId: number,
 ): { ref: string; orderId: number } | null {
+  if (fundingSource(f) !== 'legacy') return null
   if (!f.sharedOrderCount || f.sharedOrderCount < 2) return null
   if (f.primaryOrderId == null || f.primaryOrderId === orderId) return null
   return { ref: f.primaryOrderRef || `#${f.primaryOrderId}`, orderId: f.primaryOrderId }
 }
 
+/**
+ * Money that reached this order from inside the business rather than from a
+ * bank payment made for it.
+ *
+ * A wallet draw is the recorded case: staff chose to put existing balance
+ * toward this order. It still names the reference that balance originally
+ * arrived under, so it is traceable — it is simply not a payment made against
+ * THIS order, and totalling it as one would double-count the credit it came
+ * from. Legacy rows fall back to reading their description, which for a
+ * customer-to-customer transfer is the only record there is.
+ */
 export function isInternalTransfer(f: OrderFunding): boolean {
+  if (fundingSource(f) === 'wallet') return true
+  if (fundingSource(f) === 'bank') return false
   if (f.statementDepositor || f.depositReference) return false
   return /wallet transfer from customer|overpayment received from order/i.test(
     f.depositDescription || '',
   )
+}
+
+/**
+ * What a wallet draw is drawing on — "Balance from 32923089257".
+ *
+ * The surplus of an overpayment stays in the wallet under the reference it
+ * arrived with, so when it is later put toward another order the report can
+ * name the bank payment it came out of instead of showing a bare dash, or
+ * worse, an unexplained figure that appears on no statement.
+ */
+export function walletOriginLabel(f: OrderFunding): string {
+  const ref = f.depositReference || ''
+  if (ref) return `Balance from ${ref}`
+  const from = internalSource(f)
+  return from ? `Balance — ${from}` : 'Balance from wallet'
 }
 
 function internalSource(f: OrderFunding): string {
@@ -363,32 +426,26 @@ export function shortDepositor(narration: string | null | undefined): string {
 }
 
 /**
- * What this payment put toward THIS order — the slice attributed to it, not
- * the deposit's own total.
+ * What was received against THIS order through this payment.
  *
- * This returned the whole deposit, on the reasoning that showing the slice
- * would hide money that genuinely arrived. That reasoning belongs to a
- * deposit-centric view; on an order's own line it is simply wrong, and it put
- * the column at odds with everything around it.
+ * On a bank row that is the statement line at face value. It is the whole
+ * point of the column: this report is audited by putting it beside a bank
+ * statement, and a figure that has been netted down to what the order happened
+ * to need appears on no statement anywhere. An 18,075,000 credit matched to a
+ * 10,224,500 order reads 18,075,000, and the 7,850,500 surplus shows up in
+ * Differential — where an auditor can see it and ask about it.
  *
- * FG11437 is the case that surfaced it. Sales value 666,600,000, paid in full,
- * Differential correctly showing nothing owed — and Amount Paid totalling
- * 716,600,000, because two of its twenty deposits were shared with other
- * orders and were being counted whole against this one:
- *
- *     deposit 4531   45,000 of 50,000,000 went here — 49,955,000 overstated
- *     deposit 4791    6,361,000 of 6,406,000       —      45,000 overstated
- *
- * The detail dialog was right all along: it reads `f.amount` directly and
- * reconciles to the order total exactly. Differential already used the slice
- * too (see orderAmountPaid), which is why one column said fully paid while
- * the one beside it said 50m more had been received.
- *
- * A slice belongs to exactly one order, so slices never double-count across
- * the report.
+ * On a wallet row it is what was drawn from balance, which is also what the
+ * order consumed. The two only ever differ on a bank row, and only when a
+ * payment overshot the order it was made for.
  */
 export function fundingAmount(f: OrderFunding): number {
   return Number(f.amount ?? 0)
+}
+
+/** What the order actually consumed of this payment — see appliedAmount. */
+export function fundingApplied(f: OrderFunding): number {
+  return Number(f.appliedAmount ?? f.amount ?? 0)
 }
 
 /** Sales value as the report computes it — rate × litres, not the stored total. */
@@ -397,18 +454,20 @@ export function orderSalesValue(o: FinanceReportOrder): number {
 }
 
 /**
- * What this order was actually paid — the money attributed to IT, which is
- * not the same thing as the deposits listed under it.
+ * What this order was paid — every payment recorded against it, at the figure
+ * the bank statement shows.
  *
- * fundingAmount (the Amount Paid column) deliberately shows each deposit in
- * full, because one payment can cover several orders and showing the slice
- * would hide money that genuinely arrived. That makes it the wrong basis for
- * a per-order differential: a ₦50m deposit covering five orders would show
- * every one of them ₦40m in surplus.
+ * This is the number the whole report is audited on, so it is the sum of the
+ * rows printed underneath the order and nothing else: `f.amount` for each,
+ * plus `unattributedAmount` for the part of an order's value that came from
+ * balance predating the allocation ledger and has no row of its own.
  *
- * So this sums `f.amount`, the slice FIFO attributed to this order, plus
- * `unattributedAmount` — the part of the balance that came from deposits
- * predating the allocation ledger.
+ * It no longer nets a bank credit down to the order's own value. That netting
+ * is why 18,075,000 from TETRIS ENERGY on order 11453 was being reported as
+ * 9,724,500 — a figure that appears nowhere in the bank, on a report whose
+ * only job is to agree with the bank. The surplus is not hidden by making the
+ * received figure smaller; it is shown, in Differential, as the overpayment
+ * it is.
  *
  * An order with no funding tracked at all has no per-deposit record to sum.
  * Its status is the only evidence available: Paid means the wallet hold
@@ -418,18 +477,23 @@ export function orderAmountPaid(o: FinanceReportOrder): number {
   if (!o.fundingTracked) {
     return o.paymentStatus === 'Paid' ? Number(o.totalAmount || 0) : 0
   }
-  const attributed = o.funding.reduce((sum, f) => sum + Number(f.amount || 0), 0)
-  return attributed + Number(o.unattributedAmount || 0)
+  const received = o.funding.reduce((sum, f) => sum + fundingAmount(f), 0)
+  return received + Number(o.unattributedAmount || 0)
 }
 
 /**
  * Sales value less what this order was paid.
  *
- * Positive is a shortfall — money still owed. Negative is an overpayment,
- * money received beyond the order's value. Normally zero on a paid order,
- * since an order is not marked Paid until its hold covers the total; it goes
- * nonzero when a total was corrected by hand after the fact, which is
- * precisely the case worth surfacing.
+ * Positive is a shortfall — money still owed. Negative is an overpayment:
+ * more arrived against this order than it was worth, and the surplus is
+ * sitting in the customer's wallet under the reference it came in on.
+ *
+ * That second case is now common and is meant to be. An order is not marked
+ * Paid until its hold covers the total, so this column used to read zero
+ * almost everywhere — because a payment larger than the order was quietly
+ * trimmed to fit before it ever reached the report. It isn't any more, so an
+ * overpayment shows here as a figure that can be checked against the
+ * statement, which is the only way the surplus is ever noticed.
  */
 export function orderDifferential(o: FinanceReportOrder): number {
   return orderSalesValue(o) - orderAmountPaid(o)

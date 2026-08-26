@@ -30,8 +30,8 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
-  paymentBreakdown, isInternalTransfer, carriedFromOrder,
-  walletStatementRows,
+  paymentBreakdown, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
+  fundingApplied, walletStatementRows,
   type FinanceReportOrder, type OrderFunding, type StatementRow,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
@@ -160,19 +160,35 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
   const paystack = isPaystackFunding(funding)
   const recorder = fundingRecorder(funding) || null
   const carried = carriedFromOrder(funding, orderId)
+  const source = fundingSource(funding)
+  const isWallet = source === 'wallet'
+  // What the order took of it, where that is less than what arrived. Only a
+  // bank payment larger than the order it was made for shows this, and it is
+  // the sentence that explains the Differential column to whoever is holding
+  // the statement.
+  const received = fundingAmount(funding)
+  const applied = fundingApplied(funding)
+  const surplus = received - applied
 
   return (
-    <div className="rounded-lg border border-warning/20 bg-warning/5 p-3">
+    <div className={cn(
+      'rounded-lg border p-3',
+      isWallet ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20' : 'border-warning/20 bg-warning/5',
+    )}>
       <div className="flex items-center justify-between gap-2 mb-2">
-        <Badge className={cn('font-normal', carried
+        <Badge className={cn('font-normal', (carried || isWallet)
           ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900'
           : 'bg-warning/15 text-warning border-warning/30')}>
-          {carried
-            ? `Transfer from ${carried.ref}`
-            : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
+          {isWallet
+            ? 'Drawn from wallet balance'
+            : carried
+              ? `Transfer from ${carried.ref}`
+              : source === 'bank'
+                ? 'Bank statement match'
+                : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
         </Badge>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">{naira(Number(funding.amount))}</span>
+          <span className="text-sm font-semibold">{naira(received)}</span>
           {/* Unmatch — commented out, not removed. The handler, its confirm
               dialog and the mutation behind it are all still wired up below;
               only the way in is closed.
@@ -210,7 +226,13 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
         )} */}
         {!paystack && (
           <>
-            {carried ? (
+            {isWallet ? (
+              <Row
+                label="Source"
+                value={`${walletOriginLabel(funding)}${fundingDepositor(funding) ? ` · originally paid in by ${fundingDepositor(funding)}` : ''}`}
+                icon={Wallet}
+              />
+            ) : carried ? (
               <Row
                 label="Source"
                 value={`Remainder of ${fundingReference(funding) || 'a bank credit'}, which settled ${carried.ref}`}
@@ -232,6 +254,17 @@ function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; o
         <Row label="Deposit reference" value={fundingReference(funding)} icon={Hash} />
         <Row label="Recorded by" value={recorder} icon={User} />
       </div>
+      {/* Where a payment came in larger than the order it was made for. The
+          money is not missing and it has not been rounded away — it is still
+          the customer's, still under this reference, and it is the figure the
+          Differential column is showing. */}
+      {surplus > 0.005 && (
+        <p className="mt-2 flex items-start gap-2 rounded-md bg-background/60 p-2 text-xs text-muted-foreground">
+          <Info className="mt-0.5 size-3.5 shrink-0" />
+          {naira(applied)} of this covered the order; {naira(surplus)} stayed in the customer's
+          wallet under this reference.
+        </p>
+      )}
     </div>
   )
 }
@@ -378,9 +411,14 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
                   />
                 ))}
                 {order.unattributedAmount > 0 && (
-                  <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground flex items-center gap-2">
-                    <Info className="size-4 shrink-0" />
-                    {naira(order.unattributedAmount)} of this payment came from wallet balance that predates detailed tracking.
+                  <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground flex items-start gap-2">
+                    <Info className="mt-0.5 size-4 shrink-0" />
+                    {/* The order was paid — its hold covered the total — but
+                        nothing on record says which money did it. Better said
+                        plainly than filled in with a bank reference belonging
+                        to some other order, which is what used to happen. */}
+                    {naira(order.unattributedAmount)} of this payment came from wallet balance with
+                    no recorded source — no statement line was matched to this order for it.
                   </p>
                 )}
               </>
@@ -993,8 +1031,15 @@ function FinanceReportPage() {
                         // off another order's bank credit. Both are money that
                         // did not arrive from a bank on this order, so both
                         // read blue and neither pretends to a bank reference.
+                        const source = fundingSource(f)
                         const carried = carriedFromOrder(f, o.id)
                         const internal = isInternalTransfer(f) || !!carried
+                        // A wallet draw keeps the payer and the bank
+                        // reference its balance arrived under — that is the
+                        // whole reason it is traceable — and says in the
+                        // reference column that it came out of balance rather
+                        // than landing in the bank on this order's account.
+                        const isWallet = source === 'wallet'
                         const fundingCells: Record<string, React.ReactNode> = {
                           depositDate: (
                             <span className="whitespace-nowrap text-muted-foreground">
@@ -1015,11 +1060,19 @@ function FinanceReportPage() {
                               // The bank reference is still on the row for
                               // anyone tracing it — it is simply no longer
                               // presented as this order's own bank line.
-                              title={carried ? `Remainder of ${fundingReference(f)}, which settled ${carried.ref}` : undefined}
+                              title={
+                                isWallet
+                                  ? `Drawn from wallet balance that arrived as ${fundingReference(f) || 'an untraced credit'}`
+                                  : carried
+                                    ? `Remainder of ${fundingReference(f)}, which settled ${carried.ref}`
+                                    : undefined
+                              }
                             >
-                              {carried
-                                ? `off ${fundingReference(f) || 'credit'}`
-                                : internal ? 'Internal transfer' : fundingReference(f) || '—'}
+                              {isWallet
+                                ? walletOriginLabel(f)
+                                : carried
+                                  ? `off ${fundingReference(f) || 'credit'}`
+                                  : internal ? 'Internal transfer' : fundingReference(f) || '—'}
                             </span>
                           ),
                           amount: (

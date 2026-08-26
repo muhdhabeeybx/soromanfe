@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import {
   fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  walletStatementRows, isInternalTransfer, carriedFromOrder,
+  walletStatementRows, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
   type FinanceReportOrder, type OrderFunding, type StatementRow, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -202,18 +202,22 @@ function statementRowValues(r: StatementRow) {
 /** A funding sub-row — no order details repeated, just where that money came from. */
 function fundingRowValues(f: OrderFunding, orderId: number) {
   const carried = carriedFromOrder(f, orderId)
+  const isWallet = fundingSource(f) === 'wallet'
   return {
-    // The payment as it actually arrived, not the slice attributed to this
-    // order — see fundingAmount.
+    // The payment as it actually arrived — the statement line at face value,
+    // never netted down to what the order needed. See fundingAmount.
     amount: fundingAmount(f),
     depositor: up(carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'),
     // Named, not blank: an internal transfer has no bank reference because no
     // bank was involved, and an empty cell cannot say that.
-    // A remainder still names the credit it came off, so the sheet can be
-    // traced back to the bank line — it just no longer claims to BE one.
-    depositRef: carried
-      ? up(`OFF ${fundingReference(f) || 'CREDIT'}`)
-      : isInternalTransfer(f) ? 'INTERNAL TRANSFER' : up(fundingReference(f) || '—'),
+    // A wallet draw names the bank reference its balance originally arrived
+    // under, so the sheet still traces to a statement line — it just does not
+    // claim the money landed in the bank against this order.
+    depositRef: isWallet
+      ? up(walletOriginLabel(f))
+      : carried
+        ? up(`OFF ${fundingReference(f) || 'CREDIT'}`)
+        : isInternalTransfer(f) ? 'INTERNAL TRANSFER' : up(fundingReference(f) || '—'),
     // When the money landed per the bank statement, not when the deposit row
     // happened to be keyed in — those differ by days on a back-dated match.
     depositDate: fundingPaidAt(f) ? new Date(String(fundingPaidAt(f))) : null,
