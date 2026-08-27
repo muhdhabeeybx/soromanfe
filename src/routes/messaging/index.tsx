@@ -16,6 +16,7 @@ import { ConfirmDialog } from '#/components/ConfirmDialog'
 import {
   Users, Warehouse, Repeat, Clock, Mail, MessageSquare as SmsIcon, Send, Loader2,
   Tag, CheckCircle2, XCircle, AlertCircle, History, Megaphone, BookmarkPlus, Trash2, Sparkles,
+  BookUser, Braces, Eye,
 } from 'lucide-react'
 import { useDepots } from '#/lib/hooks/useDepots'
 import { useCustomerList } from '#/lib/hooks/useCustomers'
@@ -23,9 +24,9 @@ import { useContactList, useContactTags } from '#/lib/hooks/useContacts'
 import {
   useCustomerSegment, useBroadcast, useNotificationDeliveries,
   useMessageTemplates, useCreateMessageTemplate, useDeleteMessageTemplate,
+  usePriceList, useRenderedPreview,
   type SegmentFilters, type MessageTemplate,
 } from '#/lib/hooks/useMessaging'
-import api from '#/lib/api/http'
 import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -34,37 +35,155 @@ export const Route = createFileRoute('/messaging/')({
   component: MessagingPage,
 })
 
+const SIGN_OFF = 'Order now: ordersoroman.com\nFor Enquiries: 08144915865'
+
 /**
  * Ready-made starting points for the scenarios most asked for — not stored
  * server-side, just fills the composer. "Save as Template" turns any edited
  * (or from-scratch) message into a real, shared, saved template from there.
+ *
+ * The price update carries {{shortcodes}} rather than the prices themselves.
+ * That is the difference between a template and a snapshot: the shortcodes are
+ * resolved when the message is SENT, so this template is still correct in
+ * three months, while pasted-in prices would quietly go stale and go out wrong.
  */
-const STARTER_TEMPLATES: Array<{ name: string; subject: string; body: string; channels: Array<'email' | 'sms'> }> = [
+const STARTER_TEMPLATES: Array<{
+  name: string; subject: string; body: string
+  channels: Array<'email' | 'sms'>
+  /** The audience this message is written for, preselected when loaded. */
+  audience?: string
+}> = [
+  {
+    name: 'Daily price update',
+    subject: 'SOROMAN prices for today',
+    body: `{{greeting}} Customer\nPlease be advised of SOROMAN price for today.\n\n{{prices}}\n\n${SIGN_OFF}`,
+    channels: ['sms'],
+    audience: 'everyone',
+  },
   {
     name: 'Frequent buyer thank-you',
     subject: 'Thank you for your continued business',
-    body: "Hi, thank you for being one of our regular customers — we really appreciate your continued business with Soroman.\n\nIf there's anything we can do to serve you better, please reach out.",
+    body: `{{greeting}}\n\nThank you for being one of our regular customers — we genuinely appreciate your continued business with Soroman.\n\nToday's prices:\n\n{{prices}}\n\n${SIGN_OFF}`,
     channels: ['email', 'sms'],
+    audience: 'frequent',
   },
   {
-    name: 'Inactive customer reminder',
+    name: 'Inactive customer win-back',
     subject: "We've missed you",
-    body: "Hi, it's been a while since your last order with us. We'd love to have you back — reach out if there's anything we can help with, or place an order whenever you're ready.",
+    body: `{{greeting}}\n\nIt has been a while since your last order with us, and we would love to have you back.\n\nHere is where our prices stand today:\n\n{{prices}}\n\n${SIGN_OFF}`,
     channels: ['email', 'sms'],
+    audience: 'inactive',
   },
   {
-    name: 'Price update',
-    subject: 'Updated pricing',
-    body: 'Hi, please find our latest prices below.',
+    name: 'Follow-up',
+    subject: 'Following up on your enquiry',
+    body: `{{greeting}}\n\nJust following up on your enquiry with Soroman. Our prices as at {{date}}:\n\n{{prices}}\n\nLet us know the product, quantity and location you need and we will get it moving.\n\n${SIGN_OFF}`,
     channels: ['email', 'sms'],
+    audience: 'leads',
+  },
+  {
+    name: 'New lead introduction',
+    subject: 'Soroman — fuel supply across Nigeria',
+    body: `{{greeting}}\n\nThank you for your interest in Soroman. We supply PMS, AGO and LPG across our depot network, with pricing updated daily.\n\n{{prices}}\n\n${SIGN_OFF}`,
+    channels: ['email', 'sms'],
+    audience: 'leads',
   },
 ]
 
-type AudienceMode = 'segment' | 'specific' | 'contacts'
-type CatalogDepot = { id: number; name: string; products: Array<{ name: string; code: string; unit: string; price: number }> }
+type AudienceMode = 'segment' | 'specific' | 'contacts' | 'everyone'
 
-const formatMoney = (v: number) =>
-  new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', minimumFractionDigits: 0 }).format(v)
+/**
+ * The audiences the desk actually sends to, named.
+ *
+ * This page used to ask three separate questions — pick one of three modes,
+ * then tick "frequent buyers", then type a number of orders and a number of
+ * days — to arrive at "frequent customers". Three controls to express one
+ * intent, and the intent was never written down anywhere, so the same audience
+ * was rebuilt by hand every time and two people could easily mean different
+ * things by it.
+ *
+ * Naming them makes the choice one click and makes the definition explicit and
+ * shared. The knobs are still there for the two presets where the threshold is
+ * genuinely a judgement call — how many orders counts as frequent, how long
+ * counts as gone — they just start somewhere sensible.
+ */
+type AudiencePreset = {
+  id: string
+  label: string
+  /** What the preset means, in the words someone would use to ask for it. */
+  description: string
+  icon: React.ComponentType<{ className?: string }>
+  mode: AudienceMode
+  contactStage?: '' | 'lead' | 'contact'
+  /** Which extra control to reveal, when the threshold is a real decision. */
+  tune?: 'frequent' | 'inactive'
+}
+
+const AUDIENCE_PRESETS: AudiencePreset[] = [
+  {
+    id: 'everyone',
+    label: 'Everyone',
+    description: 'Every customer and everyone on the contacts list — the widest reach.',
+    icon: Megaphone,
+    mode: 'everyone',
+  },
+  {
+    id: 'all-customers',
+    label: 'Customers only',
+    description: 'Everyone with an account, whether or not they have ordered.',
+    icon: Users,
+    mode: 'segment',
+  },
+  {
+    id: 'frequent',
+    label: 'Frequent customers',
+    description: 'Customers who order regularly. You set what regularly means.',
+    icon: Repeat,
+    mode: 'segment',
+    tune: 'frequent',
+  },
+  {
+    id: 'inactive',
+    label: 'Inactive customers',
+    description: 'Gone quiet, plus anyone who signed up and never ordered.',
+    icon: Clock,
+    mode: 'segment',
+    tune: 'inactive',
+  },
+  {
+    id: 'leads',
+    label: 'Leads only',
+    description: 'People on the contacts list marked as leads. No account yet.',
+    icon: Sparkles,
+    mode: 'contacts',
+    contactStage: 'lead',
+  },
+  {
+    id: 'contacts',
+    label: 'Other contacts only',
+    description: 'Contacts who are not leads — partners, suppliers, everyone else.',
+    icon: BookUser,
+    mode: 'contacts',
+    contactStage: 'contact',
+  },
+  {
+    id: 'all-contacts',
+    label: 'All contacts',
+    description: 'The whole contacts list, leads included. Excludes customers.',
+    icon: BookUser,
+    mode: 'contacts',
+    contactStage: '',
+  },
+  {
+    id: 'specific',
+    label: 'Pick specific customers',
+    description: 'Search and choose them one by one.',
+    icon: Users,
+    mode: 'specific',
+  },
+]
+
+const PRESET_BY_ID = new Map(AUDIENCE_PRESETS.map((p) => [p.id, p]))
 
 function formatDate(v: string | null) {
   if (!v) return '—'
@@ -89,23 +208,29 @@ function MessagingPage() {
   const { data: depots = [] } = useDepots()
 
   // ── Audience ────────────────────────────────────────────────────────────
-  const [audienceMode, setAudienceMode] = useState<AudienceMode>('segment')
+  const [presetId, setPresetId] = useState('everyone')
+  const preset = PRESET_BY_ID.get(presetId) ?? AUDIENCE_PRESETS[0]
+  const audienceMode = preset.mode
 
   const [depotId, setDepotId] = useState<number | undefined>(undefined)
-  const [frequentEnabled, setFrequentEnabled] = useState(false)
   const [minOrders, setMinOrders] = useState(3)
   const [sinceDays, setSinceDays] = useState(90)
-  const [inactiveEnabled, setInactiveEnabled] = useState(false)
   const [inactiveSinceDays, setInactiveSinceDays] = useState(60)
 
+  // The preset decides WHICH filters apply; the knobs decide the thresholds.
+  // Keeping them apart is what stops "inactive customers" silently carrying a
+  // frequent-buyer filter left over from the last message someone composed.
   const segmentFilters: SegmentFilters = useMemo(() => ({
     depotId,
-    minOrders: frequentEnabled ? minOrders : undefined,
-    sinceDays: frequentEnabled ? sinceDays : undefined,
-    inactiveSinceDays: inactiveEnabled ? inactiveSinceDays : undefined,
-  }), [depotId, frequentEnabled, minOrders, sinceDays, inactiveEnabled, inactiveSinceDays])
+    minOrders: preset.tune === 'frequent' ? minOrders : undefined,
+    sinceDays: preset.tune === 'frequent' ? sinceDays : undefined,
+    inactiveSinceDays: preset.tune === 'inactive' ? inactiveSinceDays : undefined,
+  }), [depotId, preset.tune, minOrders, sinceDays, inactiveSinceDays])
 
-  const { data: segmentData, isFetching: segmentLoading } = useCustomerSegment(segmentFilters, { enabled: audienceMode === 'segment' })
+  // "Everyone" needs the customer half as well as the contact half, so the
+  // segment query runs for it too.
+  const wantsCustomers = audienceMode === 'segment' || audienceMode === 'everyone'
+  const { data: segmentData, isFetching: segmentLoading } = useCustomerSegment(segmentFilters, { enabled: wantsCustomers })
 
   const [specificSearch, setSpecificSearch] = useState('')
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<number[]>([])
@@ -128,24 +253,28 @@ function MessagingPage() {
   // already excluded by the server, and anyone who has since become a
   // customer is filtered out here by default so a campaign does not reach the
   // same person twice under two identities.
-  const [contactStage, setContactStage] = useState<'' | 'lead' | 'contact'>('lead')
+  const contactStage = preset.contactStage ?? ''
   const [contactTag, setContactTag] = useState('')
   const [excludeConverted, setExcludeConverted] = useState(true)
   const { data: contactTags = [] } = useContactTags()
+
+  const wantsContacts = audienceMode === 'contacts' || audienceMode === 'everyone'
   const { data: contactData, isFetching: contactsLoading } = useContactList(
-    audienceMode === 'contacts'
+    wantsContacts
       ? { stage: contactStage, tag: contactTag, optedOut: 'no', converted: excludeConverted ? 'no' : '', limit: 5000 }
       : { limit: 1 },
   )
   const contactRecipients = useMemo(
-    () => (audienceMode === 'contacts' ? (contactData?.contacts ?? []) : []),
-    [audienceMode, contactData],
+    () => (wantsContacts ? (contactData?.contacts ?? []) : []),
+    [wantsContacts, contactData],
   )
 
-  const recipientCount =
-    audienceMode === 'specific' ? selectedCustomerIds.length
-      : audienceMode === 'contacts' ? contactRecipients.length
-        : (segmentData?.count ?? 0)
+  const customerRecipientIds = useMemo(
+    () => (audienceMode === 'specific' ? selectedCustomerIds : wantsCustomers ? (segmentData?.customers.map((c) => c.id) ?? []) : []),
+    [audienceMode, selectedCustomerIds, wantsCustomers, segmentData],
+  )
+
+  const recipientCount = customerRecipientIds.length + contactRecipients.length
 
   // ── Channels + message ─────────────────────────────────────────────────
   const [emailOn, setEmailOn] = useState(true)
@@ -183,34 +312,53 @@ function MessagingPage() {
     setNewTemplateName('')
   }
 
-  const [priceDepotId, setPriceDepotId] = useState<number | undefined>(undefined)
-  const [insertingPrices, setInsertingPrices] = useState(false)
+  // ── Prices ──────────────────────────────────────────────────────────────
+  //
+  // Which depots get quoted. Empty means every quotable one; the picker below
+  // starts that way and the sender unticks what they do not want in the SMS.
+  // This is also what decides whether a location can be labelled by its city —
+  // leave two Port Harcourt depots ticked and both are named in full, because
+  // one "Port Harcourt" line cannot carry two different prices.
+  const [quotedDepotIds, setQuotedDepotIds] = useState<number[]>([])
+  const { data: priceList, isFetching: pricesLoading } = usePriceList(quotedDepotIds)
 
-  const insertPrices = async () => {
-    setInsertingPrices(true)
-    try {
-      const res = await api.get('/catalog')
-      const catalogDepots = (res.data.data.depots || []) as CatalogDepot[]
-      const targetId = priceDepotId ?? depotId
-      const list = targetId ? catalogDepots.filter((d) => d.id === targetId) : catalogDepots
-      if (list.length === 0) {
-        toast.error('No priced products found for this depot')
-        return
-      }
-      const lines: string[] = ['Current prices:']
-      for (const d of list) {
-        lines.push('', `${d.name}:`)
-        for (const p of d.products) {
-          lines.push(`${p.name} (${p.code}) — ${formatMoney(p.price)}/${p.unit}`)
-        }
-      }
-      setBody((prev) => (prev.trim() ? prev.trimEnd() + '\n\n' : '') + lines.join('\n'))
-    } catch {
-      toast.error('Could not load current prices')
-    } finally {
-      setInsertingPrices(false)
-    }
+  const allQuotableIds = useMemo(() => (priceList?.depots ?? []).map((d) => d.id), [priceList])
+  const effectiveDepotIds = quotedDepotIds.length > 0 ? quotedDepotIds : allQuotableIds
+
+  const toggleQuotedDepot = (id: number) => {
+    setQuotedDepotIds((prev) => {
+      const current = prev.length > 0 ? prev : allQuotableIds
+      return current.includes(id) ? current.filter((v) => v !== id) : [...current, id]
+    })
   }
+
+  /**
+   * Drop a shortcode in rather than the prices themselves.
+   *
+   * Pasting today's numbers into the body makes a message that is correct once.
+   * The shortcode is resolved at send time, so the same body is still right
+   * tomorrow — which is what makes it worth saving as a template at all.
+   */
+  const insertShortcode = (token: string) => {
+    setBody((prev) => (prev.trim() ? prev.trimEnd() + '\n\n' : '') + `{{${token}}}`)
+  }
+
+  /** For anyone who would rather see the numbers in the box than a token. */
+  const insertResolvedPrices = () => {
+    if (!priceList?.text) { toast.error('No quotable prices right now'); return }
+    setBody((prev) => (prev.trim() ? prev.trimEnd() + '\n\n' : '') + priceList.text)
+  }
+
+  const bodyHasShortcodes = body.includes('{{')
+  const { data: renderedBody } = useRenderedPreview(body, effectiveDepotIds, true)
+  /** What actually goes out: the resolved text when shortcodes are present. */
+  const outgoingBody = bodyHasShortcodes ? (renderedBody ?? body) : body
+
+  // SMS is billed per 160-character segment (70 if any non-GSM character
+  // sneaks in), and a price blast to a few thousand people makes each extra
+  // segment real money. Counted on the RESOLVED text — the shortcode is four
+  // characters and the block it becomes is a few hundred.
+  const smsSegments = Math.max(1, Math.ceil(outgoingBody.length / 160))
 
   // ── Send ────────────────────────────────────────────────────────────────
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -228,24 +376,29 @@ function MessagingPage() {
   const handleSend = async () => {
     const common = {
       title: subject.trim() || 'Message from Soroman',
+      // Sent with shortcodes intact so the server resolves them at send time —
+      // see the note on insertShortcode. depotIds travels with it so the block
+      // quotes the depots that were ticked here.
       body: body.trim(),
       channels,
+      depotIds: bodyHasShortcodes ? effectiveDepotIds : undefined,
     }
-    await broadcast.mutateAsync(
-      audienceMode === 'contacts'
-        ? {
-          ...common,
-          audience: 'contacts' as const,
-          contacts: contactRecipients.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
-        }
-        : {
-          ...common,
-          audience: 'customers' as const,
-          customerIds: audienceMode === 'specific'
-            ? selectedCustomerIds
-            : (segmentData?.customers.map((c) => c.id) ?? []),
-        },
-    )
+
+    // "Everyone" is two audiences, and the broadcast endpoint takes one at a
+    // time — customers are addressed by id, contacts by their details, and the
+    // engine resolves them differently. Two calls rather than one, which the
+    // recipient total above already reflects.
+    if (customerRecipientIds.length > 0) {
+      await broadcast.mutateAsync({ ...common, audience: 'customers' as const, customerIds: customerRecipientIds })
+    }
+    if (contactRecipients.length > 0) {
+      await broadcast.mutateAsync({
+        ...common,
+        audience: 'contacts' as const,
+        contacts: contactRecipients.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
+      })
+    }
+
     setConfirmOpen(false)
     setSubject('')
     setBody('')
@@ -280,31 +433,69 @@ function MessagingPage() {
           </div>
         </CardHeader>
         <CardContent className="pt-4 space-y-4">
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setAudienceMode('segment')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${audienceMode === 'segment' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-              By segment
-            </button>
-            <button type="button" onClick={() => setAudienceMode('specific')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${audienceMode === 'specific' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-              Specific customers
-            </button>
-            <button type="button" onClick={() => setAudienceMode('contacts')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${audienceMode === 'contacts' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>
-              Contacts &amp; leads
-            </button>
-            <div className="ml-auto flex items-center">
-              <Badge variant="secondary" className="text-xs px-3 py-1.5 font-semibold">
-                {segmentLoading || specificLoading || contactsLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
-                {recipientCount} recipient{recipientCount === 1 ? '' : 's'}
-              </Badge>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[16rem] flex-1">
+              <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+                <Users className="size-3.5" /> Send to
+              </Label>
+              <Select value={presetId} onValueChange={setPresetId}>
+                <SelectTrigger className="w-full text-sm h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {AUDIENCE_PRESETS.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+            <Badge variant="secondary" className="text-xs px-3 py-1.5 font-semibold h-9 flex items-center">
+              {segmentLoading || specificLoading || contactsLoading ? <Loader2 className="size-3 animate-spin mr-1.5" /> : null}
+              {recipientCount.toLocaleString()} recipient{recipientCount === 1 ? '' : 's'}
+            </Badge>
           </div>
 
-          {audienceMode === 'segment' ? (
-            <div className="space-y-4">
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground -mt-1">
+            <preset.icon className="mt-0.5 size-3.5 shrink-0" />
+            {preset.description}
+          </p>
+
+          {/* "Everyone" is the only preset that spans both halves, and the split
+              is worth showing: the two are reached differently and a contact
+              with no phone number simply cannot get an SMS. */}
+          {audienceMode === 'everyone' && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant="outline" className="font-normal">
+                {customerRecipientIds.length.toLocaleString()} customer{customerRecipientIds.length === 1 ? '' : 's'}
+              </Badge>
+              <Badge variant="outline" className="font-normal">
+                {contactRecipients.length.toLocaleString()} contact{contactRecipients.length === 1 ? '' : 's'}
+              </Badge>
+            </div>
+          )}
+
+          {preset.tune === 'frequent' && (
+            <div className="flex flex-wrap items-center gap-2 text-sm rounded-lg border border-border/60 bg-muted/30 p-3">
+              <Repeat className="size-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground">Counts as frequent: at least</span>
+              <Input type="number" min={1} value={minOrders} onChange={(e) => setMinOrders(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" />
+              <span className="text-muted-foreground">orders in the last</span>
+              <Input type="number" min={1} value={sinceDays} onChange={(e) => setSinceDays(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" />
+              <span className="text-muted-foreground">days</span>
+            </div>
+          )}
+
+          {preset.tune === 'inactive' && (
+            <div className="flex flex-wrap items-center gap-2 text-sm rounded-lg border border-border/60 bg-muted/30 p-3">
+              <Clock className="size-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground">Counts as inactive: no order in the last</span>
+              <Input type="number" min={1} value={inactiveSinceDays} onChange={(e) => setInactiveSinceDays(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" />
+              <span className="text-muted-foreground">days — includes anyone who never ordered</span>
+            </div>
+          )}
+
+          {audienceMode === 'segment' || audienceMode === 'everyone' ? (
+            <div className="space-y-3">
               <div>
-                <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground"><Warehouse className="size-3.5" /> Location</Label>
+                <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground"><Warehouse className="size-3.5" /> Narrow to a location</Label>
                 <Select value={depotId ? String(depotId) : 'any'} onValueChange={(v) => setDepotId(v === 'any' ? undefined : Number(v))}>
                   <SelectTrigger className="w-full sm:w-[280px] text-sm h-9">
                     <SelectValue placeholder="Any depot" />
@@ -314,72 +505,28 @@ function MessagingPage() {
                     {depots.map((d) => (<SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">Customers who have ordered from this depot. Leave as "Any depot" to skip this filter.</p>
+                <p className="text-xs text-muted-foreground mt-1">Only customers who have ordered from this depot. Optional.</p>
               </div>
-
-              <label className="flex items-start gap-3 cursor-pointer select-none">
-                <input type="checkbox" checked={frequentEnabled} onChange={(e) => setFrequentEnabled(e.target.checked)} className="mt-1 size-4 rounded border-input text-primary accent-primary cursor-pointer" />
-                <div className="flex-1">
-                  <span className="flex items-center gap-1.5 text-sm font-normal text-foreground"><Repeat className="size-3.5" /> Frequent buyers</span>
-                  {frequentEnabled && (
-                    <div className="flex items-center gap-2 mt-2 text-sm">
-                      <span className="text-muted-foreground">at least</span>
-                      <Input type="number" min={1} value={minOrders} onChange={(e) => setMinOrders(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" onClick={(e) => e.preventDefault()} />
-                      <span className="text-muted-foreground">orders in the last</span>
-                      <Input type="number" min={1} value={sinceDays} onChange={(e) => setSinceDays(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" onClick={(e) => e.preventDefault()} />
-                      <span className="text-muted-foreground">days</span>
-                    </div>
-                  )}
-                </div>
-              </label>
-
-              <label className="flex items-start gap-3 cursor-pointer select-none">
-                <input type="checkbox" checked={inactiveEnabled} onChange={(e) => setInactiveEnabled(e.target.checked)} className="mt-1 size-4 rounded border-input text-primary accent-primary cursor-pointer" />
-                <div className="flex-1">
-                  <span className="flex items-center gap-1.5 text-sm font-normal text-foreground"><Clock className="size-3.5" /> Inactive customers</span>
-                  {inactiveEnabled && (
-                    <div className="flex items-center gap-2 mt-2 text-sm">
-                      <span className="text-muted-foreground">no order in the last</span>
-                      <Input type="number" min={1} value={inactiveSinceDays} onChange={(e) => setInactiveSinceDays(Math.max(1, Number(e.target.value) || 1))} className="w-16 h-8 text-xs" onClick={(e) => e.preventDefault()} />
-                      <span className="text-muted-foreground">days (includes customers who've never ordered)</span>
-                    </div>
-                  )}
-                </div>
-              </label>
-
-              <p className="text-xs text-muted-foreground">Filters combine — e.g. a depot plus "frequent buyers" targets frequent buyers at that depot. Opted-out and inactive/suspended customers are never included.</p>
+              <p className="text-xs text-muted-foreground">Opted-out and suspended customers are never included.</p>
             </div>
-          ) : audienceMode === 'contacts' ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
+          ) : null}
+
+          {audienceMode === 'contacts' || audienceMode === 'everyone' ? (
+            <div className="space-y-3">
+              {contactTags.length > 0 && (
                 <div>
                   <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
-                    <Users className="size-3.5" /> Who
+                    <Tag className="size-3.5" /> Narrow contacts to a tag
                   </Label>
-                  <Select value={contactStage || 'all'} onValueChange={(v) => setContactStage(v === 'all' ? '' : (v as 'lead' | 'contact'))}>
-                    <SelectTrigger className="w-full text-sm h-9"><SelectValue /></SelectTrigger>
+                  <Select value={contactTag || 'any'} onValueChange={(v) => setContactTag(v === 'any' ? '' : v)}>
+                    <SelectTrigger className="w-full sm:w-[280px] text-sm h-9"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="lead">Leads only</SelectItem>
-                      <SelectItem value="contact">Other contacts only</SelectItem>
-                      <SelectItem value="all">Everyone on the contacts list</SelectItem>
+                      <SelectItem value="any">Any tag</SelectItem>
+                      {contactTags.map((t) => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
                     </SelectContent>
                   </Select>
                 </div>
-                {contactTags.length > 0 && (
-                  <div>
-                    <Label className="mb-1.5 flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
-                      <Tag className="size-3.5" /> Tag
-                    </Label>
-                    <Select value={contactTag || 'any'} onValueChange={(v) => setContactTag(v === 'any' ? '' : v)}>
-                      <SelectTrigger className="w-full text-sm h-9"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="any">Any tag</SelectItem>
-                        {contactTags.map((t) => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
+              )}
 
               <label className="flex items-start gap-3 cursor-pointer select-none">
                 <input
@@ -390,21 +537,23 @@ function MessagingPage() {
                 />
                 <div className="flex-1">
                   <span className="flex items-center gap-1.5 text-sm font-normal text-foreground">
-                    <CheckCircle2 className="size-3.5" /> Skip anyone who is already a customer
+                    <CheckCircle2 className="size-3.5" /> Skip contacts who are already customers
                   </span>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    A lead who has since signed up would otherwise be messaged twice — once here
-                    and once as a customer.
+                    A lead who has since signed up would otherwise be messaged twice — once as a
+                    contact and once as a customer.
                   </p>
                 </div>
               </label>
 
               <p className="text-xs text-muted-foreground">
-                Contacts have no account, so they are reached on the phone number and email
-                held for them. Anyone who has opted out of messages is never included.
+                Contacts have no account, so they are reached on the phone number and email held
+                for them. Anyone who has opted out is never included.
               </p>
             </div>
-          ) : (
+          ) : null}
+
+          {audienceMode === 'specific' ? (
             <MultiSelectPicker
               icon={Users}
               title="Customers"
@@ -419,7 +568,7 @@ function MessagingPage() {
               isLoading={specificLoading}
               emptyMessage={specificSearch ? 'No customers match your search.' : 'Search for customers to add them.'}
             />
-          )}
+          ) : null}
         </CardContent>
       </Card>
 
@@ -438,7 +587,16 @@ function MessagingPage() {
             <Label className="flex items-center gap-1.5 text-xs uppercase text-muted-foreground"><Sparkles className="size-3.5" /> Quick start</Label>
             <div className="flex flex-wrap gap-2">
               {STARTER_TEMPLATES.map((t) => (
-                <Button key={t.name} type="button" variant="outline" size="sm" onClick={() => loadIntoComposer(t)} className="h-8 text-xs">
+                <Button
+                  key={t.name} type="button" variant="outline" size="sm" className="h-8 text-xs"
+                  onClick={() => {
+                    loadIntoComposer(t)
+                    // Each of these is written for a particular audience, so
+                    // loading one sets it. A win-back sent to everyone is not
+                    // a win-back.
+                    if (t.audience && PRESET_BY_ID.has(t.audience)) setPresetId(t.audience)
+                  }}
+                >
                   {t.name}
                 </Button>
               ))}
@@ -483,30 +641,118 @@ function MessagingPage() {
             </div>
           )}
 
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <Label className="text-xs">Message</Label>
-              <div className="flex items-center gap-2">
-                {depots.length > 0 && (
-                  <Select value={priceDepotId ? String(priceDepotId) : (depotId ? String(depotId) : 'any')} onValueChange={(v) => setPriceDepotId(v === 'any' ? undefined : Number(v))}>
-                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                      <SelectValue placeholder="All depots" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="any">All depots</SelectItem>
-                      {depots.map((d) => (<SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
-                )}
-                <Button type="button" variant="outline" size="sm" onClick={insertPrices} disabled={insertingPrices} className="h-8 text-xs">
-                  {insertingPrices ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : <Tag className="size-3.5 mr-1.5" />}
-                  Insert current prices
+          {/* ── Shortcodes ────────────────────────────────────────────────
+              A shortcode is inserted rather than the prices themselves, so the
+              message is resolved when it SENDS. That is what lets the same
+              saved template go out every morning carrying that morning's
+              prices instead of the ones that were current when it was written. */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+              <Braces className="size-3.5" /> Shortcodes
+            </Label>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => insertShortcode('prices')} className="h-8 text-xs font-mono">
+                {'{{prices}}'}
+              </Button>
+              {(priceList?.groups ?? []).map((g) => (
+                <Button key={g.code} type="button" variant="outline" size="sm" onClick={() => insertShortcode(`prices:${g.code}`)} className="h-8 text-xs font-mono">
+                  {`{{prices:${g.code}}}`}
                 </Button>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => insertShortcode('greeting')} className="h-8 text-xs font-mono">
+                {'{{greeting}}'}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => insertShortcode('date')} className="h-8 text-xs font-mono">
+                {'{{date}}'}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={insertResolvedPrices} disabled={pricesLoading} className="h-8 text-xs">
+                {pricesLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : <Tag className="size-3.5 mr-1.5" />}
+                Paste prices as plain text
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              <span className="font-mono">{'{{prices}}'}</span> fills in when the message sends, so a saved
+              template always carries the current price. <span className="font-mono">{'{{greeting}}'}</span> becomes
+              Good Morning / Afternoon / Evening depending on when it lands.
+            </p>
+          </div>
+
+          {/* ── Which depots get quoted ───────────────────────────────────── */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+                <Warehouse className="size-3.5" /> Locations quoted in the price block
+              </Label>
+              {quotedDepotIds.length > 0 && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setQuotedDepotIds([])} className="h-7 text-xs">
+                  Reset to all
+                </Button>
+              )}
+            </div>
+            {pricesLoading && !priceList ? (
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            ) : (priceList?.depots ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground">No depot currently has a price and stock to quote.</p>
+            ) : (
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {(priceList?.depots ?? []).map((d) => {
+                  const on = effectiveDepotIds.includes(d.id)
+                  return (
+                    <label key={d.id} className="flex items-start gap-2.5 cursor-pointer select-none rounded-lg border border-border/60 p-2.5 hover:bg-muted/40">
+                      <input
+                        type="checkbox" checked={on} onChange={() => toggleQuotedDepot(d.id)}
+                        className="mt-0.5 size-4 rounded border-input text-primary accent-primary cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-sm font-normal text-foreground truncate">{d.name}</span>
+                        <span className="block text-xs text-muted-foreground truncate">
+                          {d.products.map((p) => `${p.code} N${Math.round(p.price).toLocaleString()}/${p.unitSuffix}`).join(' · ')}
+                        </span>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Only active depots holding stock at a set price can be quoted. A location is written
+              by its city where that is unambiguous — leave two depots in the same city ticked and
+              both are named in full, since one line cannot carry two prices.
+            </p>
+          </div>
+
+          <div>
+            <Label className="text-xs mb-1.5 block">Message</Label>
+            <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your message..." className="min-h-40 font-mono text-sm" maxLength={2000} />
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-1">
+              <p className="text-xs text-muted-foreground">
+                {body.length}/2000. The same message goes to every recipient — no per-customer personalisation.
+              </p>
+              {smsOn && (
+                <p className="text-xs text-muted-foreground">
+                  {outgoingBody.length} chars sent ·{' '}
+                  <span className={smsSegments > 3 ? 'text-warning font-semibold' : 'font-semibold'}>
+                    {smsSegments} SMS segment{smsSegments === 1 ? '' : 's'}
+                  </span>
+                  {recipientCount > 0 && <> × {recipientCount.toLocaleString()} recipients</>}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* The resolved text, whenever the body still holds a shortcode. The
+              box above shows what was typed; this shows what will actually be
+              received, which is the thing worth checking before sending. */}
+          {bodyHasShortcodes && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5 text-xs uppercase text-muted-foreground">
+                <Eye className="size-3.5" /> What recipients will see
+              </Label>
+              <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm whitespace-pre-wrap">
+                {renderedBody ?? <Loader2 className="size-4 animate-spin text-muted-foreground" />}
               </div>
             </div>
-            <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your message..." className="min-h-40" maxLength={2000} />
-            <p className="text-xs text-muted-foreground mt-1">{body.length}/2000. The same message is sent to every recipient — there's no per-customer personalization yet.</p>
-          </div>
+          )}
 
           <div className="flex justify-between">
             <Button type="button" variant="ghost" size="sm" onClick={() => setSaveTemplateOpen(true)} disabled={!body.trim()} className="text-xs">
@@ -593,9 +839,16 @@ function MessagingPage() {
               {channels.map((c) => (c === 'email' ? 'Email' : 'SMS')).join(' and ')}.
             </DialogDescription>
           </DialogHeader>
+          {/* The resolved text, not the raw body — nobody should be asked to
+              approve "{{prices}}" and find out afterwards what it stood for. */}
           <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm whitespace-pre-wrap max-h-48 overflow-y-auto">
-            {body}
+            {outgoingBody}
           </div>
+          {smsOn && (
+            <p className="text-xs text-muted-foreground">
+              {smsSegments} SMS segment{smsSegments === 1 ? '' : 's'} per recipient.
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button type="button" onClick={handleSend} disabled={broadcast.isPending}>
