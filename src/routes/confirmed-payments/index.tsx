@@ -453,7 +453,8 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
 function FinanceReportPage() {
   const [search, setSearch] = useState('')
   const [datePreset, setDatePreset] = useState<DatePreset>('today')
-  const [customDate, setCustomDate] = useState('')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Unpaid' | 'all'>('Paid')
   const [locationId, setLocationId] = useState(ALL)
   const [pfiId, setPfiId] = useState(ALL)
@@ -464,14 +465,26 @@ function FinanceReportPage() {
   const unmatchDeposit = useUnmatchDeposit()
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
+  // A range, not a day. resolveRange already understood `to` — only the UI
+  // was passing one date, so "this day to this day" was impossible to ask for
+  // even though the API had always accepted it. An empty `to` still means the
+  // single day in `from`, so picking one date behaves exactly as before.
   const range = useMemo(
-    () => resolveRange(datePreset, { from: customDate ? new Date(customDate) : undefined }),
-    [datePreset, customDate],
+    () => resolveRange(datePreset, {
+      from: customFrom ? new Date(customFrom) : undefined,
+      to: customTo ? new Date(customTo) : undefined,
+    }),
+    [datePreset, customFrom, customTo],
   )
   const dateFrom = range ? range.from.toISOString() : undefined
   const dateTo = range ? range.to.toISOString() : undefined
   const periodLabel = datePreset === 'custom'
-    ? (customDate ? format(new Date(customDate), 'd MMM yyyy') : 'Custom date')
+    ? (customFrom
+        // Same year on both ends reads better without repeating it.
+        ? customTo && customTo !== customFrom
+          ? `${format(new Date(customFrom), new Date(customFrom).getFullYear() === new Date(customTo).getFullYear() ? 'd MMM' : 'd MMM yyyy')} – ${format(new Date(customTo), 'd MMM yyyy')}`
+          : format(new Date(customFrom), 'd MMM yyyy')
+        : 'Custom range')
     : (DATE_PRESETS.find((p) => p.value === datePreset)?.label ?? 'All Time')
 
   const { data, isLoading, isError, error, refetch, isFetching } = useFinanceReport({
@@ -663,7 +676,7 @@ function FinanceReportPage() {
 
   const clearFilters = () => {
     setSearch(''); setPaymentStatus('Paid'); setLocationId(ALL); setPfiId(ALL); setProductId(ALL)
-    setDatePreset('today'); setCustomDate('')
+    setDatePreset('today'); setCustomFrom(''); setCustomTo('')
   }
 
   const runExport = async (kind: 'excel' | 'pdf') => {
@@ -767,7 +780,7 @@ function FinanceReportPage() {
             <button
               key={p.value}
               type="button"
-              onClick={() => { setDatePreset(p.value); setCustomDate('') }}
+              onClick={() => { setDatePreset(p.value); setCustomFrom(''); setCustomTo('') }}
               className={cn(
                 'rounded-full border px-3 py-1 text-xs transition-colors duration-250 ease-luxe outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
                 datePreset === p.value
@@ -779,13 +792,32 @@ function FinanceReportPage() {
             </button>
           ))}
         </div>
-        <Input
-          type="date"
-          value={customDate}
-          aria-label="Custom date"
-          onChange={(e) => { setCustomDate(e.target.value); setDatePreset('custom') }}
-          className="w-40"
-        />
+        {/* From – To. Leaving To empty reports the single day in From. */}
+        <div className="flex items-center gap-1.5">
+          <Input
+            type="date"
+            value={customFrom}
+            aria-label="From date"
+            max={customTo || undefined}
+            onChange={(e) => { setCustomFrom(e.target.value); setDatePreset('custom') }}
+            className="w-40"
+          />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input
+            type="date"
+            value={customTo}
+            aria-label="To date"
+            min={customFrom || undefined}
+            onChange={(e) => {
+              setCustomTo(e.target.value)
+              setDatePreset('custom')
+              // Picking only an end date is a half-stated range; anchor it to
+              // the same day so the report is never silently unbounded.
+              if (!customFrom) setCustomFrom(e.target.value)
+            }}
+            className="w-40"
+          />
+        </div>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X data-icon="inline-start" />
