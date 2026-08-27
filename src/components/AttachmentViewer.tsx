@@ -1,11 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Download, ExternalLink, FileText, Loader2, AlertTriangle } from 'lucide-react'
 
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '#/components/ui/dialog'
 import { Button } from '#/components/ui/button'
-import { cn } from '#/lib/utils'
 
 /**
  * An attachment, shown where the person already is.
@@ -56,22 +55,54 @@ export function AttachmentViewer({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
-  const [failed, setFailed] = useState(false)
-  const [loading, setLoading] = useState(true)
+  /**
+   * The probe result, tagged with the URL it belongs to.
+   *
+   * Tagged rather than reset, so switching attachments needs no synchronous
+   * clear inside the effect — a result whose URL no longer matches simply
+   * reads as "not known yet". The parent owns `open`, so there is no reliable
+   * moment to reset on, and a second attachment used to wear the first one's
+   * outcome.
+   */
+  const [probe, setProbe] = useState<{ url: string; status: number } | null>(null)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+
+  const url = attachment?.url ?? ''
+  const setFailed = () => setFailedUrl(url)
+
+  /**
+   * Ask the file whether it can be shown, before trying to show it.
+   *
+   * A PDF the storage host refuses answers 401, and an <iframe> renders that
+   * as a blank white box — the dialog opens and there is simply nothing in it,
+   * with no way to tell a refusal from a slow load or an empty file. The host
+   * sends `access-control-allow-origin: *` even on the refusal, so the status
+   * is readable from here and the dialog can say what happened.
+   *
+   * Keyed on the URL rather than on `open`: the parent controls `open`, so
+   * onOpenChange never fires with true and resetting there left a second
+   * attachment wearing the first one's outcome.
+   */
+  useEffect(() => {
+    if (!url || !open) return
+    let cancelled = false
+    fetch(url, { method: 'HEAD' })
+      .then((res) => { if (!cancelled) setProbe({ url, status: res.status }) })
+      // A blocked or offline preflight is not itself a failure — fall through
+      // and let the browser try, which is still the better guess.
+      .catch(() => { if (!cancelled) setProbe({ url, status: 200 }) })
+    return () => { cancelled = true }
+  }, [url, open])
 
   if (!attachment) return null
   const kind = attachmentKind(attachment)
+  const status = probe?.url === url ? probe.status : null
+  const failed = failedUrl === url
+  const refused = status !== null && status >= 400
+  const checking = status === null
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        // Reset per open, so a second attachment doesn't inherit the first
-        // one's failure or its finished spinner.
-        if (next) { setFailed(false); setLoading(true) }
-        onOpenChange(next)
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92svh] overflow-hidden sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="truncate pr-8">{attachment.name}</DialogTitle>
@@ -95,48 +126,61 @@ export function AttachmentViewer({
         </DialogHeader>
 
         <div className="relative min-h-[50svh] overflow-auto rounded-lg border border-foreground/15 bg-muted/30">
-          {loading && kind !== 'other' && !failed && (
-            <div className="absolute inset-0 flex items-center justify-center">
+          {checking ? (
+            <div className="flex min-h-[50svh] items-center justify-center">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
-          )}
-
-          {failed || kind === 'other' ? (
+          ) : refused || failed || kind === 'other' ? (
             <div className="flex min-h-[50svh] flex-col items-center justify-center gap-3 p-8 text-center">
-              {failed ? (
+              {refused || failed ? (
                 <AlertTriangle className="size-8 text-warning" />
               ) : (
                 <FileText className="size-8 text-muted-foreground" />
               )}
               <p className="text-sm font-semibold">
-                {failed ? 'This file could not be displayed here' : 'No preview for this file type'}
+                {kind === 'other' && !refused && !failed
+                  ? 'No preview for this file type'
+                  : 'This file cannot be displayed'}
               </p>
-              <p className="max-w-sm text-xs text-muted-foreground">
-                {failed
-                  ? 'The storage host refused to show it inline. Downloading it still works.'
-                  : 'Spreadsheets and documents open in the app that owns them.'}
+              <p className="max-w-md text-xs text-muted-foreground">
+                {/* The exact reason, because "could not be displayed" sends
+                    somebody hunting through the app for a fault that is a
+                    setting on the storage account. */}
+                {status === 401 || status === 403
+                  ? `The storage host refused it (${status}). PDFs are blocked until “Allow delivery of PDF and ZIP files” is enabled on the Cloudinary account — until then this file cannot be shown or downloaded from anywhere.`
+                  : status === 404
+                    ? 'The file is no longer at the address recorded for it.'
+                    : refused
+                      ? `The storage host answered ${status}.`
+                      : kind === 'other'
+                        ? 'Spreadsheets and documents open in the app that owns them.'
+                        : 'The browser could not render it.'}
               </p>
-              <Button size="sm" asChild>
-                <a href={attachment.url} download={attachment.name}>
-                  <Download data-icon="inline-start" />
-                  Download {attachment.name.split('.').pop()?.toUpperCase()}
-                </a>
-              </Button>
+              {!refused && (
+                <Button size="sm" asChild>
+                  <a href={attachment.url} download={attachment.name}>
+                    <Download data-icon="inline-start" />
+                    Download {attachment.name.split('.').pop()?.toUpperCase()}
+                  </a>
+                </Button>
+              )}
             </div>
           ) : kind === 'image' ? (
+            // Never hidden behind an opacity gate while "loading". A cached
+            // image can finish before React attaches onLoad, the handler never
+            // fires, and the picture stays invisible forever — which is
+            // exactly what an attachment that popped open empty was doing.
             <img
               src={attachment.url}
               alt={attachment.name}
-              onLoad={() => setLoading(false)}
-              onError={() => { setLoading(false); setFailed(true) }}
-              className={cn('mx-auto max-h-[70svh] w-auto object-contain', loading && 'opacity-0')}
+              onError={setFailed}
+              className="mx-auto max-h-[70svh] w-auto object-contain"
             />
           ) : (
             <iframe
               src={attachment.url}
               title={attachment.name}
-              onLoad={() => setLoading(false)}
-              className="h-[70svh] w-full"
+              className="h-[70svh] w-full bg-white"
             />
           )}
         </div>
