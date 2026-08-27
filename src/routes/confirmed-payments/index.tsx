@@ -5,7 +5,7 @@ import {
   Search, X, Loader2, Landmark, User, CreditCard,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
   FileSpreadsheet, ArrowRight, RefreshCw, Unlink, Wallet,
-  ArrowUpCircle, ArrowDownCircle, Repeat, Scale,
+  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -429,14 +429,16 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
                   />
                 ))}
                 {order.unattributedAmount > 0 && (
-                  <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground flex items-start gap-2">
-                    <Info className="mt-0.5 size-4 shrink-0" />
-                    {/* The order was paid — its hold covered the total — but
-                        nothing on record says which money did it. Better said
-                        plainly than filled in with a bank reference belonging
-                        to some other order, which is what used to happen. */}
-                    {naira(order.unattributedAmount)} of this payment came from wallet balance with
-                    no recorded source — no statement line was matched to this order for it.
+                  <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                    {/* Not "paid from somewhere untraced" — nothing says this
+                        was paid at all. The order was billed more than the
+                        credits matched to it come to, and that difference is
+                        now a shortfall rather than an assumption. */}
+                    This order was billed {naira(Number(order.totalAmount))} but only{' '}
+                    {naira(orderAmountPaid(order))} has been matched to it —{' '}
+                    {naira(order.unattributedAmount)} has no payment record behind it and appears
+                    on no statement line. It shows as a shortfall in Differential.
                   </p>
                 )}
               </>

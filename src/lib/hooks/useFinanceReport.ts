@@ -541,19 +541,34 @@ export function orderSalesValue(o: FinanceReportOrder): number {
  */
 export function orderAmountPaid(o: FinanceReportOrder): number {
   if (!o.fundingTracked) {
-    return o.paymentStatus === 'Paid' ? Number(o.totalAmount || 0) : 0
+    // Nothing was recorded for the whole pre-tracking era, so the order's own
+    // value is the only evidence there is that it was paid. Kept — showing
+    // zero would invent ₦405bn of debt nobody owes — and labelled on the row
+    // so it is never mistaken for something matchable. See untracedReason.
+    if (untracedReason(o) === 'pre-ledger') {
+      return o.paymentStatus === 'Paid' ? Number(o.totalAmount || 0) : 0
+    }
+    // Confirmed after tracking began and still carrying no allocation: only
+    // what can actually be evidenced counts. The rest is a shortfall.
+    return walletStatementRows(o).reduce((sum, r) => sum + r.amount, 0)
   }
-  // Receipts only. A surplus leaving for another order is a movement, not a
-  // negative payment, and netting it in here made two things go wrong at once:
-  // AG11212 read as fully paid when 180,000,000 had actually landed against a
-  // 153,400,000 order, and the Amount Paid column stopped being a column of
-  // money received that anyone could add up. The movement now lives in its own
-  // Transfers column — see transferAmount — so this stays a plain total and
-  // Differential shows the 26,600,000 for what it is.
-  const received = o.funding
+
+  // Receipts only, and only receipts that exist.
+  //
+  // A surplus leaving for another order is a movement, not a negative payment
+  // — that lives in the Transfers column, see transferAmount.
+  //
+  // And this no longer tops the figure up to the invoice value. It used to add
+  // `unattributedAmount` — the part of an order's value with no credit behind
+  // it — which meant the report asserted payment on the strength of the
+  // order's own price. IE11191 read as ₦314,631,000 received when the three
+  // bank lines matched to it come to ₦314,625,500, and no ₦5,500 credit exists
+  // for that customer or on any statement. Across 36 orders in the tracked era
+  // that invented ₦1,117,758,373. The gap now shows in Differential, where it
+  // can be chased.
+  return o.funding
     .filter((f) => fundingSource(f) !== 'transfer_out')
     .reduce((sum, f) => sum + fundingAmount(f), 0)
-  return received + Number(o.unattributedAmount || 0)
 }
 
 /**
