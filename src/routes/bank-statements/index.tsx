@@ -3,7 +3,7 @@ import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
-  Upload, FileSpreadsheet, Settings2, Trash2, Loader2, CheckCircle2, AlertCircle,
+  Upload, FileSpreadsheet, Settings2, Loader2, CheckCircle2, AlertCircle,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -11,7 +11,6 @@ import { NativeSelect } from '#/components/ui/native-select'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { StatusChip } from '#/components/ui/status-chip'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
-import { PageEmpty } from '#/components/PageEmpty'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
@@ -19,6 +18,7 @@ import {
   useStatementMapping, useSaveStatementMapping, useBankStatements,
   useUploadStatement, useDeleteStatement,
 } from '#/lib/hooks/useBankStatements'
+import { StatementUploads } from './-statement-uploads'
 import {
   readGrid, parseRows, type Grid, type ColumnMapping,
 } from '#/lib/bank-statement-parser'
@@ -359,72 +359,12 @@ function BankStatementsPage() {
                 )}
                 </div>
                 </section>
-                <section className={PANEL}>
-                <div className={PANEL_RAIL}>
-                <span className={MICRO}>Uploaded statements</span>
-                </div>
-                {statements.length === 0 ? (
-                <PageEmpty
-                title="Nothing uploaded yet"
-                description="Statements you import will be listed here."
-                />
-                ) : (
-                <div className="px-2 pb-2">
-                <Table>
-                <TableHeader>
-                <TableRow>
-                <TableHead>File</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Period</TableHead>
-                <TableHead className="text-right">Rows</TableHead>
-                <TableHead className="text-right">Matched</TableHead>
-                <TableHead>Uploaded</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-                </TableHeader>
-                <TableBody>
-                {statements.map((s) => (
-                <TableRow key={s.id}>
-                <TableCell className="font-normal">{s.filename || '—'}</TableCell>
-                <TableCell className="text-muted-foreground">
-                {s.bank_name} · {s.account_name} · {s.account_number}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                {s.period_start ? format(new Date(s.period_start), 'd MMM') : '—'}
-                {' – '}
-                {s.period_end ? format(new Date(s.period_end), 'd MMM yyyy') : '—'}
-                </TableCell>
-                <TableCell className="text-right">{s.row_count}</TableCell>
-                <TableCell className="text-right">
-                {s.matched_count > 0
-                ? <StatusChip tone="accent">{s.matched_count}</StatusChip>
-                : <span className="text-muted-foreground">0</span>}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                {format(new Date(s.created_at), 'd MMM yyyy')}
-                </TableCell>
-                <TableCell className="text-right">
-                <Button
-                variant="ghost"
-                size="icon-sm"
-                disabled={remove.isPending}
-                onClick={() => remove.mutate(s.id)}
-                >
-                <Trash2 />
-                <span className="sr-only">Delete {s.filename}</span>
-                </Button>
-                </TableCell>
-                </TableRow>
-                ))}
-                </TableBody>
-                </Table>
-                <p className="px-4 pb-2 text-xs text-muted-foreground/70">
-                A statement with matched lines cannot be deleted — that would break the audit
-                trail behind a confirmed payment.
-                </p>
-                </div>
-                )}
-                </section>
+      <StatementUploads
+        statements={statements}
+        onDelete={(id) => remove.mutate(id)}
+        deleting={remove.isPending}
+      />
     </div>
   )
 }
+

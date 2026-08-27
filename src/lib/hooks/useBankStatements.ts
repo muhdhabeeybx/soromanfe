@@ -83,6 +83,51 @@ export function useBankStatements(bankAccountId?: number | string) {
   })
 }
 
+/** One row of an uploaded statement, and what became of it. */
+export interface StatementLineDetail {
+  id: number
+  txn_date: string
+  amount: string | number
+  depositor: string
+  narration: string
+  bank_ref: string
+  status: string
+  matched_deposit_id: number | null
+  matched_order_id: number | null
+  matched_at: string | null
+  deposit_reference: string | null
+  order_id: number | null
+  /** "ME11485" — built the way every other screen builds it. */
+  order_reference: string | null
+  customer_name: string | null
+  matched_by_name: string | null
+}
+
+/**
+ * The rows of one upload, with the order each was matched to and by whom.
+ *
+ * The upload list could say how many rows matched but never which, so a row
+ * that seemed to have gone missing could not be traced from the screen at all.
+ */
+export function useStatementLines(
+  statementId: number | null,
+  params: { page?: number; limit?: number; status?: string } = {},
+) {
+  return useQuery({
+    enabled: statementId != null,
+    queryKey: ['bank-statements', 'lines', statementId, params],
+    queryFn: async () => {
+      const res = await api.get(`/bank-statements/${statementId}/lines`, { params })
+      return res.data.data as {
+        lines: StatementLineDetail[]
+        pagination: { page: number; limit: number; total: number; pages: number }
+        totals: { total: number; matched: number; unmatched: number }
+      }
+    },
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useUploadStatement() {
   const qc = useQueryClient()
   const toast = useToast()
