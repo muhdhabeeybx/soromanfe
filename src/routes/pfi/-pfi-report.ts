@@ -10,11 +10,13 @@ import {
   REPORT_COLUMNS, FINANCE_TABLE_COLUMNS, writeFinanceTable,
 } from '#/routes/confirmed-payments/-finance-report-export'
 import {
-  XL, PDF, NGN, NGN_SIGNED, QTY, PCT, DATE_FMT, DATE_PATTERN,
+  XL, PDF, NGN, NGN_SIGNED, COUNT, PCT, DATE_FMT, DATE_PATTERN,
+  qtyFormat, qtyFormatUnit,
   ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUMMARY_FILL, BAND_FILL,
   GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   paintSigned, pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
 } from '#/lib/report-theme'
+import { unitNames } from '#/routes/pfi/-pfi-utils'
 
 /**
  * The PFI report.
@@ -25,6 +27,15 @@ import {
  * navy section bars — PFI DETAILS, BL FIGURES, TANK FIGURES, STOCK MOVEMENT,
  * FINANCIAL SUMMARY, PEOPLE. It reads as a document rather than a dump,
  * which matters because this is the sheet that gets printed and circulated.
+ *
+ * A gantry batch prints one QUANTITY & VALUE section in place of BL FIGURES
+ * and TANK FIGURES, and drops the vessel and surveyor rows: it was collected
+ * at the loading gantry, so there are no shipping papers to reconcile a tank
+ * measurement against and no vessel to name. Printing those sections as rows
+ * of dashes would be answering questions that were never asked.
+ *
+ * Quantities print in the product's own unit throughout — LPG is tonnes, and
+ * a "L" suffix on a tonnage is a wrong figure rather than a wrong word.
  *
  * ── Colour ────────────────────────────────────────────────────────────────
  *
@@ -168,47 +179,81 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
   const expensesApproved = f.totalExpenses
   const awaiting = (f as { pendingExpenses?: number }).pendingExpenses ?? 0
 
+  const gantry = f.isGantry
+  // Every quantity below prints in the product's own unit. An LPG batch is
+  // tonnes, and a report that suffixed the figures with "L" regardless was
+  // circulating a wrong number rather than a differently-worded one.
+  const u = unitNames(pfi.productUnit)
+  const UQTY = qtyFormat(u.short, u.decimals)
+
   return [
     {
       title: 'PFI DETAILS',
       pairs: [
         { label: 'PFI Number', value: pfi.pfiNumber, bold: true },
+        { label: 'Type', value: gantry ? 'GANTRY' : 'COASTAL', bold: true },
         { label: 'Status', value: pfi.status === 'active' ? 'ACTIVE' : 'FINISHED', bold: true },
         { label: 'Location', value: dash(pfi.locationName) },
         { label: 'Product', value: dash(pfi.productName) },
         { label: 'PFI Date', value: pfi.pfiDate ? new Date(pfi.pfiDate) : '—', fmt: pfi.pfiDate ? DATE_FMT : undefined },
         { label: 'Created', value: pfi.createdAt ? new Date(pfi.createdAt) : '—', fmt: pfi.createdAt ? DATE_FMT : undefined },
         { label: 'Date Completed', value: pfi.closureDate ? new Date(pfi.closureDate) : '—', fmt: pfi.closureDate ? DATE_FMT : undefined },
-        { label: 'Quantity (MT)', value: Number(pfi.qtyVolumeMt) || f.blQtyMt || 0, fmt: '#,##0.000' },
-        { label: 'Vessel Name', value: dash(pfi.vesselName) },
-        { label: 'Vessel Broker', value: dash(pfi.vesselBroker) },
-        { label: 'Surveyor', value: dash(pfi.surveyorName) },
-        { label: 'Surveyor Phone', value: dash(pfi.surveyorPhone) },
+        // A gantry batch has no vessel, no surveyor and no tonnage certificate
+        // — printing those four rows as dashes answers questions nobody asked.
+        ...(gantry
+          ? ([
+              { label: 'Number of Tickets', value: pfi.ticketCount ?? '—', fmt: pfi.ticketCount != null ? '#,##0' : undefined },
+            ] as Pair[])
+          : ([
+              { label: 'Quantity (MT)', value: Number(pfi.qtyVolumeMt) || f.blQtyMt || 0, fmt: '#,##0.000' },
+              { label: 'Vessel Name', value: dash(pfi.vesselName) },
+              { label: 'Vessel Broker', value: dash(pfi.vesselBroker) },
+              { label: 'Surveyor', value: dash(pfi.surveyorName) },
+              { label: 'Surveyor Phone', value: dash(pfi.surveyorPhone) },
+            ] as Pair[])),
       ],
     },
-    {
-      title: 'BL FIGURES',
-      pairs: [
-        { label: 'BL Quantity (Litres)', value: f.blQtyLitres ?? '—', fmt: f.blQtyLitres != null ? QTY : undefined },
-        { label: 'BL Quantity (MT)', value: f.blQtyMt ?? '—', fmt: f.blQtyMt != null ? '#,##0.000' : undefined },
-        { label: 'Price Per Litre', value: f.pricePerLitre ?? '—', fmt: f.pricePerLitre != null ? NGN : undefined },
-        { label: 'PFI Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined, bold: true },
-      ],
-    },
-    {
-      title: 'TANK FIGURES',
-      pairs: [
-        { label: 'Tank Quantity (Litres)', value: f.tankQtyLitres, fmt: QTY },
-        // Signed on purpose: a shortage is red, an over-discharge green, and
-        // the reading beside it says which in words for a monochrome print.
-        { label: 'Surplus/Deficit (Litres)', value: deficit ?? '—', fmt: deficit != null ? '#,##0 "L";[Red] #,##0 "L"' : undefined, tone: deficit != null ? 'signed' : 'plain' },
-        {
-          label: 'Reading',
-          value: deficit == null ? '—' : deficit < 0 ? 'DEFICIT' : deficit > 0 ? 'SURPLUS' : 'EXACT',
-          tone: deficit == null ? 'plain' : deficit < 0 ? 'bad' : deficit > 0 ? 'good' : 'plain',
-        },
-      ],
-    },
+    // Coastal is billed on the BL figure and measured again in the tank, so it
+    // reports the two side by side. Gantry has one quantity and nothing to
+    // reconcile it against, so the two sections collapse into one.
+    ...(gantry
+      ? [
+          {
+            title: 'QUANTITY & VALUE',
+            pairs: [
+              { label: `Quantity (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
+              { label: 'Number of Tickets', value: pfi.ticketCount ?? '—', fmt: pfi.ticketCount != null ? '#,##0' : undefined },
+              { label: `Price Per ${u.singular}`, value: f.pricePerLitre ?? '—', fmt: f.pricePerLitre != null ? NGN : undefined },
+              { label: 'PFI Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined, bold: true },
+              { label: 'Sales Value', value: f.revenue, fmt: NGN, tone: 'good', bold: true },
+            ] as Pair[],
+          },
+        ]
+      : [
+          {
+            title: 'BL FIGURES',
+            pairs: [
+              { label: `BL Quantity (${u.plural})`, value: f.blQtyLitres ?? '—', fmt: f.blQtyLitres != null ? UQTY : undefined },
+              { label: 'BL Quantity (MT)', value: f.blQtyMt ?? '—', fmt: f.blQtyMt != null ? '#,##0.000' : undefined },
+              { label: `Price Per ${u.singular}`, value: f.pricePerLitre ?? '—', fmt: f.pricePerLitre != null ? NGN : undefined },
+              { label: 'PFI Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined, bold: true },
+            ] as Pair[],
+          },
+          {
+            title: 'TANK FIGURES',
+            pairs: [
+              { label: `Tank Quantity (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
+              // Signed on purpose: a shortage is red, an over-discharge green, and
+              // the reading beside it says which in words for a monochrome print.
+              { label: `Surplus/Deficit (${u.plural})`, value: deficit ?? '—', fmt: deficit != null ? `${UQTY};[Red] ${UQTY}` : undefined, tone: deficit != null ? 'signed' : 'plain' },
+              {
+                label: 'Reading',
+                value: deficit == null ? '—' : deficit < 0 ? 'DEFICIT' : deficit > 0 ? 'SURPLUS' : 'EXACT',
+                tone: deficit == null ? 'plain' : deficit < 0 ? 'bad' : deficit > 0 ? 'good' : 'plain',
+              },
+            ] as Pair[],
+          },
+        ]),
     {
       // Sold means payment confirmed, not loaded out — the same rule the
       // finance report uses, so Total Sold here and the Confirmed Orders
@@ -216,27 +261,27 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       // "Still to load" names the gap where the trucks are behind the money.
       title: 'STOCK MOVEMENT',
       pairs: [
-        { label: 'Initial Stock (Litres)', value: f.tankQtyLitres, fmt: QTY },
-        { label: 'Total Sold (Litres)', value: f.sold, fmt: QTY, bold: true },
-        { label: 'Tank Balance (Litres)', value: f.remaining, fmt: QTY, bold: true },
+        { label: `Initial Stock (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
+        { label: `Total Sold (${u.plural})`, value: f.sold, fmt: UQTY, bold: true },
+        { label: `${gantry ? 'Balance' : 'Tank Balance'} (${u.plural})`, value: f.remaining, fmt: UQTY, bold: true },
         { label: 'Percentage Sold', value: f.sellThrough ?? '—', fmt: f.sellThrough != null ? PCT : undefined },
         // { label: 'Orders (Paid)', value: pfi.orderCount ?? 0, fmt: '#,##0' },
-        { label: 'Loaded Quantity (Litres)', value: f.movementQty, fmt: QTY },
-        { label: 'Unloaded Quantity (Litres)', value: Math.max(0, f.sold - f.movementQty), fmt: QTY, tone: f.sold - f.movementQty > 0 ? 'bad' : 'plain' },
+        { label: `Loaded Quantity (${u.plural})`, value: f.movementQty, fmt: UQTY },
+        { label: `Unloaded Quantity (${u.plural})`, value: Math.max(0, f.sold - f.movementQty), fmt: UQTY, tone: f.sold - f.movementQty > 0 ? 'bad' : 'plain' },
         // { label: 'Delivery Allocated (Litres)', value: f.allocationQty, fmt: QTY },
       ],
     },
     {
       title: 'FINANCIAL SUMMARY',
       pairs: [
-        { label: 'PFI (Cargo) Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined },
+        { label: gantry ? 'PFI Value' : 'PFI (Cargo) Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined },
         { label: 'Total Expenses', value: expensesApproved, fmt: NGN },
         { label: 'Pending Expenses', value: awaiting, fmt: NGN, tone: awaiting > 0 ? 'bad' : 'plain' },
         { label: 'Total Cost', value: f.totalCost ?? '—', fmt: f.totalCost != null ? NGN : undefined },
-        // Grand total cost ÷ BL litres — what the batch cost per litre the
-        // papers say was bought.
-        { label: 'Landing Cost/Litre', value: f.landingCostPerLitre ?? '—', fmt: f.landingCostPerLitre != null ? NGN : undefined, bold: true },
-        { label: 'Revenue', value: f.revenue, fmt: NGN, tone: 'good' },
+        // Grand total cost ÷ the quantity billed — the BL figure on coastal,
+        // the quantity bought on gantry.
+        { label: `Landing Cost/${u.singular}`, value: f.landingCostPerLitre ?? '—', fmt: f.landingCostPerLitre != null ? NGN : undefined, bold: true },
+        { label: gantry ? 'Sales Value' : 'Revenue', value: f.revenue, fmt: NGN, tone: 'good' },
         // A credit reduces what the batch cost, so it reads as a gain.
         { label: 'Credit Note', value: f.creditBalance || 0, fmt: NGN, tone: f.creditBalance > 0 ? 'good' : 'plain' },
         { label: 'Balance', value: f.profitLoss ?? '—', fmt: f.profitLoss != null ? NGN_SIGNED : undefined, tone: f.profitLoss != null ? 'signed' : 'plain' },
@@ -476,8 +521,10 @@ export async function downloadPfiReportPdf(pfiId: number) {
     if (p.value instanceof Date) return format(p.value, DATE_PATTERN)
     if (typeof p.value === 'number') {
       if (p.fmt === PCT) return `${(p.value * 100).toFixed(1)}%`
-      if (p.fmt === QTY) return `${p.value.toLocaleString()} L`
-      if (p.fmt && p.fmt.includes('L')) return `${p.value.toLocaleString()} L`
+      // jsPDF cannot apply an Excel format code, so the unit is read back out
+      // of it rather than kept in a second list that could drift.
+      const unit = qtyFormatUnit(p.fmt)
+      if (unit) return `${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`
       if (p.fmt === NGN || p.fmt === NGN_SIGNED) return pdfNaira(p.value)
       if (p.fmt === '#,##0.000') return p.value.toLocaleString(undefined, { maximumFractionDigits: 3 })
       return p.value.toLocaleString()
@@ -684,21 +731,27 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   })
 
+  // The quantity columns carry no unit suffix, unlike the per-PFI report's.
+  // One sheet spans the whole portfolio, and a batch of LPG in tonnes sits in
+  // the same column as a cargo of PMS in litres — a column-wide "L" would
+  // relabel every tonnage as litres. The Unit column says what each row is in.
   const COLUMNS = [
     { header: 'PFI', key: 'pfi', width: 30 },
+    { header: 'Type', key: 'type', width: 10 },
     { header: 'Status', key: 'status', width: 12 },
     { header: 'Location', key: 'loc', width: 18 },
     { header: 'Product', key: 'product', width: 22 },
-    { header: 'BL Qty', key: 'bl', width: 16, fmt: QTY },
-    { header: 'Tank Qty', key: 'tank', width: 16, fmt: QTY },
-    { header: 'Surplus/Deficit', key: 'gap', width: 16, fmt: '#,##0 "L";[Red](#,##0 "L")', signed: true },
-    { header: 'Sold', key: 'sold', width: 16, fmt: QTY },
-    { header: 'Remaining', key: 'rem', width: 16, fmt: QTY },
+    { header: 'Unit', key: 'unit', width: 14 },
+    { header: 'BL Qty', key: 'bl', width: 16, fmt: COUNT },
+    { header: 'Tank Qty', key: 'tank', width: 16, fmt: COUNT },
+    { header: 'Surplus/Deficit', key: 'gap', width: 16, fmt: '#,##0;[Red](#,##0)', signed: true },
+    { header: 'Sold', key: 'sold', width: 16, fmt: COUNT },
+    { header: 'Remaining', key: 'rem', width: 16, fmt: COUNT },
     { header: 'Sales Progress', key: 'through', width: 14, fmt: PCT },
     { header: 'PFI (Cargo) Value', key: 'cargo', width: 18, fmt: NGN },
     { header: 'Total Expenses', key: 'exp', width: 18, fmt: NGN },
     { header: 'Total Cost', key: 'cost', width: 18, fmt: NGN },
-    { header: 'Landing Cost per Litre', key: 'landing', width: 16, fmt: NGN },
+    { header: 'Landing Cost per Unit', key: 'landing', width: 16, fmt: NGN },
     { header: 'Revenue', key: 'rev', width: 18, fmt: NGN },
     { header: 'Balance', key: 'profit', width: 18, fmt: NGN_SIGNED, signed: true },
     { header: 'Profit Meaningful?', key: 'meaningful', width: 20 },
@@ -741,9 +794,13 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
     row.height = ROW_HEIGHT.body
     row.values = {
       pfi: p.pfiNumber,
+      type: f.isGantry ? 'Gantry' : 'Coastal',
       status: p.status === 'active' ? 'Active' : 'Finished',
       loc: p.locationName || '',
       product: p.productName || '',
+      unit: unitNames(p.productUnit).plural,
+      // Blank on gantry, which has no shipping papers to differ from — the
+      // Type column beside it is what says so.
       bl: f.blQtyLitres ?? '',
       tank: f.tankQtyLitres,
       gap: f.surplusDeficitLitres ?? '',
@@ -797,7 +854,7 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
   // rather than letting the column quietly understate.
   if (costed < pfis.length) {
     const note = ws.getRow(cursor)
-    note.getCell(1).value = `Note: ${pfis.length - costed} batch(es) have no BL quantity or price and are excluded from the cost and profit totals.`
+    note.getCell(1).value = `Note: ${pfis.length - costed} batch(es) have no quantity or price and are excluded from the cost and profit totals.`
     note.getCell(1).font = { color: { argb: XL.warn } }
     ws.mergeCells(cursor, 1, cursor, COLUMNS.length)
   }

@@ -272,10 +272,22 @@ export interface LpgStationItem {
   subaccountSplitPercentage?: number
 }
 
+/**
+ * The two kinds of batch, which share almost nothing beyond a number.
+ *
+ * A coastal batch arrives by sea: it is billed on the BL figure from the
+ * shipping papers, measured again in the tank, and carries a vessel and a
+ * surveyor. A gantry batch is an allocation bought at the loading gantry and
+ * split into tickets — one quantity, no BL, no vessel, no surveyor.
+ */
+export type PfiType = 'coastal' | 'gantry'
+
 export interface Pfi {
   _id: string
   id?: string | number
   pfiNumber: string
+  /** Absent on rows written before the distinction existed — read as coastal. */
+  pfiType?: PfiType
   status: 'active' | 'finished'
   description?: string
   pfiDate?: string | null
@@ -289,6 +301,8 @@ export interface Pfi {
   blQtyLitres?: number | null
   blQtyMt?: number | null
   qtyVolumeMt?: number
+  /** Gantry only: how many tickets the allocation was split into. */
+  ticketCount?: number | null
   soldQtyLitres?: number
   totalAmount?: string | number
   unitPrice?: string | number

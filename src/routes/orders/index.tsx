@@ -452,8 +452,19 @@ function OrdersDashboard() {
                             <TableRow key={o.id ?? o._id}>
                               <TableCell className="text-muted-foreground">{serial}</TableCell>
                               <TableCell className="font-semibold text-accent">{o.orderNumber}</TableCell>
-                              <TableCell className="text-muted-foreground">
-                                {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
+                              {/* Date over time in one cell rather than a
+                                  column of its own: they answer the same
+                                  question, and two orders on the same day are
+                                  only told apart by the clock. */}
+                              <TableCell className="text-muted-foreground whitespace-nowrap">
+                                {o.createdAt ? (
+                                  <>
+                                    <span className="block">{format(new Date(o.createdAt), 'd MMM yyyy')}</span>
+                                    <span className="block text-xs text-muted-foreground/70">
+                                      {format(new Date(o.createdAt), 'h:mm a')}
+                                    </span>
+                                  </>
+                                ) : '—'}
                               </TableCell>
                               <TableCell>
                                 <span className="block max-w-[14rem] truncate font-medium uppercase">{o.customerName || '—'}</span>

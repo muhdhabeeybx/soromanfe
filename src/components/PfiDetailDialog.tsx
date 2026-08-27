@@ -19,7 +19,7 @@ import {
 import { useCreateVendor } from '#/lib/hooks/useVendors'
 import { VendorField, type VendorFieldValue } from '#/components/VendorField'
 import {
-  naira, litres, pct, moneyTone, SurplusDeficit, SellThroughBar, profitCaveat,
+  naira, qty, pct, moneyTone, unitNames, SurplusDeficit, SellThroughBar, profitCaveat,
 } from '#/routes/pfi/-pfi-utils'
 
 /**
@@ -82,24 +82,52 @@ function Section({ title, children, action }: { title: string; children: React.R
   )
 }
 
-/** The two quantities, side by side, because conflating them is the classic error. */
-function QuantityPair({ f }: { f: PfiFinancials }) {
+/**
+ * The headline quantities.
+ *
+ * Coastal shows two, side by side, because conflating them is the classic
+ * error: you are billed for the BL figure and can only sell what measured into
+ * the tank. Gantry has one quantity and no second figure to confuse it with,
+ * so the slot goes to the ticket count instead of to a blank BL box.
+ */
+function QuantityPair({ f, unit, tickets }: {
+  f: PfiFinancials
+  unit?: string | null
+  tickets?: number | null
+}) {
   return (
     <div className="grid grid-cols-2 gap-3">
-      <div className={cn(PANEL, 'p-3')}>
-        <p className={cn(MICRO, 'text-muted-foreground')}>BL quantity</p>
-        <p className="mt-1 text-lg font-semibold">{litres(f.blQtyLitres)}</p>
-        {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
-          From the shipping papers — what you pay for
-        </p> */}
-      </div>
-      <div className={cn(PANEL, 'p-3')}>
-        <p className={cn(MICRO, 'text-muted-foreground')}>Tank quantity</p>
-        <p className="mt-1 text-lg font-semibold">{litres(f.tankQtyLitres)}</p>
-        {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
-          Measured on discharge — what you sell from
-        </p> */}
-      </div>
+      {f.isGantry ? (
+        <>
+          <div className={cn(PANEL, 'p-3')}>
+            <p className={cn(MICRO, 'text-muted-foreground')}>Quantity</p>
+            <p className="mt-1 text-lg font-semibold">{qty(f.tankQtyLitres, unit)}</p>
+          </div>
+          <div className={cn(PANEL, 'p-3')}>
+            <p className={cn(MICRO, 'text-muted-foreground')}>Tickets</p>
+            <p className="mt-1 text-lg font-semibold">
+              {tickets == null ? '—' : tickets.toLocaleString('en-NG')}
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={cn(PANEL, 'p-3')}>
+            <p className={cn(MICRO, 'text-muted-foreground')}>BL quantity</p>
+            <p className="mt-1 text-lg font-semibold">{qty(f.blQtyLitres, unit)}</p>
+            {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
+              From the shipping papers — what you pay for
+            </p> */}
+          </div>
+          <div className={cn(PANEL, 'p-3')}>
+            <p className={cn(MICRO, 'text-muted-foreground')}>Tank quantity</p>
+            <p className="mt-1 text-lg font-semibold">{qty(f.tankQtyLitres, unit)}</p>
+            {/* <p className="mt-0.5 text-xs leading-tight text-muted-foreground/70">
+              Measured on discharge — what you sell from
+            </p> */}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -151,6 +179,10 @@ export function PfiDetailDialog({
   const pfi = data?.pfi
   const f = pfi?.financials
   const caveat = f ? profitCaveat(f) : null
+  const isGantry = !!f?.isGantry
+  // Every quantity below is in the product's own unit — an LPG batch is
+  // tonnes, and printing " L" after a tonnage is just a wrong figure.
+  const unit = unitNames(pfi?.productUnit)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -167,6 +199,7 @@ export function PfiDetailDialog({
                 <Badge variant={pfi.status === 'active' ? 'default' : 'secondary'}>
                   {pfi.status === 'active' ? 'Active' : 'Finished'}
                 </Badge>
+                <Badge variant="outline">{isGantry ? 'Gantry' : 'Coastal'}</Badge>
               </div>
               <DialogDescription>
                 {[pfi.productName, pfi.locationName].filter(Boolean).join(' · ') || 'No product or location set'}
@@ -174,7 +207,7 @@ export function PfiDetailDialog({
             </DialogHeader>
 
             <div className="space-y-6">
-              <QuantityPair f={f} />
+              <QuantityPair f={f} unit={pfi.productUnit} tickets={pfi.ticketCount} />
 
               {/* A deficit is a real cost and nothing else in the system says so. */}
               {/* {f.deficitCost != null && (
@@ -198,17 +231,17 @@ export function PfiDetailDialog({
                 <Row
                   label="Total Quantity Sold"
                   hint="Orders with payment confirmed"
-                  value={litres(f.sold)}
+                  value={qty(f.sold, pfi.productUnit)}
                   emphasis
                 />
-                <Row label="Quantity Remaining" value={litres(f.remaining)} />
+                <Row label="Quantity Remaining" value={qty(f.remaining, pfi.productUnit)} />
                 {/* Only worth showing when loading is behind payment, which
                     is the case the two figures exist to tell apart. */}
                 {f.movementQty > 0 && f.sold - f.movementQty > 0 && (
                   <Row
                     label="Sold but Unloaded"
                     hint="Paid for but not yet ticketed"
-                    value={litres(f.sold - f.movementQty)}
+                    value={qty(f.sold - f.movementQty, pfi.productUnit)}
                     tone="text-warning"
                   />
                 )}
@@ -220,12 +253,18 @@ export function PfiDetailDialog({
 
               <Section title="Financials">
                 <Row
-                  label="Price per litre" value={naira(f.pricePerLitre)}
+                  label={`Price per ${unit.singular.toLowerCase()}`} value={naira(f.pricePerLitre)}
                 />
                 <Row
-                  label="PFI (Cargo) Value" value={naira(f.pfiValue)}
+                  label={isGantry ? 'PFI Value' : 'PFI (Cargo) Value'} value={naira(f.pfiValue)}
                   // hint="BL quantity × price per litre"
                 />
+                {isGantry && (
+                  <Row
+                    label="Number of Tickets"
+                    value={pfi.ticketCount == null ? '—' : pfi.ticketCount.toLocaleString('en-NG')}
+                  />
+                )}
                 <Row
                   label={`Total Expenses`}
                   // label={`Total Expenses (${data.expenses.length} line${data.expenses.length === 1 ? '' : 's'})`}
@@ -245,7 +284,8 @@ export function PfiDetailDialog({
                     {/* A credit reduces what the batch cost, so it reads as a
                         gain rather than as another cost line. */}
                     <Row
-                      label="Credit Balance" value={`-${naira(f.creditBalance)}`}
+                      label={isGantry ? 'Credit Note' : 'Credit Balance'}
+                      value={`-${naira(f.creditBalance)}`}
                       tone="text-accent"
                       // hint="Rebate, discount or claim credited back"
                     />
@@ -256,8 +296,8 @@ export function PfiDetailDialog({
                   </>
                 )}
                 <Row
-                  label="Landing cost/litre"
-                  hint="Grand total cost ÷ BL quantity"
+                  label={`Landing cost/${unit.singular.toLowerCase()}`}
+                  hint={`Grand total cost ÷ ${isGantry ? 'quantity' : 'BL quantity'}`}
                   value={naira(f.landingCostPerLitre)}
                   emphasis
                 />
@@ -274,11 +314,12 @@ export function PfiDetailDialog({
                   />
                 )} */}
                 <Row
-                  label={`Total Revenue`}
+                  label={isGantry ? 'Sales Value' : 'Total Revenue'}
                   // label={`Total Revenue (${pfi.orderCount} order${pfi.orderCount === 1 ? '' : 's'})`}
                   value={naira(f.revenue)}
                   tone="text-accent"
                   divider
+                  hint={isGantry ? 'Orders on this PFI with payment confirmed' : undefined}
                   // hint="Invoiced value on paid, released, loading and completed orders"
                 />
                 <Row
@@ -286,10 +327,13 @@ export function PfiDetailDialog({
                   emphasis
                 />
                 <Row label="Margin" value={pct(f.margin)} tone={moneyTone(f.margin)} />
-                <Row
-                  label="Surplus/Deficit"
-                  value={<SurplusDeficit litres={f.surplusDeficitLitres} />}
-                />
+                {/* Only coastal measures twice, so only coastal can have a gap. */}
+                {!isGantry && (
+                  <Row
+                    label="Surplus/Deficit"
+                    value={<SurplusDeficit litres={f.surplusDeficitLitres} unit={pfi.productUnit} />}
+                  />
+                )}
               </Section>
 
               {/* The most important thing on the page when a batch is in flight. */}
@@ -423,19 +467,23 @@ export function PfiDetailDialog({
                 <Row label="Commission Officer" value={pfi.commissionOfficerName || '—'} />
               </Section>
 
-              <Section title="Vessel Details">
-                <Row label="Vessel Name" value={pfi.vesselName || '—'} />
-                <Row label="Vessel Broker" value={pfi.vesselBroker || '—'} />
-                <Row label="Surveyor'" value={pfi.surveyorName || '—'} />
-                <Row label="Surveyor's Phone No." value={pfi.surveyorPhone || '—'} />
-              </Section>
+              {/* No vessel ever carried a gantry batch, so four dashes here
+                  would be answering a question that was never asked. */}
+              {!isGantry && (
+                <Section title="Vessel Details">
+                  <Row label="Vessel Name" value={pfi.vesselName || '—'} />
+                  <Row label="Vessel Broker" value={pfi.vesselBroker || '—'} />
+                  <Row label="Surveyor'" value={pfi.surveyorName || '—'} />
+                  <Row label="Surveyor's Phone No." value={pfi.surveyorPhone || '—'} />
+                </Section>
+              )}
 
               <Section title={`Orders · ${data.movements.length}`}>
                 {data.movements.length === 0 ? (
                   <p className="py-3 text-sm text-muted-foreground">
                     No stock has been released against this PFI.
                     {f.sold === 0 && f.tankQtyLitres > 0 && (
-                      <> The whole {litres(f.tankQtyLitres)} still shows as remaining.</>
+                      <> The whole {qty(f.tankQtyLitres, pfi.productUnit)} still shows as remaining.</>
                     )}
                   </p>
                 ) : (
@@ -450,7 +498,7 @@ export function PfiDetailDialog({
                           </p>
                         </div>
                         <span className="shrink-0 text-sm font-normal">
-                          {litres(m.qty_litres)}
+                          {qty(m.qty_litres, pfi.productUnit)}
                         </span>
                       </li>
                     ))}

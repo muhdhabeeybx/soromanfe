@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { format } from 'date-fns'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { FilterBar } from '#/components/FilterBar'
 import { PageHeader } from '#/components/PageHeader'
@@ -219,6 +220,12 @@ function PendingOrdersPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Order No.</TableHead>
+                      {/* How long an order has been waiting is the thing this
+                          desk is actually triaging on, and the row said
+                          nothing about it. Time as well as date: several
+                          orders land on the same day and the clock is what
+                          orders them. */}
+                      <TableHead>Date Placed</TableHead>
                       <TableHead>Customer / Company</TableHead>
                       {/* Location and PFI were filterable from the bar above
                           but nowhere on the row, so a filtered list gave no
@@ -254,6 +261,16 @@ function PendingOrdersPage() {
                         >
                           <TableCell className="font-mono font-semibold whitespace-nowrap text-primary">
                             {order.orderNumber}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                            {order.createdAt ? (
+                              <>
+                                <span className="block">{format(new Date(order.createdAt), 'd MMM yyyy')}</span>
+                                <span className="block text-xs text-muted-foreground/70">
+                                  {format(new Date(order.createdAt), 'h:mm a')}
+                                </span>
+                              </>
+                            ) : '—'}
                           </TableCell>
                           <TableCell>
                             <div className="space-y-0.5">

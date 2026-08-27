@@ -22,7 +22,7 @@ import { MICRO, PANEL, PANEL_RAIL, PANEL_FOOTER } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import {
-  naira, litres, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
+  naira, litres, qty, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
 } from '#/routes/pfi/-pfi-utils'
 import { downloadPfiReport, downloadPfiReportPdf, downloadMasterReport } from '#/routes/pfi/-pfi-report'
 import { routeGuard } from '#/lib/route-guard'
@@ -64,6 +64,7 @@ function PFIDashboard() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
+  const [type, setType] = useState('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'profit', dir: 'asc' })
   const [detailId, setDetailId] = useState<number | null>(null)
   const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
@@ -71,10 +72,11 @@ function PFIDashboard() {
   const { data, isLoading, isError, error, refetch } = usePfiList({
     search: search || undefined,
     status: status !== 'all' ? status : undefined,
+    type: type !== 'all' ? type : undefined,
   })
 
   const pfis = (data?.pfis || []) as PfiWithFinancials[]
-  const hasFilters = !!search || status !== 'all'
+  const hasFilters = !!search || status !== 'all' || type !== 'all'
 
   const rows = useMemo(() => {
     const list = [...pfis]
@@ -214,6 +216,13 @@ function PFIDashboard() {
         <option value="active">Active</option>
         <option value="finished">Finished</option>
         </NativeSelect>
+        {/* Coastal and gantry rows read nothing alike — one has a BL and a
+            surplus, the other tickets — so a mixed list needs separating. */}
+        <NativeSelect className="w-40" value={type} onChange={(e) => setType(e.target.value)}>
+        <option value="all">All types</option>
+        <option value="coastal">Coastal</option>
+        <option value="gantry">Gantry</option>
+        </NativeSelect>
         <div className="flex items-center gap-1">
         <NativeSelect className="w-44" value={sort.key} onChange={(e) => setSortKey(e.target.value as SortKey)}>
         {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
@@ -227,7 +236,7 @@ function PFIDashboard() {
         </Button>
         </div>
         {hasFilters && (
-        <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setStatus('all') }}>
+        <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setStatus('all'); setType('all') }}>
         <X data-icon="inline-start" />
         Clear
         </Button>
@@ -257,6 +266,7 @@ function PFIDashboard() {
             {rows.map((p) => {
               const f = p.financials
               const finished = p.status === 'finished'
+              const gantry = f.isGantry
               const uncosted = f.totalCost == null
               const heroLabel = uncosted
                 ? 'Cost'
@@ -273,6 +283,7 @@ function PFIDashboard() {
                           <StatusChip tone={finished ? 'inert' : 'accent'}>
                             {finished ? 'Finished' : 'Active'}
                           </StatusChip>
+                          <StatusChip tone="inert">{gantry ? 'Gantry' : 'Coastal'}</StatusChip>
                         </div>
                         <p className="mt-0.5 truncate text-sm text-muted-foreground">
                           {[p.productName, p.locationName].filter(Boolean).join(' · ') || '—'}
@@ -307,21 +318,45 @@ function PFIDashboard() {
                           <p className="truncate text-sm font-normal">{naira(f.totalCost)}</p>
                         </div>
                         <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">Revenue</p>
+                          <p className="text-xs text-muted-foreground">{gantry ? 'Sales value' : 'Revenue'}</p>
                           <p className="truncate text-sm font-normal">{naira(f.revenue)}</p>
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">BL Quantity</p>
-                          <p className="truncate text-sm font-normal">{litres(f.blQtyLitres)}</p>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">Tank Quantity</p>
-                          <p className="truncate text-sm font-normal">{litres(f.tankQtyLitres)}</p>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">Surplus/Deficit</p>
-                          <SurplusDeficit litres={f.surplusDeficitLitres} className="text-sm" />
-                        </div>
+                        {/* Gantry has one quantity and no papers to differ from
+                            it, so the BL and surplus slots go to what it does
+                            have: the tickets it was split into. */}
+                        {gantry ? (
+                          <>
+                            <div className="min-w-0">
+                              <p className="text-xs text-muted-foreground">Quantity</p>
+                              <p className="truncate text-sm font-normal">
+                                {qty(f.tankQtyLitres, p.productUnit)}
+                              </p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs text-muted-foreground">Tickets</p>
+                              <p className="truncate text-sm font-normal">
+                                {p.ticketCount == null ? '—' : p.ticketCount.toLocaleString('en-NG')}
+                              </p>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="min-w-0">
+                              <p className="text-xs text-muted-foreground">BL Quantity</p>
+                              <p className="truncate text-sm font-normal">{qty(f.blQtyLitres, p.productUnit)}</p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs text-muted-foreground">Tank Quantity</p>
+                              <p className="truncate text-sm font-normal">{qty(f.tankQtyLitres, p.productUnit)}</p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs text-muted-foreground">Surplus/Deficit</p>
+                              <SurplusDeficit
+                                litres={f.surplusDeficitLitres} unit={p.productUnit} className="text-sm"
+                              />
+                            </div>
+                          </>
+                        )}
                         <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">Total Expenses</p>
                           <p className="truncate text-sm font-normal">{naira(f.totalExpenses)}</p>
@@ -331,7 +366,7 @@ function PFIDashboard() {
                       <div>
                         <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
                           <span>Sales Progress</span>
-                          <span>{litres(f.remaining)} left</span>
+                          <span>{qty(f.remaining, p.productUnit)} left</span>
                         </div>
                         <SellThroughBar value={f.sellThrough} />
                       </div>

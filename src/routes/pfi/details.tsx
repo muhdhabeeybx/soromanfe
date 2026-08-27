@@ -7,8 +7,9 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
 import { Separator } from '#/components/ui/separator'
-import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon } from 'lucide-react'
+import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket } from 'lucide-react'
 import { usePfiDetails, useUpdatePfi, useDeletePfi } from '#/lib/hooks/usePfis'
+import { unitNames } from '#/routes/pfi/-pfi-utils'
 import { useAdminList } from '#/lib/hooks/useAdmin'
 import { useToast } from '#/lib/hooks/useToast'
 import { toNum } from '#/lib/utils'
@@ -84,8 +85,12 @@ function PFIDetails() {
     )
   }
 
-  const unit = pfi.productUnit || (Number(pfi.qtyVolumeMt || 0) > 0 && Number(pfi.startingQtyLitres || 0) === 0 ? 'MT' : 'Litres')
-  const uLower = (unit || '').toLowerCase()
+  const isGantry = pfi.pfiType === 'gantry'
+
+  const rawUnit = pfi.productUnit || (Number(pfi.qtyVolumeMt || 0) > 0 && Number(pfi.startingQtyLitres || 0) === 0 ? 'MT' : 'Litres')
+  const names = unitNames(rawUnit)
+  const unit = names.short
+  const uLower = rawUnit.toLowerCase()
   const isKg = uLower.includes('kg') || uLower.includes('kilogram')
   const isMt = uLower.includes('mt') || uLower.includes('ton')
   const isWeight = isKg || isMt
@@ -104,7 +109,7 @@ function PFIDetails() {
   const primaryStarting = startingLitres
   const primarySold = soldLitres
   const primaryRemaining = remainingLitres
-  const decimals = isKg || isMt ? 2 : 0
+  const decimals = names.decimals
 
   const isActive = pfi.status === 'active'
 
@@ -203,7 +208,11 @@ function PFIDetails() {
                 <Badge variant="outline" className="font-mono text-xs">PFI ID: {pfi._id}</Badge>
                 <Badge variant="outline" className="font-normal text-xs">
                   {isWeight ? <Scale className="size-3 mr-1 text-info inline" /> : <DropletIcon className="size-3 mr-1 text-primary inline" />}
-                  Unit: {unit}
+                  Unit: {names.plural}
+                </Badge>
+                <Badge variant="outline" className="font-normal text-xs">
+                  {isGantry ? <Ticket className="size-3 mr-1 text-info inline" /> : <Package className="size-3 mr-1 text-primary inline" />}
+                  {isGantry ? 'Gantry' : 'Coastal'}
                 </Badge>
                 {isActive ? (
                   <Badge className="bg-success text-success-foreground">Active</Badge>
@@ -251,12 +260,23 @@ function PFIDetails() {
               </div>
               <div>
                 <dt className="text-muted-foreground font-normal">Measurement Unit</dt>
-                <dd className="font-semibold text-foreground mt-0.5">{unit}</dd>
+                <dd className="font-semibold text-foreground mt-0.5">{names.plural}</dd>
               </div>
-              <div>
-                <dt className="text-muted-foreground font-normal">Qty Volume (MT)</dt>
-                <dd className="font-semibold text-foreground mt-0.5">{qtyMt > 0 ? `${fmtQty(qtyMt, 2)} MT` : '—'}</dd>
-              </div>
+              {/* A gantry allocation is never weighed in MT — there is one
+                  quantity, in the product's own unit. */}
+              {isGantry ? (
+                <div>
+                  <dt className="text-muted-foreground font-normal">Number of Tickets</dt>
+                  <dd className="font-semibold text-foreground mt-0.5">
+                    {pfi.ticketCount == null ? '—' : pfi.ticketCount.toLocaleString()}
+                  </dd>
+                </div>
+              ) : (
+                <div>
+                  <dt className="text-muted-foreground font-normal">Qty Volume (MT)</dt>
+                  <dd className="font-semibold text-foreground mt-0.5">{qtyMt > 0 ? `${fmtQty(qtyMt, 2)} MT` : '—'}</dd>
+                </div>
+              )}
               <div>
                 <dt className="text-muted-foreground font-normal">Unit Price</dt>
                 <dd className="font-semibold text-foreground mt-0.5">
@@ -267,7 +287,10 @@ function PFIDetails() {
           </CardContent>
         </Card>
 
-        {/* Card 2: Vessel & Surveyor */}
+        {/* Card 2: Vessel & Surveyor — coastal only. A gantry batch is
+            collected at the loading gantry, so there is no vessel to name and
+            no discharge for a surveyor to measure. */}
+        {!isGantry && (
         <Card>
           <CardHeader className="border-b border-border">
             <div className="flex items-center gap-2">
@@ -301,6 +324,7 @@ function PFIDetails() {
             </dl>
           </CardContent>
         </Card>
+        )}
 
         {/* Card 3: Assigned Officers */}
         <Card>

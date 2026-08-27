@@ -11,7 +11,7 @@ import { Textarea } from '#/components/ui/textarea'
 import { MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import { useFinishPfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
-import { naira, litres } from '#/routes/pfi/-pfi-utils'
+import { naira, qty } from '#/routes/pfi/-pfi-utils'
 
 function Field({
   label, value, onChange, type = 'text', hint, placeholder,
@@ -106,7 +106,7 @@ export function PfiCloseDialog({
           <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/5 p-3">
             <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
             <p className="text-sm text-muted-foreground">
-              <span className="font-normal text-foreground">{litres(f.remaining)}</span> still shows as
+              <span className="font-normal text-foreground">{qty(f.remaining, pfi?.productUnit)}</span> still shows as
               remaining ({Math.round((f.sellThrough ?? 0) * 100)}% sold). Either that stock is genuinely
               unsold, or movements were never recorded against it. Worth checking before closing.
             </p>

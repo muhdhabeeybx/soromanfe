@@ -25,6 +25,60 @@ export function litres(v: number | null | undefined): string {
   return `${Math.round(v).toLocaleString('en-NG')} L`
 }
 
+/**
+ * How a product's unit is written, in the three lengths the UI needs.
+ *
+ * A PFI's quantity is not always litres. LPG is bought and sold in metric
+ * tonnes or kilograms, and every label that said "Litres" regardless was
+ * asking for a tonnage figure under the wrong name — a form that reads
+ * "Quantity (Litres)" beside "Cooking Gas" invites someone to convert, and a
+ * converted figure is a wrong figure.
+ *
+ * Matched on substrings rather than exact equality: the product form offers
+ * "Liters", "Metric Tonnes", "Kilograms", "Barrels" and "US Gallons", but PFIs
+ * predating that carry free text — "Litres", "MT", "Tons" — and those rows
+ * have to keep reading correctly.
+ */
+export type UnitNames = {
+  /** Plural, as the product list writes it: "Metric Tonnes". */
+  plural: string
+  /** "Metric Tonne" — for "Price per …". */
+  singular: string
+  /** "MT" — for figures, where the long form would crowd the number out. */
+  short: string
+  /** Tonnage and weight are fractional; a litre is not. */
+  decimals: number
+}
+
+const UNIT_TABLE: Array<{ match: RegExp; names: UnitNames }> = [
+  { match: /metric|(^|[^a-z])mt([^a-z]|$)|ton/i, names: { plural: 'Metric Tonnes', singular: 'Metric Tonne', short: 'MT', decimals: 2 } },
+  { match: /kilogram|(^|[^a-z])kgs?([^a-z]|$)/i, names: { plural: 'Kilograms', singular: 'Kilogram', short: 'kg', decimals: 2 } },
+  { match: /barrel|(^|[^a-z])bbls?([^a-z]|$)/i, names: { plural: 'Barrels', singular: 'Barrel', short: 'bbl', decimals: 2 } },
+  { match: /gallon/i, names: { plural: 'US Gallons', singular: 'Gallon', short: 'Gal', decimals: 2 } },
+]
+
+const LITRES: UnitNames = { plural: 'Litres', singular: 'Litre', short: 'L', decimals: 0 }
+
+export function unitNames(raw: string | null | undefined): UnitNames {
+  const text = String(raw || '').trim()
+  if (!text) return LITRES
+  return UNIT_TABLE.find((u) => u.match.test(text))?.names || LITRES
+}
+
+/**
+ * A quantity written in its own unit — the unit-aware {@link litres}.
+ *
+ * Same "null is not zero" rule: a quantity nobody has entered reads "—".
+ */
+export function qty(v: number | null | undefined, unit?: string | null): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const u = unitNames(unit)
+  return `${v.toLocaleString('en-NG', {
+    minimumFractionDigits: u.decimals,
+    maximumFractionDigits: u.decimals,
+  })} ${u.short}`
+}
+
 export function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !Number.isFinite(v)) return '—'
   return `${v.toFixed(digits)}%`
@@ -54,9 +108,12 @@ export function profitTint(v: number | null | undefined): string {
  */
 export function SurplusDeficit({
   litres: value,
+  unit,
   className,
 }: {
   litres: number | null
+  /** The product's unit — an LPG cargo's gap is tonnes, not litres. */
+  unit?: string | null
   className?: string
 }) {
   if (value == null) {
@@ -68,7 +125,7 @@ export function SurplusDeficit({
   return (
     <span className={cn(surplus ? 'text-accent' : 'text-destructive', className)}>
       {surplus ? '+' : '−'}
-      {Math.abs(value).toLocaleString('en-NG')} L
+      {qty(Math.abs(value), unit)}
       <span className="ml-1 text-[0.7em] uppercase opacity-70">
         {surplus ? 'surplus' : 'deficit'}
       </span>

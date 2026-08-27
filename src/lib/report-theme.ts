@@ -87,8 +87,29 @@ export const NGN = '₦#,##0.00;[Red](₦#,##0.00)'
  * glance without anyone reaching for the minus sign.
  */
 export const NGN_SIGNED = '[Color10]₦#,##0.00;[Red](₦#,##0.00);₦0.00'
-export const QTY = '#,##0 "L"'
-export const QTY_KG = '#,##0 "kg"'
+/**
+ * A quantity in whatever unit the product is actually measured in.
+ *
+ * Not every batch is litres: LPG is bought and sold in metric tonnes or
+ * kilograms, and a report that suffixed every figure with "L" regardless was
+ * printing a wrong number, not a differently-worded one.
+ */
+export const qtyFormat = (short: string, decimals = 0) =>
+  `#,##0${decimals > 0 ? `.${'0'.repeat(decimals)}` : ''} "${short}"`
+
+/**
+ * The unit a quantity format prints, or null when the format is not one.
+ *
+ * The PDF writer cannot apply Excel format codes, so it re-derives the suffix
+ * rather than carrying a second list of them that could fall out of step.
+ * Deliberately unanchored: the signed surplus/deficit format repeats the same
+ * code twice for its positive and negative halves.
+ */
+export const qtyFormatUnit = (fmt?: string): string | null =>
+  fmt?.match(/#,##0(?:\.0+)?\s*"([^"]+)"/)?.[1] ?? null
+
+export const QTY = qtyFormat('L')
+export const QTY_KG = qtyFormat('kg')
 export const COUNT = '#,##0'
 export const PCT = '0.0%'
 /**

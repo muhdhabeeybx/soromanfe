@@ -15,13 +15,23 @@ export type { Pfi }
  * `totalExpenses` is always a number.
  */
 export type PfiFinancials = {
-  /** Documented quantity from the shipping papers — what you are charged for. */
+  /** True when this batch was bought at the gantry rather than shipped in. */
+  isGantry: boolean
+  /**
+   * Documented quantity from the shipping papers — what you are charged for.
+   * Always null on gantry: there are no shipping papers.
+   */
   blQtyLitres: number | null
   /** The same BL figure in MT, alongside the litres one. */
   blQtyMt: number | null
   /** Measured quantity in the tank — what you can actually sell. */
   tankQtyLitres: number
-  /** Tank − BL. Negative is a deficit. Null until BL is entered. */
+  /**
+   * The quantity every money figure here was computed against: the BL figure
+   * on coastal, the bought quantity on gantry.
+   */
+  costQtyLitres: number | null
+  /** Tank − BL. Negative is a deficit. Null until BL is entered, and on gantry. */
   surplusDeficitLitres: number | null
   pricePerLitre: number | null
   /** BL × price. Never the tank quantity. */
@@ -269,7 +279,7 @@ export type PfiMovement = {
   created_at: string
 }
 
-export function usePfiList(params?: { search?: string; status?: string; location?: string | number; page?: number; limit?: number }) {
+export function usePfiList(params?: { search?: string; status?: string; type?: string; location?: string | number; page?: number; limit?: number }) {
   return useQuery({
     queryKey: ['pfis', params],
     queryFn: async () => {
@@ -279,12 +289,19 @@ export function usePfiList(params?: { search?: string; status?: string; location
   })
 }
 
+/**
+ * One PFI, with its money figures.
+ *
+ * The endpoint has always decorated the row with `financials` — this used to
+ * be typed as a bare `Pfi`, which hid the sales value the gantry form needs to
+ * show back.
+ */
 export function usePfiDetails(id: string) {
   return useQuery({
     queryKey: ['pfis', id],
     queryFn: async () => {
       const res = await api.get(`/pfis/${id}`)
-      return res.data.data.pfi as Pfi
+      return res.data.data.pfi as PfiWithFinancials
     },
     enabled: !!id,
   })
