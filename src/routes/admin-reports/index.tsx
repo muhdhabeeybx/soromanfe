@@ -24,7 +24,7 @@ import { cn, getErrorMessage } from '#/lib/utils'
 import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
-import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, type ReportType } from '#/routes/my-report/-report-config'
+import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
 import { fetchDailyReportsForDate, type DailyReportRow } from './-hub-data'
 import { exportReportsHub, emailReportsHub } from './-export'
 
@@ -447,7 +447,10 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
                   </StatusChip>
                 </TableCell>
                 {fields.map((f) => {
-                  const v = r[f.key]
+                  // reportValue, not r[f.key]: the commission report's two
+                  // outstanding figures postdate the rows that still have to
+                  // state them, and those work out from what the row carries.
+                  const v = reportValue(r, f.key)
                   const isStructured = f.type === 'priceBands' || f.type === 'topCustomers'
                   const display = f.type === 'priceBands' ? formatPriceBands(v)
                     : f.type === 'topCustomers' ? formatTopCustomers(v)

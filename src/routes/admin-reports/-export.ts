@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import api from '#/lib/api/http'
-import { ALL_TYPES, REPORTS, allFields } from '#/routes/my-report/-report-config'
+import { ALL_TYPES, REPORTS, allFields, reportValue } from '#/routes/my-report/-report-config'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import type { DailyReportRow } from './-hub-data'
 
@@ -128,7 +128,10 @@ export async function buildReportsHubWorkbook(
           r.submittedByName || '',
           STATUS_LABEL[r.status] || r.status,
           ...fields.map((f) => {
-            const v = r[f.key]
+            // reportValue, not r[f.key]: the commission report's two
+            // outstanding figures postdate the rows that still have to state
+            // them, and those work out from what the row does carry.
+            const v = reportValue(r, f.key)
             if (f.type === 'priceBands') {
               return Array.isArray(v) && v.length
                 ? (v as Array<{ price: unknown; litres: unknown }>)

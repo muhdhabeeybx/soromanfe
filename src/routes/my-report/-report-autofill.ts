@@ -6,6 +6,9 @@ import type { ReportType } from './-report-config'
 
 const PAGE_LIMIT = 100
 
+/** An order that actually reached a truck, as against one merely placed. */
+export const LOADED_STATUSES = ['Loading', 'Completed']
+
 /**
  * Every order created on one date, company-wide.
  *
@@ -41,8 +44,11 @@ export const ordersForPfi = (orders: Order[], pfiId: string | number | null | un
   pfiId ? orders.filter((o) => Number(o.pfiId) === Number(pfiId)) : []
 )
 
+export const loadedOrders = (orders: Order[]) => orders.filter((o) => LOADED_STATUSES.includes(o.status))
+
 export const sumQuantity = (orders: Order[]) => orders.reduce((s, o) => s + Number(o.quantity || 0), 0)
-export const sumAmount = (orders: Order[]) => orders.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
+export const countCustomers = (orders: Order[]) =>
+  new Set(orders.map((o) => o.customerId).filter(Boolean)).size
 
 /** Groups by unit price so a day sold at several prices seeds one band each. */
 export function suggestPriceBands(orders: Order[]): Array<{ price: number; litres: number }> {
@@ -69,46 +75,53 @@ export function topCustomersFrom(orders: Order[], n = 5): TopCustomer[] {
   return [...byCustomer.values()].sort((a, b) => b.litres - a.litres).slice(0, n)
 }
 
+export type TruckCounts = { entered: number; exited: number; loaded: number }
+
 /**
- * Gate-in/gate-out counts for one location on one date, from the real truck
- * timestamps rather than a hand-typed guess.
+ * The trucks behind a set of orders: how many were made ready, and how many
+ * the gate saw in and out on the day.
  *
- * Mirrors security-report's own build(): candidates are that day's orders at
- * the location that reached loading, then each order's trucks are fetched to
- * read security_entered_at / security_exited_at. N+1, but bounded to one
- * location's one day, matching the existing precedent for this data.
+ * Read from the real truck records rather than hand-typed guesses. There is no
+ * truck count on an order, so each one's trucks are fetched — N+1, but bounded
+ * to a single PFI's or location's single day, which is the precedent the
+ * security report set for exactly this data.
+ *
+ * Callers scope the orders themselves (by PFI, by location, by status), and
+ * every caller scopes to something smaller than the whole company — a
+ * company-wide day would be a request per order with nothing to show for it.
  */
-export function useGateTruckCounts(dayOrders: Order[] | undefined, location: string, date: string, enabled: boolean) {
+export function useTruckCounts(orders: Order[] | undefined, date: string, enabled: boolean) {
+  const ids = (orders || []).map((o) => o._id).sort()
   return useQuery({
-    queryKey: ['daily-reports-gate-counts', location, date],
-    queryFn: async () => {
-      const candidates = (dayOrders || []).filter(
-        (o) => (o.depotName || o.state) === location && ['Loading', 'Completed'].includes(o.status),
-      )
+    queryKey: ['daily-reports-truck-counts', date, ids],
+    queryFn: async (): Promise<TruckCounts> => {
       const range = { start: startOfDay(new Date(date)), end: endOfDay(new Date(date)) }
       const batches = await Promise.all(
-        candidates.map((o) => (
-          api.get(`/orders/${o._id}/trucks`)
+        ids.map((id) => (
+          api.get(`/orders/${id}/trucks`)
             .then((r) => r.data.data.trucks || [])
             .catch(() => [])
         )),
       )
       let entered = 0
       let exited = 0
+      let loaded = 0
       for (const trucks of batches) {
         for (const t of trucks as Array<{ securityEnteredAt?: string; securityExitedAt?: string }>) {
+          loaded++
           if (t.securityEnteredAt && isWithinInterval(new Date(t.securityEnteredAt), range)) entered++
           if (t.securityExitedAt && isWithinInterval(new Date(t.securityExitedAt), range)) exited++
         }
       }
-      return { entered, exited }
+      return { entered, exited, loaded }
     },
-    enabled: enabled && !!location && !!date && !!dayOrders,
+    enabled: enabled && !!date && !!orders,
   })
 }
 
 /** Yesterday's report for the same PFI and role — the read-only reference
- * a product manager's "remarks from yesterday" line points at. */
+ * a product manager's "remarks from yesterday" line points at, and where the
+ * sales manager's two settlement figures start from. */
 export function useYesterdayReport(
   type: ReportType, location: string, pfiNumber: string, yesterday: string, enabled: boolean,
 ) {

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { Loader2, Trash2, Pencil, Download, Plus, X, Eye } from 'lucide-react'
+import { Loader2, Trash2, Pencil, Download, Plus, X, Eye, RotateCcw } from 'lucide-react'
 
 import api from '#/lib/api/http'
 import { Button } from '#/components/ui/button'
@@ -24,45 +24,33 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { NativeSelect } from '#/components/ui/native-select'
 import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
-import { STATUS_TONE, allFields, REPORTS, type ReportDef, type FieldDef, type ReportType } from './-report-config'
 import {
-  useDayOrders, useGateTruckCounts, useYesterdayReport, usePfiDeposits,
-  ordersForPfi, suggestPriceBands, sumQuantity, sumAmount, topCustomersFrom,
+  STATUS_TONE, allFields, derivedFor, reportValue, bandTotals, COMPANY_WIDE, REPORTS,
+  type ReportDef, type FieldDef, type ReportType,
+} from './-report-config'
+import {
+  useDayOrders, useTruckCounts, useYesterdayReport, usePfiDeposits,
+  ordersForPfi, loadedOrders, suggestPriceBands, sumQuantity, countCustomers, topCustomersFrom,
 } from './-report-autofill'
 
 const PAGE_SIZE = 1000
 
-const money = (v: unknown) => naira(Number(v ?? 0))
-const num = (v: unknown) => Number(v ?? 0).toLocaleString()
+/** A dash, not a zero: a figure the report never carried is missing, not nil,
+ * and printing ₦0.00 under it is the difference between "no answer" and "no
+ * money". */
+const blank = (v: unknown) => v == null || v === '' || Number.isNaN(Number(v))
+const money = (v: unknown) => (blank(v) ? '—' : naira(Number(v)))
+const num = (v: unknown) => (blank(v) ? '—' : Number(v).toLocaleString())
 /** A volume with the batch's own unit — "45,000 Litres", "160 kg". */
-const withUnit = (v: unknown, unit: string) => `${num(v)}${unit ? ` ${unit}` : ''}`
-
-/**
- * A column's value for the history table.
- *
- * Most read straight off the saved row. The commission report's outstanding
- * and remaining figures are derived instead of stored — a stored total drifts
- * the moment one of its inputs is corrected — so they are worked out here,
- * from the same arithmetic the form shows while filling it in. Blank, not 0,
- * when the figure they are measured against was never entered.
- */
-const columnValue = (row: Record<string, unknown>, key: string): unknown => {
-  const paid = Number(row.amountPaid ?? 0)
-  if (key === 'commissionOutstanding') {
-    return row.commissionDue == null ? '' : Number(row.commissionDue) - paid
-  }
-  if (key === 'fundsRemaining') {
-    return row.fundsReceived == null ? '' : Number(row.fundsReceived) - paid
-  }
-  return row[key]
-}
+const withUnit = (v: unknown, unit: string) => (blank(v) ? '—' : `${num(v)}${unit ? ` ${unit}` : ''}`)
 
 type Band = { price: string; litres: string }
 type TopRow = { name: string; phone: string; litres: string }
 const emptyTopRows = (): TopRow[] => Array.from({ length: 5 }, () => ({ name: '', phone: '', litres: '' }))
 
 /** Empty string rather than 0, so an untouched number field stays blank.
- * Structured and computed fields live in their own state, not here. */
+ * The two table fields keep their own state; every other field, derived ones
+ * included, lives here and is saved from here. */
 const blankForm = (def: ReportDef) => {
   const out: Record<string, string> = {
     reportDate: format(new Date(), 'yyyy-MM-dd'),
@@ -70,13 +58,33 @@ const blankForm = (def: ReportDef) => {
     pfiNumber: '',
   }
   for (const f of allFields(def)) {
-    if (f.type === 'priceBands' || f.type === 'topCustomers' || f.computed) continue
+    if (f.type === 'priceBands' || f.type === 'topCustomers') continue
     out[f.key] = ''
   }
   return out
 }
 
-function Field({ field, value, onChange, unit }: { field: FieldDef; value: string; onChange: (v: string) => void; unit?: string }) {
+/**
+ * One line of the form.
+ *
+ * A derived field is an ordinary input that happens to arrive filled in. It
+ * follows the figures behind it until somebody types their own number, and
+ * from then on it is theirs — with a way back to the worked-out value, which
+ * is the only thing an override needs that a plain field does not.
+ */
+function Field({
+  field, value, onChange, unit, overridden, suggestion, onRestore,
+}: {
+  field: FieldDef
+  value: string
+  onChange: (v: string) => void
+  unit?: string
+  /** Hand-typed over a derivation that would have said something else. */
+  overridden?: boolean
+  /** What the derivation says, for the "back to" line. */
+  suggestion?: string
+  onRestore?: () => void
+}) {
   return (
     <div className={cn('space-y-1.5', field.full && 'sm:col-span-2')}>
       <Label htmlFor={field.key}>{field.label}</Label>
@@ -103,112 +111,124 @@ function Field({ field, value, onChange, unit }: { field: FieldDef; value: strin
       ) : (
         <Input id={field.key} type="text" value={value} onChange={(e) => onChange(e.target.value)} />
       )}
-      {field.hint && <p className="text-xs text-muted-foreground/70">{field.hint}</p>}
+      {overridden && onRestore ? (
+        <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground/70">
+          <span>Your figure, not the worked-out {suggestion ? formatValue(field, suggestion, unit) : 'one'}.</span>
+          <button
+            type="button" onClick={onRestore}
+            className="inline-flex items-center gap-1 text-accent hover:underline"
+          >
+            <RotateCcw className="size-3" />
+            Use it instead
+          </button>
+        </p>
+      ) : (
+        field.hint && <p className="text-xs text-muted-foreground/70">{field.hint}</p>
+      )}
     </div>
   )
 }
 
-function ComputedField({ field, value, unit }: { field: FieldDef; value: string; unit?: string }) {
-  return (
-    <div className={cn('space-y-1.5', field.full && 'sm:col-span-2')}>
-      <Label>{field.label}</Label>
-      <div className="flex h-9 items-center rounded-lg border border-dashed border-foreground/20 bg-muted/30 px-2.5 text-sm">
-        {value === '' ? '—' : field.type === 'money' ? money(value) : field.unit && unit ? withUnit(value, unit) : num(value)}
-      </div>
-      <p className="text-xs text-muted-foreground/70">Computed — not editable.</p>
-    </div>
-  )
-}
+/** A raw field value the way the field itself reads — money, volume or count. */
+const formatValue = (field: FieldDef, value: unknown, unit?: string) => (
+  field.type === 'money' ? money(value) : field.unit && unit ? withUnit(value, unit) : num(value)
+)
 
 /**
- * A day can sell at several prices. Add one row per price; litres sold and
- * the total are summed from the rows rather than typed separately, so the
- * two can never disagree.
+ * A day can sell at several prices: one row per price.
+ *
+ * Every cell is editable, and the rows arrive filled in from the day's own
+ * orders. They used to be add-only — a wrong figure had to be deleted and
+ * re-keyed — and on the compliance sheet nothing seeded them at all, so the
+ * volume and value the whole report exists to state came out as zero.
  */
-function PriceBandsEditor({ bands, onChange }: { bands: Band[]; onChange: (b: Band[]) => void }) {
-  const [price, setPrice] = useState('')
-  const [litres, setLitres] = useState('')
-
-  const add = () => {
-    if (!price || !litres) return
-    onChange([...bands, { price, litres }])
-    setPrice('')
-    setLitres('')
+function PriceBandsEditor({ bands, onChange, unit }: { bands: Band[]; onChange: (b: Band[]) => void; unit?: string }) {
+  const set = (i: number, patch: Partial<Band>) => {
+    const next = [...bands]
+    next[i] = { ...next[i], ...patch }
+    onChange(next)
   }
   const remove = (i: number) => onChange(bands.filter((_, idx) => idx !== i))
 
-  const totalLitres = bands.reduce((s, b) => s + Number(b.litres || 0), 0)
-  const totalAmount = bands.reduce((s, b) => s + Number(b.litres || 0) * Number(b.price || 0), 0)
+  const totals = bandTotals(bands)
 
   return (
     <div className="space-y-2 sm:col-span-2">
       <Label>Today's price(s)</Label>
-      {bands.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-foreground/15">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 text-left">Price</th>
-                <th className="px-3 py-2 text-left">Litres</th>
-                <th className="px-3 py-2 text-right">Amount</th>
-                <th className="w-8" />
+      <div className="overflow-hidden rounded-lg border border-foreground/15">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 text-left">Price / litre</th>
+              <th className="px-3 py-2 text-left">Qty sold at this price</th>
+              <th className="px-3 py-2 text-right">Amount</th>
+              <th className="w-8" />
+            </tr>
+          </thead>
+          <tbody>
+            {bands.length === 0 ? (
+              <tr className="border-t border-foreground/10">
+                <td className="px-3 py-3 text-muted-foreground" colSpan={4}>
+                  No price added yet.
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {bands.map((b, i) => (
-                <tr key={i} className="border-t border-foreground/10">
-                  <td className="px-3 py-1.5">{money(Number(b.price))}</td>
-                  <td className="px-3 py-1.5">{num(Number(b.litres))}</td>
-                  <td className="px-3 py-1.5 text-right">{money(Number(b.price) * Number(b.litres))}</td>
-                  <td className="px-1">
-                    <button
-                      type="button" onClick={() => remove(i)}
-                      className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <X className="size-3.5" />
-                      <span className="sr-only">Remove</span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+            ) : bands.map((b, i) => (
+              <tr key={i} className="border-t border-foreground/10">
+                <td className="p-1">
+                  <NumberInput
+                    allowDecimal value={b.price} onValueChange={(v) => set(i, { price: v })}
+                    className="h-8 border-0 bg-transparent shadow-none focus-visible:ring-1"
+                  />
+                </td>
+                <td className="p-1">
+                  <NumberInput
+                    value={b.litres} onValueChange={(v) => set(i, { litres: v })}
+                    className="h-8 border-0 bg-transparent shadow-none focus-visible:ring-1"
+                  />
+                </td>
+                <td className="px-3 py-1.5 text-right">{money(Number(b.price || 0) * Number(b.litres || 0))}</td>
+                <td className="px-1">
+                  <button
+                    type="button" onClick={() => remove(i)}
+                    className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <X className="size-3.5" />
+                    <span className="sr-only">Remove</span>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          {totals.count > 0 && (
             <tfoot>
               <tr className="border-t border-foreground/15 bg-muted/20 font-medium">
-                <td className="px-3 py-1.5" colSpan={2}>Litres sold today: {num(totalLitres)}</td>
-                <td className="px-3 py-1.5 text-right" colSpan={2}>Total: {money(totalAmount)}</td>
+                <td className="px-3 py-1.5" colSpan={2}>
+                  Total volume: {withUnit(totals.litres, unit || 'Litres')}
+                </td>
+                <td className="px-3 py-1.5 text-right" colSpan={2}>Total: {money(totals.value)}</td>
               </tr>
             </tfoot>
-          </table>
-        </div>
-      )}
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
-          <Label className="text-xs">Price / litre</Label>
-          <NumberInput
-            allowDecimal className="w-32"
-            value={price} onValueChange={setPrice}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Qty sold at this price</Label>
-          <NumberInput
-            className="w-36"
-            value={litres} onValueChange={setLitres}
-          />
-        </div>
-        <Button type="button" variant="outline" size="sm" onClick={add} disabled={!price || !litres}>
+          )}
+        </table>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground/70">
+          Suggested from today's orders — one row per price the product sold at. The volume, value and
+          average price below follow these rows.
+        </p>
+        <Button
+          type="button" variant="outline" size="sm"
+          onClick={() => onChange([...bands, { price: '', litres: '' }])}
+        >
           <Plus data-icon="inline-start" />
           Add price
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground/70">
-        Add a row for every price the product sold at today — litres sold and the total are added up automatically.
-      </p>
     </div>
   )
 }
 
-function TopCustomersEditor({ rows, onChange }: { rows: TopRow[]; onChange: (r: TopRow[]) => void }) {
+function TopCustomersEditor({ rows, onChange, unit }: { rows: TopRow[]; onChange: (r: TopRow[]) => void; unit?: string }) {
   const set = (i: number, patch: Partial<TopRow>) => {
     const next = [...rows]
     next[i] = { ...next[i], ...patch }
@@ -224,7 +244,7 @@ function TopCustomersEditor({ rows, onChange }: { rows: TopRow[]; onChange: (r: 
               <th className="w-10 px-3 py-2 text-left">S/N</th>
               <th className="px-3 py-2 text-left">Name</th>
               <th className="px-3 py-2 text-left">Phone number</th>
-              <th className="px-3 py-2 text-right">Litres</th>
+              <th className="px-3 py-2 text-right">{unit || 'Litres'}</th>
             </tr>
           </thead>
           <tbody>
@@ -297,6 +317,14 @@ export function ReportPanel({
   const [loadedHandoff, setLoadedHandoff] = useState<number | null>(null)
   /** The report open in the read view. */
   const [viewing, setViewing] = useState<any | null>(null)
+  /**
+   * Derived fields the filer has typed their own number into. Those stop
+   * following the arithmetic behind them until "Use it instead" is pressed.
+   */
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({})
+  /** The last value each derived field was auto-filled with, so a figure this
+   * panel did not put there is never quietly wiped. */
+  const autoFilled = useRef<Record<string, string>>({})
 
   // Only active batches can be reported against, and every PFI carries its
   // own location and remaining balance — so location and opening stock are
@@ -323,26 +351,77 @@ export function ReportPanel({
   // runs while editing an existing report: those values are history, not a
   // fresh guess.
   const isNew = editingId === null
-  const needsDayOrders = isNew && def.type !== 'commissions'
-  const { data: dayOrders } = useDayOrders(form.reportDate, needsDayOrders)
-  const pfiOrders = useMemo(() => ordersForPfi(dayOrders || [], pfi?.id), [dayOrders, pfi?.id])
+  /** Whether this report carries one of the two table fields. Both used to be
+   * checked for by name — `def.type === 'sales_manager'` — which is how the
+   * compliance sheet's price rows came to be collected on screen and then
+   * dropped on the way to the server. */
+  const defHasField = (type: FieldDef['type']) => allFields(def).some((f) => f.type === type)
+  // Every report reads the day's orders now. Commissions was the one type left
+  // out, and it filed customer and order counts by hand as a result — all
+  // eight of them blank on live data.
+  const { data: dayOrders } = useDayOrders(form.reportDate, isNew)
+  /**
+   * The orders this report is about.
+   *
+   * A PFI's own, when one is picked. Compliance and commissions may be filed
+   * for the whole company, and then it is the day itself; the roles that
+   * require a PFI never reach the wider list, because their suggestions are
+   * gated on having one.
+   */
+  const scopedOrders = useMemo(
+    () => (pfi ? ordersForPfi(dayOrders || [], pfi.id) : dayOrders || []),
+    [dayOrders, pfi?.id],
+  )
+  /** The gate reports on a place, not on a batch — every truck through it,
+   * whichever PFI the product belonged to. */
+  const locationOrders = useMemo(
+    () => (dayOrders || []).filter((o) => (o.depotName || o.state) === form.location),
+    [dayOrders, form.location],
+  )
 
   const gateEnabled = isNew && def.type === 'security_gate' && !!form.location
-  const { data: gateCounts } = useGateTruckCounts(dayOrders, form.location, form.reportDate, gateEnabled)
+  const { data: gateCounts } = useTruckCounts(
+    gateEnabled ? loadedOrders(locationOrders) : undefined, form.reportDate, gateEnabled,
+  )
 
-  const depositsEnabled = isNew && def.type === 'sales_manager' && !!pfi
+  // Trucks for the three sheets that count them per batch. Always PFI-scoped:
+  // this is a request per order, and a company-wide day is not a shape worth
+  // asking the API for.
+  const pfiTrucksEnabled = isNew && !!pfi
+    && ['sales_manager', 'product_manager', 'commissions'].includes(def.type)
+  const { data: pfiTrucks } = useTruckCounts(
+    pfiTrucksEnabled ? loadedOrders(scopedOrders) : undefined, form.reportDate, pfiTrucksEnabled,
+  )
+
+  const depositsEnabled = isNew && !!pfi && ['sales_manager', 'commissions'].includes(def.type)
   const { data: pfiDeposits } = usePfiDeposits(pfi?.id, depositsEnabled)
 
   const yesterday = format(subDays(new Date(`${form.reportDate || format(new Date(), 'yyyy-MM-dd')}T00:00:00`), 1), 'yyyy-MM-dd')
-  const yesterdayEnabled = def.type === 'product_manager' && !!form.location && !!form.pfiNumber
+  // The sales manager settles yesterday's gap on today's sheet, so it reads
+  // the same row the location manager reads for yesterday's remarks.
+  const yesterdayEnabled = ['product_manager', 'sales_manager'].includes(def.type)
+    && !!form.location && !!form.pfiNumber
   const { data: yesterdayReport } = useYesterdayReport(def.type, form.location, form.pfiNumber, yesterday, yesterdayEnabled)
 
   // ── Suggestions: each effect only ever fills a field that is still blank ──
 
+  /** Fill in what is still empty, leave everything else exactly as typed. */
+  const suggest = (values: Record<string, string | undefined>) => {
+    setForm((f) => {
+      let next = f
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || value === '' || f[key] !== '') continue
+        next = next === f ? { ...f } : next
+        next[key] = value
+      }
+      return next
+    })
+  }
+
   useEffect(() => {
     if (!isNew || !pfi || pfi.financials?.remaining == null) return
     if (def.type !== 'sales_manager' && def.type !== 'product_manager') return
-    setForm((f) => (f.openingStock === '' ? { ...f, openingStock: String(pfi.financials.remaining) } : f))
+    suggest({ openingStock: String(pfi.financials.remaining) })
   }, [pfi?.id, isNew, def.type])
 
   useEffect(() => {
@@ -358,53 +437,74 @@ export function ReportPanel({
     setForm((f) => (f.bankName === '' ? { ...f, bankName: match.bankName, accountNumber: match.accountNumber } : f))
   }, [pfi?.id, bankAccounts, isNew, def.type])
 
+  /**
+   * The price table, seeded from what the day actually sold at.
+   *
+   * Both sheets that carry one get it. Compliance never did, and since its
+   * volume, value and average price are read off this table, every compliance
+   * report filed since it was introduced went out at 0 litres and ₦0 — 101 of
+   * 105 on live data, with not one price row saved between them.
+   */
   useEffect(() => {
-    if (!isNew || !pfi || def.type !== 'sales_manager' || bands.length > 0) return
-    const suggested = suggestPriceBands(pfiOrders)
+    if (!isNew || !dayOrders || !defHasField('priceBands')) return
+    // Compliance may be filed for the whole company; the sales manager's sheet
+    // is always about one batch, so it waits for the pick.
+    if (def.type === 'sales_manager' && !pfi) return
+    if (bands.some((b) => b.price !== '' || b.litres !== '')) return
+    const suggested = suggestPriceBands(scopedOrders)
     if (suggested.length) setBands(suggested.map((b) => ({ price: String(b.price), litres: String(b.litres) })))
-  }, [pfi?.id, pfiOrders, isNew, def.type, bands.length])
+  }, [pfi?.id, scopedOrders, isNew, def.type])
 
   useEffect(() => {
     if (!isNew || !pfi || def.type !== 'product_manager') return
-    const qty = sumQuantity(pfiOrders)
-    if (!qty) return
-    setForm((f) => (f.litresSold === '' ? { ...f, litresSold: String(qty) } : f))
-  }, [pfi?.id, pfiOrders, isNew, def.type])
+    // Ordered and loaded are two different questions on this sheet, and
+    // answering both with every order made the pair meaningless.
+    const ordered = sumQuantity(scopedOrders)
+    const loaded = sumQuantity(loadedOrders(scopedOrders))
+    suggest({
+      receivedStock: ordered ? String(ordered) : '',
+      litresSold: loaded ? String(loaded) : '',
+    })
+  }, [pfi?.id, scopedOrders, isNew, def.type])
 
   useEffect(() => {
-    if (!isNew || def.type !== 'it_compliance' || !dayOrders) return
-    const scoped = pfi ? pfiOrders : dayOrders
+    if (!isNew || !dayOrders) return
+    if (def.type !== 'it_compliance' && def.type !== 'commissions') return
     // Nothing real to suggest yet — e.g. the date just changed and this is
     // the empty result for a day with no orders so far. Writing a hard '0'
     // here would permanently block a later, real count from ever landing,
     // since the field would no longer read as blank.
-    if (scoped.length === 0) return
-    const qty = sumQuantity(scoped)
-    setForm((f) => ({
-      ...f,
-      orderCount: f.orderCount === '' ? String(scoped.length) : f.orderCount,
-      litresSold: f.litresSold === '' ? String(qty) : f.litresSold,
-      avgPrice: f.avgPrice === '' && qty ? String(sumAmount(scoped) / qty) : f.avgPrice,
-    }))
+    if (scopedOrders.length === 0) return
+    suggest({
+      orderCount: String(scopedOrders.length),
+      customerCount: String(countCustomers(scopedOrders)),
+      // Compliance takes its volume from the price rows above instead.
+      litresSold: def.type === 'commissions' ? String(sumQuantity(scopedOrders)) : '',
+    })
+    if (def.type !== 'it_compliance') return
     setTopRows((rows) => {
       if (rows.some((r) => r.name.trim())) return rows
-      const top = topCustomersFrom(scoped)
+      const top = topCustomersFrom(scopedOrders)
       if (!top.length) return rows
       const converted: TopRow[] = top.map((t) => (
         { name: t.name, phone: t.phone, litres: t.litres ? String(t.litres) : '' }
       ))
       return [...converted, ...emptyTopRows()].slice(0, 5)
     })
-  }, [pfi?.id, dayOrders, isNew, def.type])
+  }, [pfi?.id, scopedOrders, isNew, def.type])
 
   useEffect(() => {
     if (!gateCounts || !isNew) return
-    setForm((f) => ({
-      ...f,
-      trucksEntered: f.trucksEntered === '' ? String(gateCounts.entered) : f.trucksEntered,
-      truckCount: f.truckCount === '' ? String(gateCounts.exited) : f.truckCount,
-    }))
+    suggest({
+      trucksEntered: String(gateCounts.entered),
+      truckCount: String(gateCounts.exited),
+    })
   }, [gateCounts, isNew])
+
+  useEffect(() => {
+    if (!pfiTrucks || !isNew || !pfiTrucks.loaded) return
+    suggest({ truckCount: String(pfiTrucks.loaded) })
+  }, [pfiTrucks, isNew])
 
   useEffect(() => {
     if (!pfiDeposits || !isNew) return
@@ -412,58 +512,69 @@ export function ReportPanel({
     const today = pfiDeposits
       .filter((d) => d.createdAt && d.createdAt.slice(0, 10) === form.reportDate)
       .reduce((s, d) => s + Number(d.amount || 0), 0)
-    setForm((f) => ({
-      ...f,
-      totalInflow: f.totalInflow === '' ? String(all) : f.totalInflow,
-      amountPaid: f.amountPaid === '' ? String(today) : f.amountPaid,
-    }))
-  }, [pfiDeposits, isNew, form.reportDate])
+    suggest(def.type === 'commissions'
+      ? { fundsReceived: String(today) }
+      : { totalInflow: String(all), amountPaid: String(today) })
+  }, [pfiDeposits, isNew, def.type, form.reportDate])
 
-  // ── Computed: derived purely from other values, never typed directly ──
+  useEffect(() => {
+    if (!isNew || def.type !== 'sales_manager' || yesterdayReport?.differentials == null) return
+    // Yesterday's gap is settled on today's sheet: short one way is a deficit
+    // to pay, over the other is a surplus to return. Only ever one of the two.
+    const gap = Number(yesterdayReport.differentials)
+    if (!gap) return
+    suggest(gap < 0
+      ? { yesterdayDeficitPayment: String(Math.abs(gap)) }
+      : { yesterdaySurplusPayment: String(gap) })
+  }, [yesterdayReport, isNew, def.type])
 
-  const computed = useMemo(() => {
-    const out: Record<string, string> = {}
-    // Both sheets sell a day at several prices, so both derive their volume
-    // and value from the bands rather than having them typed.
-    if (def.type === 'sales_manager' || def.type === 'it_compliance') {
-      const litres = bands.reduce((s, b) => s + Number(b.litres || 0), 0)
-      const amount = bands.reduce((s, b) => s + Number(b.litres || 0) * Number(b.price || 0), 0)
-      out.litresSold = bands.length ? String(litres) : ''
-      out.totalSalesAmount = bands.length ? String(amount) : ''
-      if (def.type === 'sales_manager') {
-        out.differentials = form.amountPaid !== '' && bands.length ? String(Number(form.amountPaid) - amount) : ''
-      }
-      if (def.type === 'it_compliance') {
-        // Weighted by volume, not a plain mean of the prices — a 100-litre
-        // band and a 40,000-litre one do not weigh the same on the day.
-        out.avgPrice = litres > 0 ? String(amount / litres) : ''
-      }
+  // ── Derived: worked out from the rest of the sheet, and still yours to edit ──
+
+  const derived = useMemo(
+    () => derivedFor(def.type, { ...form, priceBands: bands }),
+    [def.type, form, bands],
+  )
+
+  /**
+   * Keep the derived boxes in step with the figures behind them.
+   *
+   * Only where the filer has not typed their own number — an override is
+   * theirs until they ask for the worked-out figure back. A derivation that
+   * has nothing to say leaves the box alone unless this is the value it put
+   * there itself, so a figure filed before the arithmetic existed (or typed
+   * during a moment when the day's orders had not loaded) is never wiped.
+   */
+  useEffect(() => {
+    const patch: Record<string, string> = {}
+    for (const [key, value] of Object.entries(derived)) {
+      if (overrides[key]) continue
+      const current = form[key] ?? ''
+      if (current === value) continue
+      if (value === '' && current !== '' && current !== autoFilled.current[key]) continue
+      patch[key] = value
     }
-    if (def.type === 'product_manager') {
-      const opening = Number(form.openingStock || 0)
-      const received = Number(form.receivedStock || 0)
-      const loaded = Number(form.litresSold || 0)
-      out.tankBalance = form.openingStock !== '' || form.receivedStock !== '' || form.litresSold !== ''
-        ? String(opening + received - loaded)
-        : ''
-    }
-    if (def.type === 'commissions') {
-      const paid = Number(form.amountPaid || 0)
-      // Blank until the figure they are measured against is entered — an
-      // outstanding of "0" against an unfilled Commission due reads as
-      // settled when nothing is known yet.
-      out.commissionOutstanding = form.commissionDue !== ''
-        ? String(Number(form.commissionDue || 0) - paid)
-        : ''
-      out.fundsRemaining = form.fundsReceived !== ''
-        ? String(Number(form.fundsReceived || 0) - paid)
-        : ''
-    }
-    return out
-  }, [
-    def.type, bands, form.amountPaid, form.openingStock, form.receivedStock,
-    form.litresSold, form.commissionDue, form.fundsReceived,
-  ])
+    if (Object.keys(patch).length === 0) return
+    autoFilled.current = { ...autoFilled.current, ...patch }
+    setForm((f) => ({ ...f, ...patch }))
+  }, [derived, overrides, form])
+
+  /** Typing in a derived box makes the figure yours. */
+  const setField = (field: FieldDef, value: string) => {
+    if (field.derived) setOverrides((o) => (o[field.key] ? o : { ...o, [field.key]: true }))
+    setForm((f) => ({ ...f, [field.key]: value }))
+  }
+
+  /** …and this hands it back to the arithmetic. */
+  const restoreField = (key: string) => {
+    setOverrides((o) => {
+      const next = { ...o }
+      delete next[key]
+      return next
+    })
+    const value = derived[key] ?? ''
+    autoFilled.current[key] = value
+    setForm((f) => ({ ...f, [key]: value }))
+  }
 
   /**
    * Paged by the server — one page number, not the two the upstream version
@@ -498,7 +609,9 @@ export function ReportPanel({
   const reset = () => {
     setForm(blankForm(def))
     setBands([])
-    setTopRows(def.type === 'it_compliance' ? emptyTopRows() : [])
+    setTopRows(defHasField('topCustomers') ? emptyTopRows() : [])
+    setOverrides({})
+    autoFilled.current = {}
     setEditingId(null)
   }
 
@@ -510,25 +623,35 @@ export function ReportPanel({
         allFields(def).filter((f) => f.type === 'number' || f.type === 'money').map((f) => f.key),
       )
       for (const [k, v] of Object.entries(form)) {
-        if (v === '') continue
-        payload[k] = numericKeys.has(k) ? Number(v) : v
+        if (v === '' || v == null) continue
+        if (!numericKeys.has(k)) {
+          payload[k] = v
+          continue
+        }
+        // Never post a NaN. JSON turns it into null, the API coerces that to
+        // 0, and a figure nobody typed lands on the report as zero — which is
+        // how compliance sheets came to record a day's trading at ₦0.
+        const parsed = Number(v)
+        if (Number.isFinite(parsed)) payload[k] = parsed
       }
-      for (const f of allFields(def)) {
-        if (!f.computed) continue
-        const v = computed[f.key]
-        if (v === undefined || v === '') continue
-        payload[f.key] = Number(v)
-      }
-      if (def.type === 'sales_manager') {
+      // The paper form's own tables, saved as tables. Driven by the field list
+      // rather than by report type, so a sheet that grows one is not silently
+      // left out — which is exactly what happened to compliance's price rows:
+      // collected on screen, summarised, and then dropped on the way out.
+      if (defHasField('priceBands')) {
         payload.priceBands = bands
-          .filter((b) => b.price !== '' && b.litres !== '')
-          .map((b) => ({ price: Number(b.price), litres: Number(b.litres) }))
+          .filter((b) => b.price !== '' || b.litres !== '')
+          .map((b) => ({ price: Number(b.price || 0), litres: Number(b.litres || 0) }))
       }
-      if (def.type === 'it_compliance') {
+      if (defHasField('topCustomers')) {
         payload.topCustomers = topRows
           .filter((r) => r.name.trim())
           .map((r) => ({ name: r.name.trim(), phone: r.phone.trim(), litres: Number(r.litres || 0) }))
       }
+      // A whole-company report still needs somewhere to file itself: location
+      // is NOT NULL and the API requires it, so leaving it out failed the
+      // whole submission on a form that calls the field optional.
+      if (!String(payload.location ?? '').trim()) payload.location = COMPANY_WIDE
       return editingId
         ? (await api.patch(`/daily-reports/${editingId}`, payload)).data
         : (await api.post('/daily-reports', payload)).data
@@ -570,24 +693,39 @@ export function ReportPanel({
     }
     const next = blankForm(def)
     next.reportDate = String(r.reportDate ?? '').slice(0, 10)
-    next.location = r.location ?? ''
+    next.location = r.location === COMPANY_WIDE ? '' : r.location ?? ''
     next.pfiNumber = r.pfiNumber ?? ''
     for (const f of allFields(def)) {
-      if (f.type === 'priceBands' || f.type === 'topCustomers' || f.computed) continue
+      if (f.type === 'priceBands' || f.type === 'topCustomers') continue
       next[f.key] = r[f.key] == null ? '' : String(r[f.key])
     }
+    const loadedBands: Band[] = defHasField('priceBands')
+      ? (Array.isArray(r.priceBands) ? r.priceBands : [])
+        .map((b: any) => ({ price: String(b.price ?? ''), litres: String(b.litres ?? '') }))
+      : []
     setForm(next)
-    if (def.type === 'sales_manager') {
-      const loaded = Array.isArray(r.priceBands) ? r.priceBands : []
-      setBands(loaded.map((b: any) => ({ price: String(b.price ?? ''), litres: String(b.litres ?? '') })))
-    }
-    if (def.type === 'it_compliance') {
+    setBands(loadedBands)
+    if (defHasField('topCustomers')) {
       const loaded = Array.isArray(r.topCustomers) ? r.topCustomers : []
       const padded = [...loaded, ...emptyTopRows()].slice(0, 5)
       setTopRows(padded.map((c: any) => ({
         name: c.name ?? '', phone: c.phone ?? '', litres: c.litres != null && c.litres !== '' ? String(c.litres) : '',
       })))
     }
+    /**
+     * A figure that was filed as something other than the arithmetic is one
+     * somebody meant, so it opens as an override rather than being recomputed
+     * away the moment the form loads. Everything else keeps following its
+     * inputs, so correcting a price row still moves the totals with it.
+     */
+    const asFiled = derivedFor(def.type, { ...next, priceBands: loadedBands })
+    const kept: Record<string, boolean> = {}
+    for (const f of allFields(def)) {
+      if (!f.derived || next[f.key] === '' || !asFiled[f.key]) continue
+      if (Number(next[f.key]) !== Number(asFiled[f.key])) kept[f.key] = true
+    }
+    setOverrides(kept)
+    autoFilled.current = { ...asFiled }
     setEditingId(r.id)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -618,25 +756,28 @@ export function ReportPanel({
       ['PFI', r.pfiNumber || '—'],
       ['Submitted by', r.submittedByName || '—'],
     ]
+    const unit = unitForRow(r)
     for (const f of allFields(d)) {
       if (f.type === 'priceBands') {
         for (const b of (Array.isArray(r.priceBands) ? r.priceBands : [])) {
-          lines.push([`Price ${money(b.price)}`, `${num(b.litres)} L`])
+          // The batch's own unit, not a hardcoded "L" — a cooking gas report
+          // reads in kg and always did on screen.
+          lines.push([`Price ${money(b.price)}`, withUnit(b.litres, unit)])
         }
         continue
       }
       if (f.type === 'topCustomers') {
         (Array.isArray(r.topCustomers) ? r.topCustomers : []).forEach((c: any, i: number) => {
-          lines.push([`Top customer #${i + 1}`, `${c.name || '—'} · ${c.phone || '—'} · ${num(c.litres)} L`])
+          lines.push([`Top customer #${i + 1}`, `${c.name || '—'} · ${c.phone || '—'} · ${withUnit(c.litres, unit)}`])
         })
         continue
       }
-      // columnValue, not r[f.key]: the commission report's outstanding and
-      // remaining figures are derived rather than stored, and reading the row
-      // directly would silently drop them.
-      const v = columnValue(r, f.key)
+      // reportValue, not r[f.key]: a commission report filed before the two
+      // outstanding figures had columns of their own still has everything
+      // needed to state them, and reading the row directly drops them.
+      const v = reportValue(r, f.key)
       if (v == null || v === '') continue
-      lines.push([f.label, f.type === 'money' ? money(v) : f.unit ? withUnit(v, unitForRow(r)) : String(v)])
+      lines.push([f.label, f.type === 'money' ? money(v) : f.unit ? withUnit(v, unit) : String(v)])
     }
     return lines
   }
@@ -671,12 +812,14 @@ export function ReportPanel({
     doc.save(`${d.filePrefix}_${(r.location || 'ALL').replace(/\s+/g, '')}_${stamp}.pdf`)
   }
 
-  // A report handed over from another tab, loaded during render rather than
-  // in an effect so the form is correct on the first paint after the switch.
-  if (initialEdit && initialEdit.id !== loadedHandoff && initialEdit.reportType === def.type) {
+  // A report handed over from another tab. Loaded once, on arrival: `edit`
+  // now records which derived figures were filed as overrides, and doing that
+  // during render writes it twice under StrictMode.
+  useEffect(() => {
+    if (!initialEdit || initialEdit.id === loadedHandoff || initialEdit.reportType !== def.type) return
     setLoadedHandoff(initialEdit.id)
     edit(initialEdit)
-  }
+  }, [initialEdit, loadedHandoff, def.type])
 
   const ready = form.reportDate !== '' && (def.requireLocation === false || form.location.trim() !== '')
 
@@ -736,11 +879,15 @@ export function ReportPanel({
                 id="location"
                 value={form.location}
                 readOnly={!!form.pfiNumber}
-                placeholder="Choose a PFI, or type it"
+                placeholder={def.requireLocation === false ? COMPANY_WIDE : 'Choose a PFI, or type it'}
                 onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
               />
               <p className="text-xs text-muted-foreground/70">
-                {form.pfiNumber ? "From the PFI." : 'Filled in when you pick a PFI.'}
+                {form.pfiNumber
+                  ? 'From the PFI.'
+                  : def.requireLocation === false
+                    ? `Filled in when you pick a PFI. Left empty, this files as ${COMPANY_WIDE}.`
+                    : 'Filled in when you pick a PFI.'}
               </p>
             </div>
           </div>
@@ -760,21 +907,22 @@ export function ReportPanel({
               <div className="grid gap-3 sm:grid-cols-2">
                 {section.fields.map((f) => {
                   if (f.type === 'priceBands') {
-                    return <PriceBandsEditor key={f.key} bands={bands} onChange={setBands} />
+                    return <PriceBandsEditor key={f.key} bands={bands} onChange={setBands} unit={formUnit} />
                   }
                   if (f.type === 'topCustomers') {
-                    return <TopCustomersEditor key={f.key} rows={topRows} onChange={setTopRows} />
+                    return <TopCustomersEditor key={f.key} rows={topRows} onChange={setTopRows} unit={formUnit} />
                   }
-                  if (f.computed) {
-                    return <ComputedField key={f.key} field={f} value={computed[f.key] ?? ''} unit={formUnit} />
-                  }
+                  const suggestion = f.derived ? derived[f.key] ?? '' : ''
                   return (
                     <Field
                       key={f.key}
                       field={f}
                       value={form[f.key] ?? ''}
-                      onChange={(v) => setForm((prev) => ({ ...prev, [f.key]: v }))}
+                      onChange={(v) => setField(f, v)}
                       unit={formUnit}
+                      overridden={!!overrides[f.key] && suggestion !== '' && suggestion !== (form[f.key] ?? '')}
+                      suggestion={suggestion}
+                      onRestore={() => restoreField(f.key)}
                     />
                   )
                 })}
@@ -847,7 +995,7 @@ export function ReportPanel({
                       {REPORTS[r.reportType as ReportType]?.roleLabel || r.reportType || '—'}
                     </TableCell>
                     {metricColumns.map((c) => {
-                      const v = columnValue(r, c.key)
+                      const v = reportValue(r, c.key)
                       return (
                         <TableCell key={c.key} className={c.align === 'right' ? 'text-right' : undefined}>
                           {c.money ? money(v) : c.unit ? withUnit(v, unitForRow(r)) : num(v)}
