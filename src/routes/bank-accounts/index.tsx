@@ -104,6 +104,10 @@ function BankAccountsIndex() {
   })
 
   // Linked locations count across all bank accounts
+  // PFIs are the assignment now; depots are derived from them. Counting PFIs
+  // is what tells you how much of the book is actually covered — two PFIs at
+  // one location are two assignments, and counting locations hid that.
+  const uniqueLinkedPfiIds = new Set(bankAccounts.flatMap((acc) => acc.pfiIds || []))
   const uniqueLinkedDepotIds = new Set(bankAccounts.flatMap((acc) => acc.depotIds || []))
   const uniqueLinkedStationIds = new Set(bankAccounts.flatMap((acc) => acc.lpgStationIds || []))
   const activeCount = bankAccounts.filter((a) => a.status === 'Active').length
@@ -119,8 +123,8 @@ function BankAccountsIndex() {
     },
     {
       title: 'Locations Connected',
-      value: uniqueLinkedDepotIds.size + uniqueLinkedStationIds.size,
-      sub: `${uniqueLinkedDepotIds.size} Depots · ${uniqueLinkedStationIds.size} LPG Stations`,
+      value: uniqueLinkedPfiIds.size + uniqueLinkedStationIds.size,
+      sub: `${uniqueLinkedPfiIds.size} PFIs · ${uniqueLinkedDepotIds.size} Locations · ${uniqueLinkedStationIds.size} LPG Stations`,
       icon: Warehouse,
       color: 'text-muted-foreground',
     },

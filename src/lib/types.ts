@@ -584,6 +584,9 @@ export interface BankAccount {
   currency: string
   status: 'Active' | 'Inactive' | 'Suspended'
   isDefault: boolean
+  /** The PFIs that collect into this account — the assignment that matters. */
+  pfiIds: (string | number)[]
+  /** Derived server-side from the locations of `pfiIds`. Never sent by a client. */
   depotIds: (string | number)[]
   depots?: Array<{
     id: string | number

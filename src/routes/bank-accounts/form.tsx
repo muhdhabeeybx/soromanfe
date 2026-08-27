@@ -16,6 +16,7 @@ import {
   type BankAccount,
 } from '#/lib/hooks/useBankAccounts'
 import { useDepots } from '#/lib/hooks/useDepots'
+import { usePfiList } from '#/lib/hooks/usePfis'
 import { useLpgStations } from '#/lib/hooks/useLpgStations'
 import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
@@ -83,16 +84,25 @@ function BankAccountForm() {
   const editingAccount = stateAccount || fetchedAccount
 
   const { data: depots = [], isLoading: isLoadingDepots } = useDepots()
+  // Assignment is per PFI now: two PFIs can run out of one location at the
+  // same time and need separate accounts, which a location-level link cannot
+  // express. The location is shown, never chosen — it is whatever the selected
+  // PFIs sit in, and the server derives depotIds from exactly that.
+  const { data: pfiData, isLoading: isLoadingPfis } = usePfiList({ limit: 500 })
+  const allPfis = pfiData?.pfis ?? []
+  const depotNameById = new Map(depots.map((d) => [Number(d.id), d.name]))
+  const locationOf = (pfi: { locationId?: number | string | null; locationName?: string | null }) =>
+    pfi.locationName || depotNameById.get(Number(pfi.locationId)) || 'No location'
   const { data: lpgStations = [], isLoading: isLoadingStations } = useLpgStations({ limit: 100 })
   const { data: allBankAccounts = [] } = useBankAccounts()
 
-  const alreadyAssignedDepotIds = useMemo(() => {
+  const alreadyAssignedPfiIds = useMemo(() => {
     const assignedSet = new Set<number>()
     for (const acc of allBankAccounts) {
       if (isEdit && accountId && String(acc.id) === String(accountId)) {
         continue
       }
-      const rawIds = acc.depotIds || (acc.depots || []).map((d: any) => d.id)
+      const rawIds = acc.pfiIds
       if (Array.isArray(rawIds)) {
         for (const dId of rawIds) {
           const numId = Number(dId)
@@ -124,9 +134,10 @@ function BankAccountForm() {
     return assignedSet
   }, [allBankAccounts, isEdit, accountId])
 
-  const availableDepots = depots.filter(
-    (d) => !alreadyAssignedDepotIds.has(Number(d.id))
-  )
+  // A PFI already collecting into another account is not offered here — one
+  // PFI, one account. Two PFIs in the same location can now differ, which is
+  // the whole point of moving the assignment off the location.
+  const availablePfis = allPfis.filter((p) => !alreadyAssignedPfiIds.has(Number(p.id)))
   const availableLpgStations = lpgStations.filter(
     (s: any) => !alreadyAssignedStationIds.has(Number(s.id || s._id))
   )
@@ -162,7 +173,7 @@ function BankAccountForm() {
   // Depot Multi-Select State
   const [selectedDepotIds, setSelectedDepotIds] = useState<number[]>(() => {
     if (!stateAccount) return []
-    const rawDepotIds = stateAccount.depotIds || (stateAccount.depots || []).map((d: any) => typeof d === 'object' ? (d.id || d._id) : d)
+    const rawDepotIds = stateAccount.pfiIds
     return (Array.isArray(rawDepotIds) ? rawDepotIds : [])
       .map((i) => Number(i))
       .filter((i) => !isNaN(i) && i > 0)
@@ -206,7 +217,7 @@ function BankAccountForm() {
       setIsDefault(Boolean(acc.isDefault))
       setNotes(acc.notes || '')
 
-      const rawDepotIds = acc.depotIds || (acc.depots || []).map((d: any) => typeof d === 'object' ? (d.id || d._id) : d)
+      const rawDepotIds = acc.pfiIds
       const numericIds = (Array.isArray(rawDepotIds) ? rawDepotIds : [])
         .map((i) => Number(i))
         .filter((i) => !isNaN(i) && i > 0)
@@ -227,7 +238,7 @@ function BankAccountForm() {
   }
 
   const handleSelectAllDepots = () => {
-    setSelectedDepotIds(availableDepots.map((d) => Number(d.id)).filter((id) => !isNaN(id)))
+    setSelectedDepotIds(availablePfis.map((p) => Number(p.id)).filter((id) => !isNaN(id)))
   }
 
   const handleClearDepotSelection = () => {
@@ -276,7 +287,7 @@ function BankAccountForm() {
       currency,
       status,
       isDefault,
-      depotIds: selectedDepotIds,
+      pfiIds: selectedDepotIds,
       lpgStationIds: selectedLpgStationIds,
       notes: notes.trim(),
     }
@@ -293,10 +304,10 @@ function BankAccountForm() {
     }
   }
 
-  const filteredDepots = availableDepots.filter((depot) =>
-    depot.name.toLowerCase().includes(depotSearchTerm.toLowerCase()) ||
-    depot.code.toLowerCase().includes(depotSearchTerm.toLowerCase()) ||
-    (depot.city && depot.city.toLowerCase().includes(depotSearchTerm.toLowerCase()))
+  const filteredPfis = availablePfis.filter((pfi) =>
+    (pfi.pfiNumber || '').toLowerCase().includes(depotSearchTerm.toLowerCase()) ||
+    locationOf(pfi).toLowerCase().includes(depotSearchTerm.toLowerCase()) ||
+    (pfi.productName || '').toLowerCase().includes(depotSearchTerm.toLowerCase())
   )
 
   const isSubmitting = createBankAccount.isPending || updateBankAccount.isPending
@@ -490,10 +501,10 @@ function BankAccountForm() {
           <CardHeader className="border-b border-border/40 pb-3 flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Warehouse className="size-4 text-primary" /> Assign Depots & Hubs
+                <Warehouse className="size-4 text-primary" /> Assign PFIs
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
-                Select which depot(s) use this bank account. Each depot can have its own account or share one.
+                Choose the PFI(s) that collect into this account. The location follows the PFI — two PFIs at the same location can use different accounts.
               </CardDescription>
             </div>
             <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 text-xs px-2.5 py-1 font-semibold">
@@ -507,7 +518,7 @@ function BankAccountForm() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                 <Input
                   type="text"
-                  placeholder="Filter depots..."
+                  placeholder="Filter by PFI, location or product..."
                   value={depotSearchTerm}
                   onChange={(e) => setDepotSearchTerm(e.target.value)}
                   className="pl-9 text-xs h-9 bg-background/50"
@@ -552,7 +563,7 @@ function BankAccountForm() {
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {selectedDepotIds.map((id) => {
-                    const depot = depots.find((d) => Number(d.id) === id)
+                    const pfi = allPfis.find((p) => Number(p.id) === id)
                     return (
                       <Badge
                         key={id}
@@ -560,7 +571,7 @@ function BankAccountForm() {
                         className="bg-primary/15 text-primary border-primary/30 text-xs font-normal py-1 px-2.5 flex items-center gap-1.5"
  >
                         <Warehouse className="size-3" />
-                        {depot ? `${depot.name} (${depot.code})` : `Depot #${id}`}
+                        {pfi ? `${pfi.pfiNumber} · ${locationOf(pfi)}` : `PFI #${id}`}
                         <button
                           type="button"
                           onClick={() => toggleDepotSelection(id)}
@@ -576,20 +587,20 @@ function BankAccountForm() {
             )}
 
             {/* Depots Checkbox List */}
-            {isLoadingDepots ? (
+            {isLoadingPfis || isLoadingDepots ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="size-5 animate-spin text-primary mr-2" />
-                <span className="text-xs text-muted-foreground">Loading depots list...</span>
+                <span className="text-xs text-muted-foreground">Loading PFIs...</span>
               </div>
-            ) : filteredDepots.length === 0 ? (
+            ) : filteredPfis.length === 0 ? (
               <div className="p-6 text-center text-xs text-muted-foreground border border-dashed rounded-lg">
-                {availableDepots.length === 0
-                  ? 'All operational depots already have bank accounts assigned.'
-                  : 'No available depots match your search query.'}
+                {availablePfis.length === 0
+                  ? 'Every PFI already collects into a bank account.'
+                  : 'No available PFI matches your search.'}
               </div>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2 max-h-72 overflow-y-auto pr-1">
-                {filteredDepots.map((depot) => {
+                {filteredPfis.map((depot) => {
                   const numericId = Number(depot.id)
                   const isChecked = selectedDepotIds.includes(numericId)
                   return (
@@ -604,13 +615,17 @@ function BankAccountForm() {
                       <div className="min-w-0 flex-1 pr-2">
                         <div className="flex items-center gap-2">
                           <span className={`font-semibold text-xs ${isChecked ? 'text-primary' : 'text-foreground'}`}>
-                            {depot.name}
+                            {depot.pfiNumber}
                           </span>
-                          <span className="text-xs font-mono opacity-80">({depot.code})</span>
+                          {depot.status !== 'active' && (
+                            <span className="text-xs font-mono opacity-80">({depot.status})</span>
+                          )}
                         </div>
-                        {depot.city && (
-                          <p className="text-xs text-muted-foreground truncate mt-0.5">{depot.city}, {depot.state}</p>
-                        )}
+                        {/* The location, shown rather than chosen — picking the
+                            PFI is what decides it. */}
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">
+                          {locationOf(depot)}{depot.productName ? ` · ${depot.productName}` : ''}
+                        </p>
                       </div>
 
                       <div

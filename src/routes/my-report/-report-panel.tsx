@@ -347,7 +347,12 @@ export function ReportPanel({
 
   useEffect(() => {
     if (!isNew || !pfi || def.type !== 'sales_manager' || bankAccounts.length === 0) return
-    const match = bankAccounts.find((a) => a.depotIds?.map(Number).includes(Number(pfi.locationId)))
+    // By PFI first. Matching on the PFI's location could not tell two PFIs at
+    // one location apart and silently handed both the first account it found —
+    // which is exactly the case that needed them to differ. The location match
+    // stays as a fallback for accounts assigned before this was per-PFI.
+    const match = bankAccounts.find((a) => a.pfiIds?.map(Number).includes(Number(pfi.id)))
+      || bankAccounts.find((a) => a.depotIds?.map(Number).includes(Number(pfi.locationId)))
       || bankAccounts.find((a) => a.isDefault)
     if (!match) return
     setForm((f) => (f.bankName === '' ? { ...f, bankName: match.bankName, accountNumber: match.accountNumber } : f))
