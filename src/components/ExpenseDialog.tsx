@@ -192,20 +192,31 @@ export function ExpenseDialog({
   const categoryOptions = form.type === 'pfi' ? (cats?.pfi || []) : (cats?.general || [])
 
   /**
-   * The PFI accounts under their headings, read off the runs of GL code the
-   * API already returns in order. Falls back to one unlabelled group so a
-   * chart seeded without subgroups still renders a usable list.
+   * The accounts under their headings, read off the runs of GL code the API
+   * already returns in order.
+   *
+   * Both sides of the chart, not just the PFI one. General used to render as a
+   * single flat list because every general account carried an empty subgroup,
+   * so there was nothing to head. That stopped being true the moment the fleet
+   * accounts arrived: without this, seventeen truck lines land at the bottom of
+   * a list of forty-eight with nothing to say they belong together, which is
+   * the same "scroll and hope" the headings exist to prevent.
+   *
+   * An account with no subgroup falls back to its group's own name rather than
+   * to "Other" — on the general side the unsubgrouped accounts ARE the main
+   * list, and filing thirty of them under "Other" would read as the leftovers.
    */
   const categoryGroups = useMemo(() => {
     const out: Array<{ label: string; accounts: typeof categoryOptions }> = []
-    for (const account of cats?.pfi || []) {
-      const label = account.gl_subgroup || 'Other'
+    const fallback = form.type === 'pfi' ? 'Other' : 'General Expenses'
+    for (const account of categoryOptions) {
+      const label = account.gl_subgroup || fallback
       const last = out[out.length - 1]
       if (last && last.label === label) last.accounts.push(account)
       else out.push({ label, accounts: [account] })
     }
     return out
-  }, [cats?.pfi])
+  }, [categoryOptions, form.type])
 
   const pfiOptions = pfiData?.pfis || []
 
@@ -388,16 +399,14 @@ export function ExpenseDialog({
           >
             <NativeSelect value={form.category_id} onChange={(e) => set('category_id', e.target.value)}>
               <option value="">Choose a category…</option>
-              {/* PFI accounts come back in GL-code order, which keeps each
+              {/* Accounts come back in GL-code order, which keeps each
                   heading's accounts contiguous — so the optgroups are just the
                   runs, not a second lookup that could disagree with the API. */}
-              {form.type === 'pfi'
-                ? categoryGroups.map((g) => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </optgroup>
-                  ))
-                : categoryOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {categoryGroups.map((g) => (
+                <optgroup key={g.label} label={g.label}>
+                  {g.accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              ))}
             </NativeSelect>
           </Field>
 
