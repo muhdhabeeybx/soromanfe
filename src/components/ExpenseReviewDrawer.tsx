@@ -46,6 +46,9 @@ const HISTORY_LABELS: Record<string, string> = {
   updated: 'Edited',
   // Named apart from an ordinary edit: this one happened after the bank moved.
   amended_after_payment: 'Amended after payment',
+  // And apart from an ordinary withdrawal: this took money off the books after
+  // it had already left the bank.
+  deleted_after_payment: 'Deleted after payment',
   submitted: 'Corrected and resubmitted',
   delete: 'Deleted',
   verified: 'Verified',
@@ -764,8 +767,24 @@ export function ExpenseReviewDrawer({
                 // question next to the thing that triggers it is how the wrong
                 // one gets clicked.
                 <div className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 pl-3">
+                  {/* A settled row is a different question from a request
+                      nobody has paid, and the difference is money moving off
+                      a cargo's cost — so it is spelled out rather than left
+                      behind the same four words. */}
                   <span className="text-sm font-semibold text-destructive">
-                    Delete this request permanently?
+                    {isPostPaymentEdit(expense) ? (
+                      <>
+                        Delete this PAID expense of {naira(Number(expense.amount))}?
+                        {expense.pfi_id && (
+                          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                            Its amount comes off the PFI — the cargo&rsquo;s total cost and landing
+                            cost per litre both drop. The payment record is not reversed.
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      'Delete this request permanently?'
+                    )}
                   </span>
                   <div className="flex gap-2">
                     <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
@@ -816,14 +835,14 @@ export function ExpenseReviewDrawer({
                         Paid — locked
                       </Button>
                     )}
-                    {isExpenseDeletable(expense) && (
+                    {isExpenseDeletable(expense, { superAdmin }) && (
                       <Button
                         variant="outline"
                         className="border-destructive/40 font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => setConfirmDelete(true)}
                       >
                         <Trash2 data-icon="inline-start" />
-                        Delete
+                        {isPostPaymentEdit(expense) ? 'Delete settled expense' : 'Delete'}
                       </Button>
                     )}
                   </div>

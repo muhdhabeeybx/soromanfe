@@ -221,14 +221,23 @@ export const STATUS_TONE: Record<ExpenseStatus, string> = {
  * back instead of making the row vanish.
  */
 /**
- * Deletable until the money leaves — the same line edit draws.
+ * Deletable until the money leaves — and after that, by a super admin alone.
+ * The same line edit draws.
  *
  * This was pending / changes_requested / verified, which left the officer who
  * raised a request unable to withdraw their own mistake once anyone had
  * approved it. "Reject" is the reviewer's verb, not the raiser's.
+ *
+ * Deleting a PAID expense takes its amount back off whatever it was booked to.
+ * That is automatic rather than a second step: PFI totals are summed from live
+ * expense rows at read time and the sum skips deleted ones, so the cargo's
+ * total cost and its landing cost per litre both fall by the amount as soon as
+ * the row goes.
  */
-export const isExpenseDeletable = (e: { status: ExpenseStatus }): boolean =>
-  e.status !== 'paid'
+export const isExpenseDeletable = (
+  e: { status: ExpenseStatus },
+  opts?: { superAdmin?: boolean },
+): boolean => e.status !== 'paid' || opts?.superAdmin === true
 
 /**
  * Editable until it is paid — and after that, by a super admin alone.

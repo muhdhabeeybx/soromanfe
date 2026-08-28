@@ -529,16 +529,27 @@ function ExpensesPage() {
                             <Lock /><span className="sr-only">Paid — locked</span>
                           </Button>
                         )}
-                        {/* Withdrawable until the money leaves — see
-                            isExpenseDeletable. */}
-                        {isExpenseDeletable(e) && (
+                        {/* Withdrawable until the money leaves; after that, by
+                            a super admin only — see isExpenseDeletable. */}
+                        {isExpenseDeletable(e, { superAdmin }) && (
                           <Button
-                            variant="ghost" size="icon-sm" title="Delete"
+                            variant="ghost" size="icon-sm"
+                            title={isPostPaymentEdit(e)
+                              ? 'Delete this settled expense — its amount comes off the PFI'
+                              : 'Delete'}
                             disabled={remove.isPending}
                             onClick={() => {
-                              if (confirm(`Delete the request for ${e.vendor || 'this payee'}? This cannot be undone.`)) {
-                                remove.mutate(e.id)
-                              }
+                              // A paid row is a different act from withdrawing
+                              // a request, and the prompt says which one this
+                              // is and what it moves.
+                              const message = isPostPaymentEdit(e)
+                                ? `Delete this PAID expense of ${naira(Number(e.amount))} for ${e.vendor || 'this payee'}?\n\n`
+                                  + (e.pfi_id
+                                    ? 'Its amount comes straight off the PFI — the cargo\'s total cost and landing cost per litre both drop.\n\n'
+                                    : '')
+                                  + 'The payment record itself is not reversed. This cannot be undone.'
+                                : `Delete the request for ${e.vendor || 'this payee'}? This cannot be undone.`
+                              if (confirm(message)) remove.mutate(e.id)
                             }}
                           >
                             <Trash2 /><span className="sr-only">Delete</span>
