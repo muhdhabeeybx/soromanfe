@@ -86,8 +86,12 @@ function DepositsDashboard() {
       if (filterType === 'paystack' && !isPs) return false
 
       // 3. Time Filter
-      if (timeFilter !== 'all' && d.createdAt) {
-        const depositDate = new Date(d.createdAt)
+      // Filtered on the BANKING date where there is one — "deposits this
+      // week" means money that reached the bank this week, not rows keyed in
+      // this week. They differ exactly when a statement is matched late.
+      const bankedOn = d.depositDate || d.createdAt
+      if (timeFilter !== 'all' && bankedOn) {
+        const depositDate = new Date(bankedOn)
         const now = new Date()
 
         if (timeFilter === 'today') {
@@ -303,14 +307,32 @@ function DepositsDashboard() {
                           className="hover:bg-muted/50 transition cursor-pointer"
                           onClick={() => navigate({ to: '/deposits/details' as any, state: { deposit } } as any)}
  >
-                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {deposit.createdAt
-                              ? new Date(deposit.createdAt).toLocaleDateString('en-GB', {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric',
-                              })
-                              : '—'}
+                          {/* The banking date where there is one, and the
+                              entry date only where there is not — labelled,
+                              so the two are never mistaken for each other.
+                              They coincide when a statement is matched the
+                              same day, which is why the difference went
+                              unnoticed for so long. */}
+                          <TableCell className="text-xs whitespace-nowrap">
+                            {deposit.depositDate ? (
+                              <span className="text-muted-foreground">
+                                {new Date(deposit.depositDate).toLocaleDateString('en-GB', {
+                                  day: 'numeric', month: 'short', year: 'numeric',
+                                })}
+                              </span>
+                            ) : deposit.createdAt ? (
+                              <span
+                                className="text-muted-foreground/70 italic"
+                                title="No bank statement backs this credit, so it has no banking date. This is when it was entered."
+                              >
+                                {new Date(deposit.createdAt).toLocaleDateString('en-GB', {
+                                  day: 'numeric', month: 'short', year: 'numeric',
+                                })}
+                                <span className="ml-1 not-italic">(entered)</span>
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                           <TableCell className="font-semibold text-success whitespace-nowrap">
                             +{formatCurrency(toNum(deposit.amount))}

@@ -691,7 +691,13 @@ export function fundingReference(f: OrderFunding): string {
  */
 export function fundingPaidAt(f: OrderFunding): string | null {
   const ps = (f.paystackDetails || {}) as Record<string, any>
-  return f.statementTxnDate || ps.paidAt || ps.paymentDate || f.depositCreatedAt || null
+  // `depositCreatedAt` is deliberately NOT in this chain any more. It is when
+  // the row was keyed in, not when the money reached the bank, and falling
+  // back to it filled the "Deposit Date" column with an entry date that looked
+  // identical to a real banking date — right when a statement was matched the
+  // same day, silently days out when it was matched later. A credit with no
+  // statement behind it has no banking date, and "—" says so honestly.
+  return f.statementTxnDate || ps.paidAt || ps.paymentDate || null
 }
 
 /** "Zenith Bank · 1311924890" — the same "bank · account number" shape the Order DVA row already uses. */

@@ -422,6 +422,17 @@ export interface Deposit {
   recorderEmail?: string | null
   balanceAfter: string | number
   paystackDetails?: PaystackDetails | null
+  /**
+   * The value date from the bank statement — when the money actually reached
+   * the account.
+   *
+   * Null where no statement backs the credit (an internal wallet transfer, or
+   * one recorded before this was captured). Deliberately not defaulted to
+   * `createdAt`: that is when the row was keyed in, and showing it under a
+   * heading of "Date" made an entry date indistinguishable from a banking one.
+   */
+  depositDate?: string | null
+  /** When the row was keyed in. Not the date the money moved. */
   createdAt?: string
   updatedAt?: string
 }
