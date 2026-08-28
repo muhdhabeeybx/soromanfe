@@ -53,22 +53,36 @@ export interface FleetLedgerFilters {
 export type FleetLedgerTotals = LedgerTotals
 export { computeTotals }
 
+/**
+ * No truck or driver column.
+ *
+ * Every row in a block belongs to the truck the block is named after, so a
+ * plate repeated down forty rows is forty restatements of the heading two
+ * inches above it — width spent saying nothing, taken from the description,
+ * which is the column that actually needs it.
+ *
+ * The cost of that is real and worth stating: a reader who sorts or filters
+ * this sheet in Excel detaches rows from the band identifying them. That is
+ * why the autofilter is gone (see below) and why the By Truck sheet, where one
+ * row IS one truck, keeps both columns.
+ */
 const COLUMNS: Array<{ header: string; key: string; width: number; fmt?: string }> = [
   { header: 'S/N', key: 'sn', width: 6 },
   { header: 'Date', key: 'date', width: 13, fmt: DATE_FMT },
-  { header: 'Truck No.', key: 'truck', width: 15 },
-  { header: 'Driver', key: 'driver', width: 24 },
-  { header: 'Category', key: 'category', width: 22 },
-  { header: 'Description', key: 'description', width: 40 },
+  { header: 'Category', key: 'category', width: 24 },
+  { header: 'Description', key: 'description', width: 52 },
   { header: 'Debit', key: 'debit', width: 16, fmt: NGN },
   { header: 'Credit', key: 'credit', width: 16, fmt: NGN },
   { header: 'Balance', key: 'balance', width: 17, fmt: NGN_SIGNED },
-  { header: 'Entered By', key: 'enteredBy', width: 20 },
+  { header: 'Entered By', key: 'enteredBy', width: 22 },
 ]
 
-/** Where the money columns start — the band and subtotal rows merge
- * everything to the left of it and write figures from here on. */
+/** Where the money columns start — the band and totals rows merge everything
+ * to the left of it and write figures from here on. */
 const MONEY_FROM = COLUMNS.findIndex((c) => c.key === 'debit') + 1
+/** The one column allowed a colour, in both writers. */
+const BALANCE_INDEX = COLUMNS.findIndex((c) => c.key === 'balance')
+const DESCRIPTION_INDEX = COLUMNS.findIndex((c) => c.key === 'description')
 
 const up = (v: string | null | undefined) => (v || '').toUpperCase()
 
@@ -77,8 +91,6 @@ function rowValues(entry: LedgerRow, index: number) {
   return {
     sn: index + 1,
     date: safeDate(entry.entry_date),
-    truck: up(entry.truck_plate) || '—',
-    driver: up(entry.truck_driver) || '—',
     category: up(entry.category) || '—',
     // Not upper-cased: a description is a sentence somebody wrote, and
     // shouting it back makes the sheet harder to read, not more uniform.
@@ -191,17 +203,21 @@ export async function exportFleetLedgerExcel(
   cursor++
   const tableStart = cursor
 
-  // Per truck, then per date. Each block opens with a band naming the vehicle
-  // and stating its totals up front, so a reader who only wants "what did this
-  // truck cost" never has to add a column up themselves.
+  // Per truck, then per date. Each block reads top to bottom as: who this is,
+  // what it came to, then the entries behind that — so a reader who only wants
+  // "what did this truck cost" gets it from two rows and never scrolls.
   const groups = groupByTruck(entries)
-  let serial = 0
 
   for (const group of groups) {
-    cursor = writeTruckBand(ws, cursor, group)
+    cursor = writeTruckBand(ws, cursor, group, totals)
+    cursor = writeTruckTotals(ws, cursor, group)
 
+    // S/N restarts at 1 for every truck: it numbers this vehicle's entries,
+    // which is the only sequence a reader inside a block can use. A running
+    // fleet-wide count would say "entry 147 of the sheet", which answers a
+    // question nobody standing in front of one truck is asking.
     group.rows.forEach((entry, i) => {
-      const values = rowValues(entry, serial++)
+      const values = rowValues(entry, i)
       const row = ws.getRow(cursor)
       row.values = values as never
       row.height = ROW_HEIGHT.body
@@ -211,13 +227,11 @@ export async function exportFleetLedgerExcel(
         if (i % 2 === 1) cell.fill = BAND_FILL
         if (c.fmt) cell.numFmt = c.fmt
       }
-      row.getCell('truck').font = { bold: true }
       row.getCell('description').alignment = { wrapText: true, vertical: 'top' }
       paintSigned(row.getCell('balance'), entry.runningBalance)
       cursor++
     })
 
-    cursor = writeTruckSubtotal(ws, cursor, group)
     // A blank line between blocks. Grouping is only legible if the groups are
     // visibly apart, and a border alone does not carry that at a glance.
     cursor++
@@ -225,14 +239,21 @@ export async function exportFleetLedgerExcel(
 
   // Frozen below the header row, so the column names stay put through a
   // fleet's worth of blocks.
+  //
+  // No autofilter. It would be actively misleading here: filtering or sorting
+  // a grouped sheet detaches rows from the band that names their truck, and
+  // since the rows no longer carry a plate of their own there would be nothing
+  // left to say which vehicle a surviving row belonged to. The By Truck sheet
+  // is the one to slice; this one is to read.
   ws.views = [{ state: 'frozen', ySplit: tableStart - 1 }]
-  ws.autoFilter = {
-    from: { row: tableStart - 1, column: 1 },
-    to: { row: tableStart - 1, column: COLUMNS.length },
-  }
 
+  // Led from column 1 and merged across the descriptive columns, the same
+  // shape as each block's own totals line — the label used to sit in whatever
+  // column happened to be third, which read as a stray value once the truck
+  // and driver columns were taken out.
   const totalRow = ws.getRow(cursor)
-  totalRow.getCell('category').value = `FLEET TOTAL — ${totals.entries} entries, ${totals.trucks} trucks`
+  totalRow.getCell(1).value = `FLEET TOTAL — ${totals.entries} entries, ${totals.trucks} trucks`
+  ws.mergeCells(cursor, 1, cursor, MONEY_FROM - 1)
   totalRow.getCell('debit').value = totals.debits
   totalRow.getCell('credit').value = totals.credits
   totalRow.getCell('balance').value = totals.balance
@@ -261,69 +282,85 @@ export async function exportFleetLedgerExcel(
   )
 }
 
-/**
- * The band that opens a truck's block.
- *
- * Soft navy rather than the header's full navy: it is a second-level heading,
- * and the palette already carries that distinction. The plate, the driver and
- * the span the entries cover are merged across the descriptive columns; the
- * three money columns state the block's totals before a single row of it has
- * been read.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeTruckBand(ws: any, row: number, group: TruckGroup): number {
-  const band = ws.getRow(row)
-  band.height = ROW_HEIGHT.header
-
+/** The truck's identity, spelled out once, in words rather than in a column
+ * repeated down every row of the block. */
+const bandCaption = (group: TruckGroup, totals: FleetLedgerTotals) => {
   const period = group.firstDate && group.lastDate
     ? `${format(group.firstDate, DATE_PATTERN)} – ${format(group.lastDate, DATE_PATTERN)}`
     : '—'
-  band.getCell(1).value =
-    `${up(group.plate)}   ·   ${up(group.driver) || '—'}   ·   ${group.entries} ENTRIES   ·   ${period}`
-  ws.mergeCells(row, 1, row, MONEY_FROM - 1)
+  const share = totals.debits ? Math.round((group.debits / totals.debits) * 100) : 0
+  return {
+    heading: `${up(group.plate)}   ·   DRIVER: ${up(group.driver) || '—'}`,
+    detail:
+      `${group.entries} ENTR${group.entries === 1 ? 'Y' : 'IES'}   ·   ${period}`
+      + `   ·   ${share}% OF FLEET SPEND`,
+  }
+}
 
-  band.getCell('debit').value = group.debits
-  band.getCell('credit').value = group.credits
-  band.getCell('balance').value = group.balance
+/**
+ * The band that opens a truck's block: who this is, and nothing else.
+ *
+ * Soft navy rather than the header's full navy — it is a second-level heading
+ * and the palette already carries that distinction. The totals used to sit in
+ * this row too; they have their own row below it now, because a heading that
+ * is also a figures row is neither.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeTruckBand(ws: any, row: number, group: TruckGroup, totals: FleetLedgerTotals): number {
+  const { heading, detail } = bandCaption(group, totals)
+  const band = ws.getRow(row)
+  band.height = ROW_HEIGHT.header
+  band.getCell(1).value = heading
+  band.getCell(MONEY_FROM).value = detail
+  ws.mergeCells(row, 1, row, MONEY_FROM - 1)
+  ws.mergeCells(row, MONEY_FROM, row, COLUMNS.length)
 
   for (let i = 1; i <= COLUMNS.length; i++) {
     const cell = band.getCell(i)
     cell.fill = HEADER_FILL_SOFT
     cell.border = ALL_BORDERS
-    cell.font = { bold: true, size: 10, color: { argb: XL.white } }
+    cell.font = { bold: true, size: 11, color: { argb: XL.white } }
     cell.alignment = { vertical: 'middle' }
   }
-  band.getCell('debit').numFmt = NGN
-  band.getCell('credit').numFmt = NGN
-  band.getCell('balance').numFmt = NGN_SIGNED
-  // The band is white-on-navy, so the signed colours would be unreadable
-  // against it. The subtotal below carries the colour instead.
+  // The detail half is the quieter of the two, so it sits right and lighter.
+  band.getCell(MONEY_FROM).font = { size: 9, color: { argb: XL.white } }
+  band.getCell(MONEY_FROM).alignment = { vertical: 'middle', horizontal: 'right' }
   return row + 1
 }
 
-/** Closes a truck's block. Tinted, ruled off, and the one place in the block
- * where the balance is allowed its colour. */
+/**
+ * What the block comes to, stated before it is read.
+ *
+ * Above the entries rather than below them: a reader who only wants "what did
+ * this truck cost" gets it from the two rows at the top of the block and never
+ * scrolls the detail at all. That is also why there is no closing subtotal any
+ * more — it would state these same three figures a second time.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeTruckSubtotal(ws: any, row: number, group: TruckGroup): number {
-  const sub = ws.getRow(row)
-  sub.height = ROW_HEIGHT.total
-  sub.getCell(1).value = `SUBTOTAL — ${up(group.plate)}`
+function writeTruckTotals(ws: any, row: number, group: TruckGroup): number {
+  const line = ws.getRow(row)
+  line.height = ROW_HEIGHT.total
+  const average = group.entries ? group.debits / group.entries : 0
+  line.getCell(1).value =
+    `TOTALS — ${up(group.plate)}   ·   AVERAGE SPEND ₦${average.toLocaleString('en-NG', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    })} PER ENTRY`
   ws.mergeCells(row, 1, row, MONEY_FROM - 1)
-  sub.getCell('debit').value = group.debits
-  sub.getCell('credit').value = group.credits
-  sub.getCell('balance').value = group.balance
+  line.getCell('debit').value = group.debits
+  line.getCell('credit').value = group.credits
+  line.getCell('balance').value = group.balance
 
   for (let i = 1; i <= COLUMNS.length; i++) {
-    const cell = sub.getCell(i)
+    const cell = line.getCell(i)
     cell.fill = TOTAL_FILL
     cell.border = TOTAL_BORDERS
     cell.font = TOTAL_FONT
     cell.alignment = { vertical: 'middle' }
   }
-  sub.getCell('debit').numFmt = NGN
-  sub.getCell('credit').numFmt = NGN
-  sub.getCell('balance').numFmt = NGN_SIGNED
-  paintSigned(sub.getCell('balance'), group.balance)
+  line.getCell('debit').numFmt = NGN
+  line.getCell('credit').numFmt = NGN
+  line.getCell('balance').numFmt = NGN_SIGNED
+  paintSigned(line.getCell('balance'), group.balance)
   return row + 1
 }
 
@@ -633,59 +670,76 @@ export async function exportFleetLedgerPdf(
   // autotable repeats the column header on every page break, so each block
   // keeps its own headings when it spills, and a truck can never end up
   // reading under the previous truck's band.
-  let serial = 0
   for (const group of groups) {
+    const { heading, detail } = bandCaption(group, totals)
+    const average = group.entries ? group.debits / group.entries : 0
+
     autoTable(doc, {
       startY: cursorY,
+      // Three header rows, in the order the block is meant to be read: who
+      // this truck is, what it came to, then the columns behind it. Being in
+      // the head is what makes autotable repeat them when a long block breaks
+      // across a page, so a continuation can never read as an unnamed truck.
       head: [
-        // A band naming the vehicle, spanning the sheet, above the columns.
-        [{
-          content:
-            `${up(group.plate)}  ·  ${up(group.driver) || '—'}  ·  ${group.entries} entries  ·  `
-            + `Debits ${pdfNaira(group.debits)}  ·  Credits ${pdfNaira(group.credits)}  ·  Balance ${pdfNaira(group.balance)}`,
-          colSpan: COLUMNS.length,
-          styles: { fillColor: PDF.headerNavySoft, textColor: PDF.white, halign: 'left' as const },
-        }],
+        [
+          {
+            content: heading, colSpan: MONEY_FROM - 1,
+            styles: { fillColor: PDF.headerNavySoft, textColor: PDF.white, halign: 'left' as const, fontSize: 8.5 },
+          },
+          {
+            content: detail, colSpan: COLUMNS.length - MONEY_FROM + 1,
+            styles: { fillColor: PDF.headerNavySoft, textColor: PDF.white, halign: 'right' as const, fontStyle: 'normal' as const, fontSize: 6.5 },
+          },
+        ],
+        [
+          {
+            content: `TOTALS — ${up(group.plate)}  ·  average spend ${pdfNaira(average)} per entry`,
+            colSpan: MONEY_FROM - 1,
+            styles: { fillColor: PDF.totalTint, textColor: PDF.ink, halign: 'left' as const },
+          },
+          { content: pdfNaira(group.debits), styles: { fillColor: PDF.totalTint, textColor: PDF.ink } },
+          { content: pdfNaira(group.credits), styles: { fillColor: PDF.totalTint, textColor: PDF.ink } },
+          {
+            content: pdfNaira(group.balance),
+            styles: {
+              fillColor: PDF.totalTint,
+              textColor: group.balance < 0 ? PDF.loss : PDF.gain,
+            },
+          },
+          { content: '', styles: { fillColor: PDF.totalTint } },
+        ],
         COLUMNS.map((c) => c.header),
       ],
-      body: group.rows.map((entry) => {
-        const v = rowValues(entry, serial++)
+      // S/N restarts at 1 per truck — it numbers this vehicle's entries, the
+      // only sequence that means anything to a reader inside one block.
+      body: group.rows.map((entry, i) => {
+        const v = rowValues(entry, i)
         return [
           v.sn,
           v.date ? format(v.date, DATE_PATTERN) : '—',
-          v.truck, v.driver, v.category, v.description,
+          v.category, v.description,
           v.debit == null ? '' : pdfNaira(v.debit),
           v.credit == null ? '' : pdfNaira(v.credit),
           pdfNaira(v.balance),
           v.enteredBy,
         ]
       }),
-      foot: [[
-        { content: `SUBTOTAL — ${up(group.plate)}`, colSpan: MONEY_FROM - 1 },
-        pdfNaira(group.debits), pdfNaira(group.credits), pdfNaira(group.balance), '',
-      ]],
       styles: pdfStyles.body,
       headStyles: pdfStyles.head,
-      footStyles: pdfStyles.foot,
-      columnStyles: { 5: { cellWidth: 52 } },
+      columnStyles: { [DESCRIPTION_INDEX]: { cellWidth: 70 } },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       didParseCell: (data: any) => {
-        // Balance is the only column allowed its colour — see the header note.
-        const balanceCol = COLUMNS.length - 2
-        if (data.section === 'foot' && data.column.index === balanceCol) {
-          data.cell.styles.textColor = group.balance < 0 ? PDF.loss : PDF.gain
-        }
         if (data.section !== 'body') return
         if (data.row.index % 2 === 1) data.cell.styles.fillColor = PDF.bandTint
-        if (data.column.index === 2) data.cell.styles.fontStyle = 'bold'
-        if (data.column.index === balanceCol) {
+        // Balance is the only column allowed its colour — see the header note.
+        if (data.column.index === BALANCE_INDEX) {
           const text = String(data.cell.raw).trim()
           data.cell.styles.textColor = text.startsWith('(') ? PDF.loss : PDF.gain
         }
       },
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    cursorY = (doc as any).lastAutoTable.finalY + 4
+    cursorY = (doc as any).lastAutoTable.finalY + 5
   }
 
   // The fleet's own bottom line, closing the document.
@@ -700,10 +754,10 @@ export async function exportFleetLedgerPdf(
     ]],
     styles: { ...pdfStyles.body, fontStyle: 'bold' as const },
     bodyStyles: { fillColor: PDF.grandTotalTint },
-    columnStyles: { 5: { cellWidth: 52 } },
+    columnStyles: { [DESCRIPTION_INDEX]: { cellWidth: 70 } },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (data: any) => {
-      if (data.column.index === COLUMNS.length - 2) {
+      if (data.column.index === BALANCE_INDEX) {
         data.cell.styles.textColor = totals.balance < 0 ? PDF.loss : PDF.gain
       }
     },
