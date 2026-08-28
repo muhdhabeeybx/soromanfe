@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute } from '@tanstack/react-router'
 import { format, isWithinInterval } from 'date-fns'
-import { Plus, Pencil, Trash2, Search, Loader2, FileSpreadsheet, FileText } from 'lucide-react'
+import {
+  Plus, Pencil, Trash2, Search, Loader2, FileSpreadsheet, FileText,
+  TrendingDown, TrendingUp, Truck, Wallet, Scale, Tags,
+} from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -15,6 +18,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#
 import { PageLoader } from '#/components/PageLoader'
 import { PageEmpty } from '#/components/PageEmpty'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { SummaryCards } from '#/components/SummaryCards'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import {
@@ -25,6 +29,10 @@ import {
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import { useToast } from '#/lib/hooks/useToast'
+import {
+  byDate, computeTotals, groupByTruck, highlights, isExpense,
+  type LedgerRow, type TruckGroup,
+} from './-fleet-ledger-data'
 import { exportFleetLedgerExcel, exportFleetLedgerPdf } from './-fleet-ledger-export'
 
 export const Route = createFileRoute('/fleet-ledger/')({
@@ -34,6 +42,13 @@ export const Route = createFileRoute('/fleet-ledger/')({
 
 const ALL = 'all'
 const naira = (n: unknown) => `₦${Number(n || 0).toLocaleString('en-NG')}`
+/** Money whose sign carries meaning — the one place red and green are allowed. */
+const signedTone = (n: number) =>
+  n > 0 ? 'text-accent' : n < 0 ? 'text-destructive' : 'text-muted-foreground'
+const signedNaira = (n: number) => (n < 0 ? `(${naira(Math.abs(n))})` : naira(n))
+
+/** Truck first, then date — see -fleet-ledger-data.ts for why. */
+type Arrangement = 'truck' | 'date'
 
 function FleetLedgerPage() {
   const [preset, setPreset] = useState<DatePreset>('all')
@@ -43,6 +58,7 @@ function FleetLedgerPage() {
   const [truckFilter, setTruckFilter] = useState(ALL)
   const [typeFilter, setTypeFilter] = useState(ALL)
   const [categoryFilter, setCategoryFilter] = useState(ALL)
+  const [arrangement, setArrangement] = useState<Arrangement>('truck')
   const [editing, setEditing] = useState<LedgerEntry | null | 'new'>(null)
   const [deleting, setDeleting] = useState<LedgerEntry | null>(null)
 
@@ -59,7 +75,7 @@ function FleetLedgerPage() {
   )
 
   // Historical values outside the hard-coded lists stay filterable.
-  const categories = useMemo(() => {
+  const categoryOptions = useMemo(() => {
     const seen = entries.map((e) => e.category).filter(Boolean)
     return [...new Set([...ALL_CATEGORIES, ...seen])].sort()
   }, [entries])
@@ -76,6 +92,65 @@ function FleetLedgerPage() {
         .some((f) => String(f ?? '').toLowerCase().includes(q))
     })
   }, [entries, range, truckFilter, typeFilter, categoryFilter, search])
+
+  // The same arrangement and the same arithmetic the exports use — one module
+  // answers for both, so the sheet can never group or total differently from
+  // the page it was run from.
+  const totals = useMemo(() => computeTotals(filtered), [filtered])
+  const { groups, categories, worstTruck, topExpense } = useMemo(() => highlights(filtered), [filtered])
+  const flatRows = useMemo(() => {
+    // Date-only view still carries each truck's running balance, worked out
+    // per truck rather than down the mixed list — a cumulative figure across
+    // several vehicles would be a number about nothing.
+    const balances = new Map<number, number>()
+    for (const g of groupByTruck(filtered)) {
+      for (const r of g.rows) balances.set(r.id, r.runningBalance)
+    }
+    return [...filtered].sort(byDate).reverse()
+      .map((e) => ({ ...e, runningBalance: balances.get(e.id) ?? 0 }) as LedgerRow)
+  }, [filtered])
+
+  const expenseCategories = useMemo(
+    () => categories.filter((c) => c.type === 'expense').slice(0, 6),
+    [categories],
+  )
+
+  const cards = useMemo(() => [
+    {
+      title: 'Total spend', value: naira(totals.debits), icon: <TrendingDown />, tone: 'red' as const,
+      description: `${totals.entries} entr${totals.entries === 1 ? 'y' : 'ies'} across ${totals.trucks} truck${totals.trucks === 1 ? '' : 's'}`,
+    },
+    {
+      title: 'Total earned', value: naira(totals.credits), icon: <TrendingUp />, tone: 'green' as const,
+      description: 'Income credited to the fleet',
+    },
+    {
+      title: 'Net position', value: signedNaira(totals.balance), icon: <Scale />,
+      tone: (totals.balance < 0 ? 'red' : 'green') as 'red' | 'green',
+      className: signedTone(totals.balance),
+      description: totals.balance < 0 ? 'The fleet cost more than it earned' : 'The fleet earned more than it cost',
+    },
+    {
+      title: 'Cost per truck', value: naira(totals.trucks ? totals.debits / totals.trucks : 0),
+      icon: <Truck />, tone: 'blue' as const,
+      description: 'Average spend, this selection',
+    },
+    {
+      title: 'Heaviest cost', value: topExpense ? topExpense.category : '—',
+      icon: <Tags />, tone: 'amber' as const,
+      description: topExpense
+        ? `${naira(topExpense.amount)} · ${Math.round(topExpense.share * 100)}% of all spend`
+        : 'No expenses in this selection',
+    },
+    {
+      title: 'Watch this truck', value: worstTruck ? worstTruck.plate : '—',
+      icon: <Wallet />, tone: 'red' as const,
+      className: worstTruck ? 'text-destructive' : undefined,
+      description: worstTruck
+        ? `${signedNaira(worstTruck.balance)} over ${worstTruck.entries} entr${worstTruck.entries === 1 ? 'y' : 'ies'}`
+        : 'Nothing is running at a loss',
+    },
+  ], [totals, topExpense, worstTruck])
 
   // ── Export ─────────────────────────────────────────────────────────
   // Whatever is on screen, filters and all — a report that silently covers a
@@ -145,8 +220,45 @@ function FleetLedgerPage() {
       }
     />
 
-      {/* Summary cards are deliberately not rendered here — the Directory is
-          where the per-truck money view lives. */}
+      {/* The summary answers the two questions a fleet ledger is opened with —
+          what is this costing, and which truck is the problem — before any
+          scrolling. It moves with the filters, so it always describes exactly
+          the rows below it. */}
+      {!isLoading && filtered.length > 0 && <SummaryCards cards={cards} />}
+
+      {expenseCategories.length > 0 && (
+        <section className={PANEL}>
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>Where the money goes</span>
+            <span className="text-xs text-muted-foreground">
+              Top {expenseCategories.length} of {categories.filter((c) => c.type === 'expense').length} expense categories
+            </span>
+          </div>
+          <div className={cn(PANEL_BODY, 'grid gap-x-8 gap-y-3 sm:grid-cols-2')}>
+            {expenseCategories.map((c) => (
+              <div key={c.category} className="space-y-1.5">
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="truncate font-medium">{c.category}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {naira(c.amount)}
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {Math.round(c.share * 100)}%
+                    </span>
+                  </span>
+                </div>
+                {/* Width carries the share; the tint is the same destructive
+                    hue the debit column uses, so the bar and the money agree. */}
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-destructive/70"
+                    style={{ width: `${Math.max(c.share * 100, 1.5)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className={PANEL}>
         <div className={PANEL_RAIL}><span className={MICRO}>Filters</span></div>
@@ -198,8 +310,35 @@ function FleetLedgerPage() {
             </NativeSelect>
             <NativeSelect value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
               <option value={ALL}>All categories</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
             </NativeSelect>
+          </div>
+
+          {/* Arrangement, not a filter — it changes how the same rows read,
+              and it is what the exports follow. */}
+          <div className="flex flex-wrap items-center gap-2 border-t border-foreground/10 pt-3">
+            <span className={cn(MICRO, 'text-muted-foreground')}>Arrange by</span>
+            {([
+              ['truck', 'Truck, then date'],
+              ['date', 'Date only'],
+            ] as Array<[Arrangement, string]>).map(([value, label]) => (
+              <button
+                key={value} type="button" onClick={() => setArrangement(value)}
+                className={cn(
+                  'rounded-full border px-3 py-1 text-xs transition-colors duration-250 ease-luxe outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+                  arrangement === value
+                    ? 'border-accent/40 bg-accent/10 font-medium text-accent'
+                    : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="text-xs text-muted-foreground">
+              {arrangement === 'truck'
+                ? 'Each truck in its own block, oldest entry first, with a running balance.'
+                : 'One flat list, newest first.'}
+            </span>
           </div>
         </div>
       </section>
@@ -207,6 +346,17 @@ function FleetLedgerPage() {
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={MICRO}>{filtered.length} entr{filtered.length === 1 ? 'y' : 'ies'}</span>
+          {filtered.length > 0 && (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              <span className="text-destructive">{naira(totals.debits)} debit</span>
+              {' · '}
+              <span className="text-accent">{naira(totals.credits)} credit</span>
+              {' · '}
+              <span className={cn('font-semibold', signedTone(totals.balance))}>
+                {signedNaira(totals.balance)}
+              </span>
+            </span>
+          )}
         </div>
         {isLoading ? (
           <PageLoader message="Loading ledger…" />
@@ -216,48 +366,59 @@ function FleetLedgerPage() {
           <div className="px-2 pb-2">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Truck</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead className="text-right text-destructive">Debit</TableHead>
-                  <TableHead className="text-right text-accent">Credit</TableHead>
-                  <TableHead>Entered By</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                <TableRow className="border-foreground/15">
+                  <TableHead className="font-medium">Date</TableHead>
+                  {arrangement === 'date' && <TableHead className="font-medium">Truck</TableHead>}
+                  <TableHead className="font-medium">Description</TableHead>
+                  <TableHead className="font-medium">Category</TableHead>
+                  <TableHead className="text-right font-medium text-destructive">Debit</TableHead>
+                  <TableHead className="text-right font-medium text-accent">Credit</TableHead>
+                  <TableHead className="text-right font-medium">Balance</TableHead>
+                  <TableHead className="font-medium">Entered By</TableHead>
+                  <TableHead className="text-right font-medium">Actions</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
-                {filtered.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell>
-                      {format(new Date(e.entry_date), 'd MMM yyyy')}
-                    </TableCell>
-                    <TableCell className="font-mono">{e.truck_plate}</TableCell>
-                    <TableCell className="max-w-[16rem] truncate">{e.description || '—'}</TableCell>
-                    <TableCell className="text-muted-foreground">{e.category}</TableCell>
-                    {/* One entry occupies exactly one column — the split is the
-                        whole point, since the model only has type and amount. */}
-                    <TableCell className="text-right font-semibold text-destructive">
-                      {e.entry_type === 'expense' ? naira(e.amount) : ''}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold text-accent">
-                      {e.entry_type === 'income' ? naira(e.amount) : ''}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{e.entered_by || '—'}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon-sm" onClick={() => setEditing(e)}>
-                          <Pencil /><span className="sr-only">Edit entry</span>
-                        </Button>
-                        <Button variant="ghost" size="icon-sm" onClick={() => setDeleting(e)}>
-                          <Trash2 /><span className="sr-only">Delete entry</span>
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
+
+              {arrangement === 'truck' ? (
+                groups.map((group) => (
+                  <TruckBlock
+                    key={group.truckId}
+                    group={group}
+                    onEdit={setEditing}
+                    onDelete={setDeleting}
+                  />
+                ))
+              ) : (
+                <TableBody>
+                  {flatRows.map((e, i) => (
+                    <EntryRow
+                      key={e.id} entry={e} index={i} showTruck
+                      onEdit={setEditing} onDelete={setDeleting}
+                    />
+                  ))}
+                </TableBody>
+              )}
+
+              {/* The fleet's own bottom line, closed off the way a ledger
+                  closes: a rule above it and the balance carrying its sign. */}
+              <tfoot>
+                <TableRow className="border-t-2 border-foreground/25 bg-muted/60 hover:bg-muted/60">
+                  <TableCell className="font-semibold" colSpan={arrangement === 'date' ? 4 : 3}>
+                    FLEET TOTAL — {totals.entries} entr{totals.entries === 1 ? 'y' : 'ies'},{' '}
+                    {totals.trucks} truck{totals.trucks === 1 ? '' : 's'}
+                  </TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums text-destructive">
+                    {naira(totals.debits)}
+                  </TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums text-accent">
+                    {naira(totals.credits)}
+                  </TableCell>
+                  <TableCell className={cn('text-right font-semibold tabular-nums', signedTone(totals.balance))}>
+                    {signedNaira(totals.balance)}
+                  </TableCell>
+                  <TableCell colSpan={2} />
+                </TableRow>
+              </tfoot>
             </Table>
           </div>
         )}
@@ -284,6 +445,125 @@ function FleetLedgerPage() {
         }}
       />
     </div>
+  )
+}
+
+/**
+ * One truck's whole story: a banded header carrying its totals, its entries
+ * oldest-first underneath, and a subtotal that closes the block.
+ *
+ * Its own <tbody> per truck, which is what lets the header row be sticky
+ * within its group and keeps the browser from striping across a boundary.
+ */
+function TruckBlock({
+  group, onEdit, onDelete,
+}: {
+  group: TruckGroup
+  onEdit: (e: LedgerEntry) => void
+  onDelete: (e: LedgerEntry) => void
+}) {
+  // Date + Description + Category, before the three money columns. The truck
+  // column is absent in this arrangement — the block header names it once.
+  const span = 3
+  return (
+    <TableBody className="border-t border-foreground/15">
+      <TableRow className="border-foreground/15 bg-muted/40 hover:bg-muted/40">
+        <TableCell colSpan={span} className="py-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            {/* The plate is the heading of the block, so it carries the weight
+                and the accent rule that marks a group boundary. */}
+            <span className="border-l-[3px] border-accent pl-2.5 font-mono text-sm font-semibold">
+              {group.plate}
+            </span>
+            <span className="text-xs text-muted-foreground">{group.driver || '—'}</span>
+            <span className="text-xs text-muted-foreground">
+              {group.entries} entr{group.entries === 1 ? 'y' : 'ies'}
+              {group.firstDate && group.lastDate && (
+                <> · {format(group.firstDate, 'd MMM yyyy')} – {format(group.lastDate, 'd MMM yyyy')}</>
+              )}
+            </span>
+          </div>
+        </TableCell>
+        <TableCell className="text-right text-xs font-semibold tabular-nums text-destructive">
+          {naira(group.debits)}
+        </TableCell>
+        <TableCell className="text-right text-xs font-semibold tabular-nums text-accent">
+          {naira(group.credits)}
+        </TableCell>
+        <TableCell className={cn('text-right text-xs font-semibold tabular-nums', signedTone(group.balance))}>
+          {signedNaira(group.balance)}
+        </TableCell>
+        <TableCell colSpan={2} />
+      </TableRow>
+
+      {group.rows.map((row, i) => (
+        <EntryRow key={row.id} entry={row} index={i} onEdit={onEdit} onDelete={onDelete} />
+      ))}
+
+      <TableRow className="border-foreground/15 bg-muted/20 hover:bg-muted/20">
+        <TableCell colSpan={span} className="py-2 text-xs text-muted-foreground">
+          Subtotal — {group.plate}
+        </TableCell>
+        <TableCell className="text-right text-xs font-semibold tabular-nums text-destructive">
+          {naira(group.debits)}
+        </TableCell>
+        <TableCell className="text-right text-xs font-semibold tabular-nums text-accent">
+          {naira(group.credits)}
+        </TableCell>
+        <TableCell className={cn('text-right text-xs font-semibold tabular-nums', signedTone(group.balance))}>
+          {signedNaira(group.balance)}
+        </TableCell>
+        <TableCell colSpan={2} />
+      </TableRow>
+    </TableBody>
+  )
+}
+
+function EntryRow({
+  entry, index, showTruck = false, onEdit, onDelete,
+}: {
+  entry: LedgerRow
+  index: number
+  showTruck?: boolean
+  onEdit: (e: LedgerEntry) => void
+  onDelete: (e: LedgerEntry) => void
+}) {
+  const expense = isExpense(entry)
+  return (
+    <TableRow className={cn('border-foreground/10', index % 2 === 1 && 'bg-muted/[0.15]')}>
+      <TableCell className="whitespace-nowrap tabular-nums">
+        {format(new Date(entry.entry_date), 'd MMM yyyy')}
+      </TableCell>
+      {showTruck && <TableCell className="font-mono font-medium">{entry.truck_plate}</TableCell>}
+      <TableCell className="max-w-[16rem] truncate" title={entry.description || undefined}>
+        {entry.description || '—'}
+      </TableCell>
+      <TableCell className="text-muted-foreground">{entry.category}</TableCell>
+      {/* One entry occupies exactly one column — the split is the whole point,
+          since the model only has type and amount. */}
+      <TableCell className="text-right font-semibold tabular-nums text-destructive">
+        {expense ? naira(entry.amount) : ''}
+      </TableCell>
+      <TableCell className="text-right font-semibold tabular-nums text-accent">
+        {expense ? '' : naira(entry.amount)}
+      </TableCell>
+      {/* Quieter than the two columns feeding it: it is a position, not a
+          movement, and it should not compete with the entry itself. */}
+      <TableCell className={cn('text-right tabular-nums', signedTone(entry.runningBalance))}>
+        {signedNaira(entry.runningBalance)}
+      </TableCell>
+      <TableCell className="text-muted-foreground">{entry.entered_by || '—'}</TableCell>
+      <TableCell className="text-right">
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="icon-sm" onClick={() => onEdit(entry)}>
+            <Pencil /><span className="sr-only">Edit entry</span>
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => onDelete(entry)}>
+            <Trash2 /><span className="sr-only">Delete entry</span>
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
   )
 }
 
