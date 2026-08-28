@@ -43,8 +43,20 @@ export type PfiFinancials = {
   creditBalance: number
   /** totalCost − creditBalance. What profit is actually computed against. */
   grandTotalCost: number | null
-  /** grandTotalCost ÷ BL quantity — what the batch cost per litre purchased. Null until totalCost is known. */
+  /**
+   * Total Cost ÷ BL quantity — what one litre of the batch cost, all in.
+   *
+   * Divides `totalCost`, the same figure the report prints one line above it,
+   * so the two reconcile on the page. Null until totalCost is known.
+   */
   landingCostPerLitre: number | null
+  /**
+   * The same figure after a credit note is taken off (grandTotalCost ÷ BL).
+   *
+   * Identical to landingCostPerLitre whenever there is no credit, which is
+   * most batches — so it is only worth showing when `creditBalance > 0`.
+   */
+  landingCostPerLitreAfterCredit: number | null
   /** The same cost over what actually measured into the tank. Higher than the BL figure when there was a discharge shortage. */
   landingCostPerLitreTank: number | null
   /** Expense lines still walking the approval chain — committed, not yet spent. */
@@ -307,6 +319,27 @@ export function usePfiDetails(id: string) {
   })
 }
 
+/**
+ * How one figure on the batch was reached.
+ *
+ * Built server-side, in the same file as the arithmetic it describes — a
+ * formula written next to the report would be a second description of the sum,
+ * free to drift from it the first time either changed, and a report that
+ * confidently explains the wrong sum is worse than one that explains nothing.
+ */
+export interface FinancialExplanation {
+  key: string
+  label: string
+  /** The figure itself, already formatted. */
+  value: string
+  /** The formula in words — "Total Cost ÷ BL Quantity". */
+  formula: string
+  /** That formula filled in with this batch's numbers, so it can be checked. */
+  workings: string
+  /** What it means and how to read it, including when NOT to trust it. */
+  meaning: string
+}
+
 /** The drawer needs the lines behind the totals, not just the totals. */
 export function usePfiDetail(id: number | null) {
   return useQuery({
@@ -317,6 +350,7 @@ export function usePfiDetail(id: number | null) {
         pfi: PfiWithFinancials
         expenses: PfiExpense[]
         movements: PfiMovement[]
+        explain: FinancialExplanation[]
       }
     },
     enabled: id != null,

@@ -295,24 +295,42 @@ export function PfiDetailDialog({
                     />
                   </>
                 )}
+                {/* Total Cost ÷ the billed quantity — the same Total Cost
+                    printed two lines above, so the arithmetic on this panel
+                    can be checked by eye. It divided the credit-adjusted
+                    figure before, which meant that on any batch carrying a
+                    credit note the two numbers on screen simply did not
+                    reconcile and there was no way to tell that from here. */}
                 <Row
                   label={`Landing cost/${unit.singular.toLowerCase()}`}
-                  hint={`Grand total cost ÷ ${isGantry ? 'quantity' : 'BL quantity'}`}
+                  hint={`Total cost ÷ ${isGantry ? 'quantity' : 'BL quantity'}`}
                   value={naira(f.landingCostPerLitre)}
                   emphasis
                 />
+                {/* The truer cost once a rebate is settled. Only shown when
+                    there IS one — otherwise it repeats the line above. */}
+                {f.creditBalance > 0 && f.landingCostPerLitreAfterCredit != null && (
+                  <Row
+                    label="— after credit note"
+                    hint={`Grand total cost ÷ ${isGantry ? 'quantity' : 'BL quantity'}`}
+                    value={naira(f.landingCostPerLitreAfterCredit)}
+                    tone="text-accent"
+                  />
+                )}
                 {/* Only worth showing when the two bases actually differ —
-                    which is exactly when there was a discharge shortage. */}
-                {/* {f.landingCostPerLitreTank != null
+                    which is exactly when there was a discharge shortage, and
+                    the gap between them is what that shortage cost. */}
+                {!isGantry
+                  && f.landingCostPerLitreTank != null
                   && f.landingCostPerLitre != null
                   && Math.abs(f.landingCostPerLitreTank - f.landingCostPerLitre) >= 0.01 && (
                   <Row
                     label="— against tank quantity"
-                    hint="What it actually cost per litre that landed"
+                    hint={`What it really cost per ${unit.singular.toLowerCase()} that landed`}
                     value={naira(f.landingCostPerLitreTank)}
                     tone="text-warning"
                   />
-                )} */}
+                )}
                 <Row
                   label={isGantry ? 'Sales Value' : 'Total Revenue'}
                   // label={`Total Revenue (${pfi.orderCount} order${pfi.orderCount === 1 ? '' : 's'})`}
@@ -383,6 +401,41 @@ export function PfiDetailDialog({
                   />
                   {pfi.closureRemarks && <Row label="Remarks" value={pfi.closureRemarks} />}
                 </Section>
+              )}
+
+              {/* ── How each figure was reached ───────────────────────────
+                  Collapsed by default: the panel above is what people come
+                  here for, and this is what they need the first time — or the
+                  time a number looks wrong and the question is which sum
+                  produced it. The formulas arrive from the server, from the
+                  same file that does the arithmetic, so they cannot drift
+                  away from what was actually computed. */}
+              {(data.explain?.length ?? 0) > 0 && (
+                <details className="rounded-lg border border-foreground/10 bg-muted/20">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium hover:bg-muted/40 rounded-lg">
+                    How each figure is worked out
+                  </summary>
+                  <div className="divide-y divide-foreground/5 border-t border-foreground/10">
+                    {data.explain.map((item) => (
+                      <div key={item.key} className="px-4 py-3 space-y-1">
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <span className="text-sm font-medium">{item.label}</span>
+                          <span className="text-sm font-semibold tabular-nums">{item.value}</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{item.formula}</p>
+                        {/* The sum with this batch's own numbers in it, so the
+                            figure above can be checked without a calculator. */}
+                        <p className="font-mono text-xs text-muted-foreground break-words">{item.workings}</p>
+                        <p className={cn(
+                          'text-xs',
+                          item.meaning.startsWith('READ WITH CARE') ? 'text-warning' : 'text-muted-foreground',
+                        )}>
+                          {item.meaning}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               )}
 
               <Section

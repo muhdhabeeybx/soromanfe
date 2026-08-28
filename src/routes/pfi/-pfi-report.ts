@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import api from '#/lib/api/http'
-import type { PfiWithFinancials, PfiExpense } from '#/lib/hooks/usePfis'
+import type { PfiWithFinancials, PfiExpense, FinancialExplanation } from '#/lib/hooks/usePfis'
 import {
   orderCompany, orderPaidInto, orderSalesValue, orderDifferential, fundingAmount,
   fundingDepositor, fundingPaidAt, fundingReference, fundingRecorder,
@@ -133,6 +133,8 @@ interface PfiReportData {
   pfi: PfiWithFinancials
   expenses: PfiExpense[]
   orders: FinanceReportOrder[]
+  /** How each figure was reached — built server-side beside the arithmetic. */
+  explain: FinancialExplanation[]
 }
 
 /**
@@ -147,9 +149,13 @@ async function fetchReportData(pfiId: number): Promise<PfiReportData> {
     api.get(`/pfis/${pfiId}`),
     api.get('/finance-report', { params: { pfiId, paymentStatus: 'Paid' } }),
   ])
-  const { pfi, expenses } = pfiRes.data.data as { pfi: PfiWithFinancials; expenses: PfiExpense[] }
+  const { pfi, expenses, explain } = pfiRes.data.data as {
+    pfi: PfiWithFinancials
+    expenses: PfiExpense[]
+    explain?: FinancialExplanation[]
+  }
   const orders = (ordersRes.data?.data?.orders || []) as FinanceReportOrder[]
-  return { pfi, expenses, orders }
+  return { pfi, expenses, orders, explain: explain || [] }
 }
 
 /** The finance-report totals, computed over just this batch's orders. */
@@ -337,7 +343,7 @@ function buildFilename(pfi: PfiWithFinancials): string {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function downloadPfiReport(pfiId: number) {
-  const { pfi, expenses, orders } = await fetchReportData(pfiId)
+  const { pfi, expenses, orders, explain } = await fetchReportData(pfiId)
   const f = pfi.financials
 
   const ExcelJS = (await import('exceljs')).default
@@ -391,6 +397,90 @@ export async function downloadPfiReport(pfiId: number) {
     warn.getCell(2).alignment = { wrapText: true, vertical: 'top' }
     s.mergeCells(cursor, 2, cursor, SECTION_SPAN)
     warn.height = 30
+  }
+
+  // ── How These Figures Are Worked Out ─────────────────────────────────
+  //
+  // Second sheet on purpose: whoever opens the file lands on the Summary,
+  // finds a number they do not recognise, and the very next tab tells them
+  // where it came from. The formulas are NOT written here — they arrive from
+  // the server, from the same file that does the arithmetic, so the
+  // explanation cannot quietly drift away from the sum it describes.
+  if (explain.length) {
+    const h = wb.addWorksheet('How Figures Are Worked Out', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    })
+    h.columns = [
+      { width: 34 }, { width: 24 }, { width: 34 }, { width: 46 }, { width: 62 },
+    ]
+
+    const hTitle = h.getRow(1)
+    hTitle.height = 34
+    hTitle.getCell(1).value = `HOW EACH FIGURE IS WORKED OUT — ${up(pfi.pfiNumber)}`
+    h.mergeCells(1, 1, 1, 5)
+    for (let i = 1; i <= 5; i++) {
+      const cell = hTitle.getCell(i)
+      cell.fill = HEADER_FILL
+      cell.font = { bold: true, size: 14, color: { argb: XL.white } }
+      cell.alignment = { vertical: 'middle', horizontal: 'center' }
+    }
+
+    const intro = h.getRow(2)
+    intro.height = 30
+    intro.getCell(1).value =
+      'Every figure on the Summary sheet, with the sum behind it and that sum filled in with this batch’s own numbers. Nothing here is typed in by hand — change a price or add an expense and every figure recalculates, so this sheet is always current as at the moment the report was produced.'
+    h.mergeCells(2, 1, 2, 5)
+    intro.getCell(1).alignment = { wrapText: true, vertical: 'middle' }
+    intro.getCell(1).font = { size: 10, italic: true, color: { argb: XL.headerNavy } }
+
+    const head = h.getRow(4)
+    head.height = ROW_HEIGHT.header
+    ;['FIGURE', 'VALUE', 'HOW IT IS CALCULATED', 'WORKED OUT FOR THIS BATCH', 'WHAT IT MEANS'].forEach(
+      (label, i) => {
+        const cell = head.getCell(i + 1)
+        cell.value = label
+        cell.fill = HEADER_FILL
+        cell.font = { ...HEADER_FONT, size: 10 }
+        cell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
+        cell.border = ALL_BORDERS
+      },
+    )
+
+    let hRow = 5
+    for (const item of explain) {
+      const r = h.getRow(hRow)
+      // Three wrapped prose columns of very different lengths — a fixed height
+      // would clip the long ones, so it is sized off the longest.
+      const longest = Math.max(item.formula.length, item.workings.length, item.meaning.length)
+      r.height = Math.max(ROW_HEIGHT.body, Math.ceil(longest / 52) * 15 + 6)
+
+      r.getCell(1).value = up(item.label)
+      r.getCell(2).value = item.value
+      r.getCell(3).value = item.formula
+      r.getCell(4).value = item.workings
+      r.getCell(5).value = item.meaning
+
+      for (let i = 1; i <= 5; i++) {
+        const cell = r.getCell(i)
+        cell.border = ALL_BORDERS
+        cell.alignment = { vertical: 'top', wrapText: i >= 3, indent: 1 }
+        cell.font = { size: 10 }
+      }
+      r.getCell(1).fill = SUMMARY_FILL
+      r.getCell(1).font = { bold: true, size: 10, color: { argb: XL.headerNavy } }
+      r.getCell(2).font = { size: 10, bold: true }
+      r.getCell(4).font = { size: 10, name: 'Consolas' }
+
+      // The one caveat that changes what a reader should DO with the number.
+      // It is written into the meaning text server-side; this makes it look
+      // like the warning it is rather than another paragraph of grey prose.
+      if (item.meaning.startsWith('READ WITH CARE')) {
+        r.getCell(5).font = { size: 10, bold: true, color: { argb: XL.warn } }
+      }
+      hRow++
+    }
+
+    h.views = [{ state: 'frozen', ySplit: 4 }]
   }
 
   // ── Confirmed Orders — the finance report, narrowed to this batch ────
@@ -497,7 +587,7 @@ export async function downloadPfiReport(pfiId: number) {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function downloadPfiReportPdf(pfiId: number) {
-  const { pfi, expenses, orders } = await fetchReportData(pfiId)
+  const { pfi, expenses, orders, explain } = await fetchReportData(pfiId)
   const f = pfi.financials
 
   const { jsPDF } = await import('jspdf')
@@ -579,6 +669,45 @@ export async function downloadPfiReportPdf(pfiId: number) {
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     cursorY = (doc as any).lastAutoTable.finalY + 4
+  }
+
+  // ── How each figure is worked out ───────────────────────────────────
+  //
+  // Its own page, straight after the summary. A PFI report gets printed and
+  // handed across a desk, and the person it lands in front of is usually not
+  // the person who produced it — so the sums travel with the figures instead
+  // of living in someone's head.
+  if (explain.length) {
+    doc.addPage('a4', 'landscape')
+    cursorY = drawPdfHeader(
+      doc,
+      `How Each Figure Is Worked Out — ${pfi.pfiNumber}`,
+      'Every figure on the summary, with the sum behind it filled in with this batch’s own numbers',
+    )
+
+    autoTable(doc, {
+      startY: cursorY,
+      head: [['FIGURE', 'VALUE', 'HOW IT IS CALCULATED', 'WORKED OUT FOR THIS BATCH', 'WHAT IT MEANS']],
+      body: explain.map((e) => [up(e.label), e.value, e.formula, e.workings, e.meaning]),
+      styles: { ...pdfStyles.body, fontSize: 7.5, cellPadding: 2.5, valign: 'top' },
+      headStyles: { ...pdfStyles.head, fontSize: 8, halign: 'left' },
+      columnStyles: {
+        0: { cellWidth: 42, fontStyle: 'bold', textColor: PDF.headerNavy, fillColor: PDF.summaryTint },
+        1: { cellWidth: 30, fontStyle: 'bold' },
+        2: { cellWidth: 52 },
+        3: { cellWidth: 68 },
+        4: { cellWidth: 'auto' },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didParseCell: (data: any) => {
+        if (data.section !== 'body' || data.column.index !== 4) return
+        // The one caveat that changes what a reader should DO with a number.
+        if (String(data.cell.raw ?? '').startsWith('READ WITH CARE')) {
+          data.cell.styles.textColor = PDF.loss
+          data.cell.styles.fontStyle = 'bold'
+        }
+      },
+    })
   }
 
   // ── Confirmed Orders ────────────────────────────────────────────────
