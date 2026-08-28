@@ -231,15 +231,27 @@ export const isExpenseDeletable = (e: { status: ExpenseStatus }): boolean =>
   e.status !== 'paid'
 
 /**
- * Editable until it is paid — mirrors chain.canEditExpense on the server.
+ * Editable until it is paid — and after that, by a super admin alone.
+ * Mirrors chain.canEditExpense on the server, which is the real gate.
  *
  * Anyone on the request may correct it while it is still moving: the officer
- * who raised it and every reviewer in the chain. Once the money has left the
- * bank the figures are a record of what happened, not a proposal, so nobody
- * edits them — including a super admin.
+ * who raised it and every reviewer in the chain.
+ *
+ * Once the money has left the bank the figures are a record of what happened
+ * rather than a proposal, so the door closes — for everyone except a super
+ * admin. Records still need correcting (a wrong TIN, an invoice figure a digit
+ * out, a cost booked to the wrong cargo), and the alternative to allowing it
+ * is someone editing the database by hand, which leaves no trail at all. The
+ * server diffs every change into the audit trail as `amended_after_payment`,
+ * and leaves the settlement figures and the paid status untouched.
  */
-export const isExpenseEditable = (e: { status: ExpenseStatus }): boolean =>
-  e.status !== 'paid'
+export const isExpenseEditable = (
+  e: { status: ExpenseStatus },
+  opts?: { superAdmin?: boolean },
+): boolean => e.status !== 'paid' || opts?.superAdmin === true
+
+/** Is this an edit to a row whose money has already moved? */
+export const isPostPaymentEdit = (e: { status: ExpenseStatus }): boolean => e.status === 'paid'
 
 /** The four groups an expense may be booked to, plus income, which it may not. */
 /**

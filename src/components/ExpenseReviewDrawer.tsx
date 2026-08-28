@@ -16,10 +16,12 @@ import { MICRO } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useExpenseDetail, useReviewExpense, useAddExpenseComment, useAttachFiles, useDeleteExpense,
-  ACTION_META, STATUS_TONE, isExpenseEditable, isExpenseDeletable,
+  ACTION_META, STATUS_TONE, isExpenseEditable, isExpenseDeletable, isPostPaymentEdit,
   type PfiExpense, type ExpenseAction,
 } from '#/lib/hooks/usePfis'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
+import { useCurrentUserRoles } from '#/lib/hooks/useRoles'
+import { isSuperAdmin } from '#/lib/rbac'
 import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { categoryChip, categoryGrouping } from '#/lib/expense-presentation'
 import { ExpenseAttachments, FileButton, FileRow, type PendingFile } from '#/components/ExpenseAttachments'
@@ -39,6 +41,8 @@ const PAYMENT_METHODS = ['Bank Transfer', 'Cash', 'Cheque', 'Card', 'Other']
 const HISTORY_LABELS: Record<string, string> = {
   created: 'Raised',
   updated: 'Edited',
+  // Named apart from an ordinary edit: this one happened after the bank moved.
+  amended_after_payment: 'Amended after payment',
   submitted: 'Corrected and resubmitted',
   delete: 'Deleted',
   verified: 'Verified',
@@ -177,6 +181,9 @@ export function ExpenseReviewDrawer({
   onEdit: (e: PfiExpense) => void
 }) {
   const navigate = useNavigate()
+  // Only a super admin may amend a settled record. The server enforces it —
+  // this decides whether the button is drawn at all.
+  const superAdmin = isSuperAdmin(useCurrentUserRoles())
   const { data: expense, isLoading } = useExpenseDetail(open ? expenseId : null)
   // Only the accounts expenses are actually paid out of — see
   // BANK_ACCOUNT_USAGE. Offering all of the company's banking here invites a
@@ -778,7 +785,7 @@ export function ExpenseReviewDrawer({
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    {isExpenseEditable(expense) ? (
+                    {isExpenseEditable(expense, { superAdmin }) ? (
                       <Button
                         variant="outline"
                         className={cn(
@@ -786,11 +793,19 @@ export function ExpenseReviewDrawer({
                           // After a reject or send-back this is the whole point
                           // of opening the drawer, so it stops looking neutral.
                           HALTED[expense.status] && 'border-accent text-accent hover:bg-accent/10',
+                          // Amending a settled row is a deliberate act, not a
+                          // routine one — it reads as a warning, not a default.
+                          isPostPaymentEdit(expense) && 'border-warning text-warning hover:bg-warning/10',
                         )}
                         onClick={() => { onOpenChange(false); onEdit(expense) }}
+                        title={isPostPaymentEdit(expense)
+                          ? 'The money has already left the bank. This change is logged against your name and the payment record itself is not touched.'
+                          : undefined}
                       >
                         <Pencil data-icon="inline-start" />
-                        {HALTED[expense.status] ? 'Correct and resubmit' : 'Edit'}
+                        {isPostPaymentEdit(expense)
+                          ? 'Amend settled record'
+                          : HALTED[expense.status] ? 'Correct and resubmit' : 'Edit'}
                       </Button>
                     ) : (
                       <Button variant="outline" disabled title="Paid — this expense is closed">

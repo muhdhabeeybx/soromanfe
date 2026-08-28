@@ -28,7 +28,7 @@ import { MICRO, PANEL } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useExpenses, useExpenseCategories, useDeleteExpense, usePfiList, useExpenseCategoryPickers,
-  type PfiExpense, type ExpenseFilters, isExpenseDeletable, isExpenseEditable,
+  type PfiExpense, type ExpenseFilters, isExpenseDeletable, isExpenseEditable, isPostPaymentEdit,
 } from '#/lib/hooks/usePfis'
 import { ExpenseDialog, cash } from '#/components/ExpenseDialog'
 import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer'
@@ -38,6 +38,8 @@ import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer
 // import { useCanManageChart } from '#/lib/hooks/useCanManageChart'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { routeGuard } from '#/lib/route-guard'
+import { isSuperAdmin } from '#/lib/rbac'
+import { useCurrentUserRoles } from '#/lib/hooks/useRoles'
 
 export const Route = createFileRoute('/expenses/')({
   beforeLoad: () => routeGuard('/expenses'),
@@ -52,6 +54,11 @@ function ExpensesPage() {
   const [reviewing, setReviewing] = useState<number | null>(null)
   // const [chartOpen, setChartOpen] = useState(false)
   // const canManageChart = useCanManageChart()
+
+  // A settled expense is editable by a super admin alone. The server is the
+  // real gate — chain.canEditExpense — and this only decides whether the door
+  // is drawn, so a stale role in storage cannot let anyone through.
+  const superAdmin = isSuperAdmin(useCurrentUserRoles())
 
   const { data, isLoading, isError, error, refetch } = useExpenses(filters)
   const { data: cats } = useExpenseCategories()
@@ -502,8 +509,16 @@ function ExpensesPage() {
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>
                       <div className="flex items-center justify-end gap-0.5">
-                        {isExpenseEditable(e) ? (
-                          <Button variant="ghost" size="icon-sm" onClick={() => openEdit(e)} title="Edit">
+                        {isExpenseEditable(e, { superAdmin }) ? (
+                          <Button
+                            variant="ghost" size="icon-sm" onClick={() => openEdit(e)}
+                            // A paid row is still editable for a super admin,
+                            // but it is not an ordinary edit and the tooltip
+                            // says so before the dialog opens.
+                            title={isPostPaymentEdit(e)
+                              ? 'Amend this settled record — the change is logged against your name'
+                              : 'Edit'}
+                          >
                             <Pencil /><span className="sr-only">Edit</span>
                           </Button>
                         ) : (

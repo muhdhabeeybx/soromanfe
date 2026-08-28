@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Loader2, Building2, Fuel } from 'lucide-react'
+import { Loader2, Building2, Fuel, AlertTriangle } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -133,6 +133,10 @@ export function ExpenseDialog({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
+  // A settled row: the money has moved, so this dialog is amending a record
+  // rather than editing a proposal, and it says so throughout.
+  const settled = expense?.status === 'paid'
+
   const { data: cats } = useExpenseCategories()
   // Every PFI, not just open ones: an expense often lands after the cargo has
   // been closed out, and a closed PFI missing from the list would leave the
@@ -319,13 +323,32 @@ export function ExpenseDialog({
       <DialogContent className="max-h-[88svh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="text-lg font-bold">
-            {expense ? 'Edit this request' : 'Request a payment'}
+            {settled ? 'Amend a settled record' : expense ? 'Edit this request' : 'Request a payment'}
           </DialogTitle>
           <DialogDescription>
-            Four short steps. Once submitted it goes to the Expenditure Officer, then
-            the CFO, then final approval — you can follow it on My Requests.
+            {settled
+              ? 'This payment has already been made. Correct the record here — the amount paid, the account it left from and the payment date are not touched, and the change is logged against your name.'
+              : 'Four short steps. Once submitted it goes to the Expenditure Officer, then the CFO, then final approval — you can follow it on My Requests.'}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Not a subtle hint. Editing a row whose money has already moved is
+            the one action on this dialog that can put the books out of step
+            with the bank, so it says what it will and will not change before
+            anything is typed. */}
+        {settled && (
+          <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="space-y-1">
+              <p className="font-medium text-warning">The money for this request has already left the bank.</p>
+              <p className="text-muted-foreground">
+                Amending it changes what the books say, not what was paid. Anything this expense
+                feeds — the cargo&rsquo;s total cost and its landing cost per litre — recalculates
+                straight away. The settlement itself stays exactly as recorded.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Section title="1. What is the money for?" />
@@ -557,7 +580,9 @@ export function ExpenseDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={submit} disabled={!ready || save.isPending}>
             {save.isPending && <Loader2 className="animate-spin" />}
-            {expense ? 'Save and resubmit' : 'Submit request'}
+            {/* A settled row is not resubmitted — it never re-enters the
+                chain, so promising that it will would be a lie. */}
+            {settled ? 'Save amendment' : expense ? 'Save and resubmit' : 'Submit request'}
           </Button>
         </DialogFooter>
       </DialogContent>
