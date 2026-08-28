@@ -18,6 +18,8 @@ import { VendorField, type VendorFieldValue } from '#/components/VendorField'
 import { PendingAttachments, ExpenseAttachments, type PendingFile } from '#/components/ExpenseAttachments'
 import { cn } from '#/lib/utils'
 import { naira } from '#/routes/pfi/-pfi-utils'
+import { useCurrentUserRoles } from '#/lib/hooks/useRoles'
+import { isSuperAdmin } from '#/lib/rbac'
 
 const BLANK = {
   expense_date: format(new Date(), 'yyyy-MM-dd'),
@@ -48,6 +50,15 @@ const BLANK = {
   payee_bank_name: '',
   payee_account_number: '',
   payee_account_name: '',
+  // Only used when a super admin books money that has already left the bank.
+  // Left blank otherwise — these are captured by the Expenditure Officer at
+  // the mark-paid step on every ordinary request.
+  bank_paid_from: '',
+  amount_paid: '',
+  payment_date: format(new Date(), 'yyyy-MM-dd'),
+  payment_method: 'Bank Transfer',
+  payment_reference: '',
+  payment_notes: '',
 }
 
 /** A blank money field stays blank on the wire — never 0. */
@@ -137,6 +148,18 @@ export function ExpenseDialog({
   // rather than editing a proposal, and it says so throughout.
   const settled = expense?.status === 'paid'
 
+  /**
+   * Booking money that has already gone, straight in as paid.
+   *
+   * Offered on a NEW request only, and to a super admin only — the server
+   * checks the role again, so this decides whether the option is drawn rather
+   * than whether it is allowed. Never offered on an edit: an existing request
+   * moves through the chain by its own review actions, and a second way to
+   * reach "paid" that skipped them would make the trail meaningless.
+   */
+  const canRecordPaid = isSuperAdmin(useCurrentUserRoles()) && !expense
+  const [recordAsPaid, setRecordAsPaid] = useState(false)
+
   const { data: cats } = useExpenseCategories()
   // Every PFI, not just open ones: an expense often lands after the cargo has
   // been closed out, and a closed PFI missing from the list would leave the
@@ -175,6 +198,17 @@ export function ExpenseDialog({
         payee_bank_name: expense.payee_bank_name || '',
         payee_account_number: expense.payee_account_number || '',
         payee_account_name: expense.payee_account_name || '',
+        // Never edited from here — the record-as-paid block is offered on new
+        // requests only. Seeded so the form's shape is the same either way,
+        // rather than a union the rest of the component has to narrow.
+        bank_paid_from: expense.bank_paid_from || '',
+        amount_paid: show(expense.amount_paid),
+        payment_date: expense.payment_date
+          ? String(expense.payment_date).slice(0, 10)
+          : format(new Date(), 'yyyy-MM-dd'),
+        payment_method: expense.payment_method || 'Bank Transfer',
+        payment_reference: expense.payment_reference || '',
+        payment_notes: expense.payment_notes || '',
       }
     : BLANK
 
@@ -269,8 +303,24 @@ export function ExpenseDialog({
 
   // A cargo cost with no cargo named lands nowhere, and the server refuses it
   // — so the button is held rather than letting the request fail on send.
+  /**
+   * Booking a payment that has already happened still needs the account it
+   * left, and a reason when it settled for something other than the amount
+   * asked for. The server enforces both — this only stops the round trip.
+   */
+  const paidAmount = num(form.amount_paid) ?? Number(form.amount)
+  const paidDiffers = Number.isFinite(paidAmount) && paidAmount !== Number(form.amount)
+  const directToPaidReady =
+    !recordAsPaid ||
+    (form.bank_paid_from.trim().length > 0 &&
+      paidAmount > 0 &&
+      (!paidDiffers || form.payment_notes.trim().length > 0))
+
   const ready =
-    form.category_id && Number(form.amount) > 0 && (form.type !== 'pfi' || form.pfi_id)
+    form.category_id &&
+    Number(form.amount) > 0 &&
+    (form.type !== 'pfi' || form.pfi_id) &&
+    directToPaidReady
 
   const submit = async () => {
     // A vendor picked from the list already carries an id; a freshly-typed
@@ -304,6 +354,19 @@ export function ExpenseDialog({
         payee_bank_name: form.payee_bank_name,
         payee_account_number: form.payee_account_number,
         payee_account_name: form.payee_account_name,
+        // Booking money that has already left the bank. Only ever sent on a
+        // NEW request by a super admin — the server checks the role again.
+        ...(canRecordPaid && recordAsPaid
+          ? {
+              record_as_paid: true,
+              bank_paid_from: form.bank_paid_from,
+              amount_paid: num(form.amount_paid) ?? Number(form.amount),
+              payment_date: form.payment_date,
+              payment_method: form.payment_method,
+              payment_reference: form.payment_reference,
+              payment_notes: form.payment_notes,
+            }
+          : {}),
       },
     })
 
@@ -563,6 +626,102 @@ export function ExpenseDialog({
             </>
           )}
 
+          {/* ── Already paid ───────────────────────────────────────────────
+              Super admin, new request only. For money that left the bank by
+              some other route — a standing order, cash paid at a depot, a
+              historical cost being brought onto the books. Approving a payment
+              that has already happened is theatre, and a chain of rubber
+              stamps makes the real approvals harder to trust. */}
+          {canRecordPaid && (
+            <div className="sm:col-span-2 space-y-3">
+              <Section title="Already paid?" hint="Super admin only." />
+
+              <label className="flex items-start gap-2.5 cursor-pointer select-none rounded-lg border border-foreground/10 p-3 hover:bg-muted/30">
+                <input
+                  type="checkbox"
+                  checked={recordAsPaid}
+                  onChange={(e) => setRecordAsPaid(e.target.checked)}
+                  className="mt-0.5 size-4 rounded border-input accent-primary cursor-pointer"
+                />
+                <div className="space-y-1">
+                  <span className="block text-sm font-semibold">
+                    This money has already left the bank — record it as paid
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    Books it straight in as paid. No approval chain, and nobody is notified.
+                    The entry is still logged against your name as having bypassed approval.
+                  </p>
+                </div>
+              </label>
+
+              {recordAsPaid && (
+                <div className="grid gap-4 rounded-lg border border-warning/30 bg-warning/5 p-3 sm:grid-cols-2">
+                  <Field label="Paid from" required hint="Which company account the money left.">
+                    <Input
+                      value={form.bank_paid_from}
+                      onChange={(e) => set('bank_paid_from', e.target.value)}
+                      placeholder="e.g. Zenith · 1013456789"
+                    />
+                  </Field>
+
+                  <Field label="Amount actually paid" hint="Leave blank if it settled for the full amount.">
+                    <NumberInput
+                      allowDecimal
+                      value={form.amount_paid}
+                      onValueChange={(v) => set('amount_paid', v)}
+                      placeholder={form.amount || '0.00'}
+                    />
+                  </Field>
+
+                  <Field label="Payment date" required>
+                    <Input
+                      type="date"
+                      value={form.payment_date}
+                      onChange={(e) => set('payment_date', e.target.value)}
+                    />
+                  </Field>
+
+                  <Field label="Method">
+                    <NativeSelect
+                      value={form.payment_method}
+                      onChange={(e) => set('payment_method', e.target.value)}
+                    >
+                      {['Bank Transfer', 'Cash', 'Cheque', 'Card', 'Other'].map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+
+                  <Field label="Payment reference" wide hint="The bank reference or teller number, if there is one.">
+                    <Input
+                      value={form.payment_reference}
+                      onChange={(e) => set('payment_reference', e.target.value)}
+                      placeholder="Optional"
+                    />
+                  </Field>
+
+                  {/* A settlement that differs from the amount asked for needs
+                      a reason on the record, or the variance is just a number
+                      nobody ever explained. The server refuses without it. */}
+                  {paidDiffers && (
+                    <Field
+                      label="Why the amount differs"
+                      required
+                      wide
+                      hint={`Asked for ${naira(Number(form.amount) || 0)}, paid ${naira(paidAmount || 0)}.`}
+                    >
+                      <Input
+                        value={form.payment_notes}
+                        onChange={(e) => set('payment_notes', e.target.value)}
+                        placeholder="e.g. supplier applied a discount"
+                      />
+                    </Field>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <Section title="4. Proof" hint="An approver cannot verify a payment against a description alone." />
 
           <div className="sm:col-span-2">
@@ -580,9 +739,16 @@ export function ExpenseDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={submit} disabled={!ready || save.isPending}>
             {save.isPending && <Loader2 className="animate-spin" />}
-            {/* A settled row is not resubmitted — it never re-enters the
-                chain, so promising that it will would be a lie. */}
-            {settled ? 'Save amendment' : expense ? 'Save and resubmit' : 'Submit request'}
+            {/* Each label promises exactly what the button does. A settled row
+                never re-enters the chain, and a record-as-paid entry never
+                enters it at all — "Submit request" would be wrong for both. */}
+            {settled
+              ? 'Save amendment'
+              : expense
+                ? 'Save and resubmit'
+                : recordAsPaid
+                  ? 'Record as paid'
+                  : 'Submit request'}
           </Button>
         </DialogFooter>
       </DialogContent>

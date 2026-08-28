@@ -40,6 +40,9 @@ const PAYMENT_METHODS = ['Bank Transfer', 'Cash', 'Cheque', 'Card', 'Other']
  */
 const HISTORY_LABELS: Record<string, string> = {
   created: 'Raised',
+  // Booked straight in as already paid, bypassing the chain. Named for what it
+  // was: the trail's only record that these four sign-offs never happened.
+  recorded_as_paid: 'Recorded as already paid (approval bypassed)',
   updated: 'Edited',
   // Named apart from an ordinary edit: this one happened after the bank moved.
   amended_after_payment: 'Amended after payment',
