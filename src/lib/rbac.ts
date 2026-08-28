@@ -138,6 +138,21 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermissions> = {
     edit: [...ADMIN_SUPERADMIN, Roles.ORDERS_MANAGER],
     delete: [Roles.SUPERADMIN],
   },
+  /**
+   * The merged book — customers and leads on one page.
+   *
+   * Viewing takes the union of what /customers and /contacts allowed, since
+   * it shows both. `delete` is the SuperAdmin line from /customers rather
+   * than the looser one from /contacts: this page can remove customer
+   * records through the number-review panel, and the stricter of the two
+   * gates has to win when one page covers both.
+   */
+  '/people': {
+    view: [...ADMIN_SUPERADMIN, Roles.SALES_MANAGER, Roles.PRODUCT_MANAGER, Roles.FINANCE, Roles.TRUCK_SALES, Roles.AUDIT, Roles.ORDERS_VIEWER, Roles.ORDERS_OPERATOR, Roles.ORDERS_MANAGER, Roles.SALES_VIEWER, Roles.SALES_OPERATOR, Roles.SALES_MANAGER_TIER],
+    create: [...ADMIN_SUPERADMIN, Roles.ORDERS_OPERATOR, Roles.ORDERS_MANAGER, Roles.SALES_OPERATOR, Roles.SALES_MANAGER_TIER],
+    edit: [...ADMIN_SUPERADMIN, Roles.ORDERS_MANAGER, Roles.SALES_OPERATOR, Roles.SALES_MANAGER_TIER],
+    delete: [Roles.SUPERADMIN],
+  },
   // A lead is a sales record, so it answers to the same people as the
   // customer book. Deleting is not held to SuperAdmin the way a customer is:
   // a contact carries no orders, no wallet and no payment history, so removing

@@ -146,10 +146,18 @@ export interface ImportRow {
   notes?: string
 }
 
+/**
+ * `mode` is the choice the import preview exists to inform:
+ *   new_only  add only numbers not already held, leave the rest untouched
+ *   upsert    also correct the people already on file from this sheet
+ *
+ * Either way the server refuses unparseable numbers and anyone who already
+ * has a customer account.
+ */
 export function useImportContacts() {
   return useContactMutation(
-    async ({ rows, source }: { rows: ImportRow[]; source?: ContactSource }) =>
-      (await api.post('/contacts/import', { rows, source })).data,
+    async ({ rows, source, mode }: { rows: ImportRow[]; source?: ContactSource; mode?: 'upsert' | 'new_only' }) =>
+      (await api.post('/contacts/import', { rows, source, mode })).data,
     (res) => res?.message || 'Import complete',
   )
 }

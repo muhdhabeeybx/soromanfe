@@ -62,8 +62,10 @@ export const navCategories: NavCategory[] = [
       // tell them apart.
       // { title: "Marketing Orders", icon: ShoppingBag, path: "/sales-manager-view" },
       // { title: "Location Orders", icon: ShoppingBag, path: "/product-manager-view" },
-      { title: "Our Customers", icon: Building2, path: "/customers" },
-      { title: "Contacts & Leads", icon: Contact, path: "/contacts" },
+      // One entry, because it is one book. Customers and leads were two pages
+      // listing the same people from two directions — a lead who signed up
+      // appeared on both, and there was no way to see that from either.
+      { title: "Customers & Leads", icon: Contact, path: "/people" },
       // { title: "Customer Desk", icon: Contact, path: "/customer-desk" },
     ],
   },

@@ -8,6 +8,7 @@ export const PAGE_GUIDE: Record<string, string> = {
   '/overview': 'The landing dashboard — headline numbers across orders, sales and finance at a glance.',
   '/orders': 'Every order ever placed, searchable and filterable — the operational record of what has been sold.',
   '/admin-order': 'Place a new order on a customer\'s behalf: pick their depot, product and quantity, then confirm payment.',
+  '/people': 'Everyone we hold a number for — customers and leads on one list, with wallet balance and order history for those who have an account.',
   '/customers': 'The customer directory — contact details, wallet balance, and order history per customer.',
   '/my-report': 'File your own daily activity report for your role (sales, security, ticketing, etc.).',
   '/expense-requests': 'Raise and track your own expense claims through the approval chain.',

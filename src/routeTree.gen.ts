@@ -91,6 +91,7 @@ import { Route as OverpaymentRequestsIndexRouteImport } from './routes/overpayme
 import { Route as OverviewIndexRouteImport } from './routes/overview/index'
 import { Route as PayableOrdersIndexRouteImport } from './routes/payable-orders/index'
 import { Route as PaymentVerifyIndexRouteImport } from './routes/payment-verify/index'
+import { Route as PeopleIndexRouteImport } from './routes/people/index'
 import { Route as PfiIndexRouteImport } from './routes/pfi/index'
 import { Route as PfiDetailsRouteImport } from './routes/pfi/details'
 import { Route as PfiFormRouteImport } from './routes/pfi/form'
@@ -539,6 +540,11 @@ const PaymentVerifyIndexRoute = PaymentVerifyIndexRouteImport.update({
   path: '/payment-verify/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PeopleIndexRoute = PeopleIndexRouteImport.update({
+  id: '/people/',
+  path: '/people/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PfiIndexRoute = PfiIndexRouteImport.update({
   id: '/pfi/',
   path: '/pfi/',
@@ -766,6 +772,7 @@ export interface FileRoutesByFullPath {
   '/overview/': typeof OverviewIndexRoute
   '/payable-orders/': typeof PayableOrdersIndexRoute
   '/payment-verify/': typeof PaymentVerifyIndexRoute
+  '/people/': typeof PeopleIndexRoute
   '/pfi/': typeof PfiIndexRoute
   '/product-manager-view/': typeof ProductManagerViewIndexRoute
   '/product-pricing/': typeof ProductPricingIndexRoute
@@ -876,6 +883,7 @@ export interface FileRoutesByTo {
   '/overview': typeof OverviewIndexRoute
   '/payable-orders': typeof PayableOrdersIndexRoute
   '/payment-verify': typeof PaymentVerifyIndexRoute
+  '/people': typeof PeopleIndexRoute
   '/pfi': typeof PfiIndexRoute
   '/product-manager-view': typeof ProductManagerViewIndexRoute
   '/product-pricing': typeof ProductPricingIndexRoute
@@ -987,6 +995,7 @@ export interface FileRoutesById {
   '/overview/': typeof OverviewIndexRoute
   '/payable-orders/': typeof PayableOrdersIndexRoute
   '/payment-verify/': typeof PaymentVerifyIndexRoute
+  '/people/': typeof PeopleIndexRoute
   '/pfi/': typeof PfiIndexRoute
   '/product-manager-view/': typeof ProductManagerViewIndexRoute
   '/product-pricing/': typeof ProductPricingIndexRoute
@@ -1099,6 +1108,7 @@ export interface FileRouteTypes {
     | '/overview/'
     | '/payable-orders/'
     | '/payment-verify/'
+    | '/people/'
     | '/pfi/'
     | '/product-manager-view/'
     | '/product-pricing/'
@@ -1209,6 +1219,7 @@ export interface FileRouteTypes {
     | '/overview'
     | '/payable-orders'
     | '/payment-verify'
+    | '/people'
     | '/pfi'
     | '/product-manager-view'
     | '/product-pricing'
@@ -1319,6 +1330,7 @@ export interface FileRouteTypes {
     | '/overview/'
     | '/payable-orders/'
     | '/payment-verify/'
+    | '/people/'
     | '/pfi/'
     | '/product-manager-view/'
     | '/product-pricing/'
@@ -1430,6 +1442,7 @@ export interface RootRouteChildren {
   OverviewIndexRoute: typeof OverviewIndexRoute
   PayableOrdersIndexRoute: typeof PayableOrdersIndexRoute
   PaymentVerifyIndexRoute: typeof PaymentVerifyIndexRoute
+  PeopleIndexRoute: typeof PeopleIndexRoute
   PfiIndexRoute: typeof PfiIndexRoute
   ProductManagerViewIndexRoute: typeof ProductManagerViewIndexRoute
   ProductPricingIndexRoute: typeof ProductPricingIndexRoute
@@ -2022,6 +2035,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PaymentVerifyIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/people/': {
+      id: '/people/'
+      path: '/people'
+      fullPath: '/people/'
+      preLoaderRoute: typeof PeopleIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/pfi/': {
       id: '/pfi/'
       path: '/pfi'
@@ -2303,6 +2323,7 @@ const rootRouteChildren: RootRouteChildren = {
   OverviewIndexRoute: OverviewIndexRoute,
   PayableOrdersIndexRoute: PayableOrdersIndexRoute,
   PaymentVerifyIndexRoute: PaymentVerifyIndexRoute,
+  PeopleIndexRoute: PeopleIndexRoute,
   PfiIndexRoute: PfiIndexRoute,
   ProductManagerViewIndexRoute: ProductManagerViewIndexRoute,
   ProductPricingIndexRoute: ProductPricingIndexRoute,
