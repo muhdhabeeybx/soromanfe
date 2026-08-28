@@ -18,15 +18,18 @@ import {
  *
  * ── Arranged per truck, then per date ─────────────────────────────────────
  *
- * The entries sheet is not a flat date list. Each vehicle gets its own banded
- * block — plate and driver in the band, its entries oldest-first beneath it
- * carrying a running balance, and a subtotal closing it — because the question
- * this ledger is opened with is "what is this truck costing me", and that
- * cannot be read off a list where one truck's entries sit scattered between
- * everyone else's. Blocks run in plate order, so a printed copy can be looked
- * things up in. The grouping and the arithmetic come from
- * -fleet-ledger-data.ts, the same module the screen reads, so the sheet can
- * never arrange or total differently from the page it was run from.
+ * The entries sheet is not a flat date list. Each vehicle gets its own block,
+ * read top to bottom in the order it is used: a band naming the truck and its
+ * driver, a totals line stating what it came to, then the entries behind that,
+ * oldest first and carrying a running balance. The question this ledger is
+ * opened with is "what is this truck costing me", and that cannot be read off
+ * a list where one truck's entries sit scattered between everyone else's — nor
+ * off a block whose total is only reachable by scrolling past forty rows.
+ *
+ * Blocks run in plate order, so a printed copy can be looked things up in. The
+ * grouping and the arithmetic come from -fleet-ledger-data.ts, the same module
+ * the screen reads, so the sheet can never arrange or total differently from
+ * the page it was run from.
  *
  * Three sheets: the arranged ledger, the per-vehicle summary that gets read
  * outside transport, and where the money actually went by category.
@@ -38,8 +41,8 @@ import {
  * SIGN carries meaning — here the balance column and nothing else. Debit and
  * credit stay black even though the screen tints them, because on a printed
  * sheet a red debit column competes with the one figure that has to shout.
- * Shading marks rank, never decoration: a soft-navy band opens a truck, a
- * tint closes it, the faintest tint stripes the rows between.
+ * Shading marks rank, never decoration: a soft-navy band names a truck, a
+ * tint states its totals, the faintest tint stripes the entries below them.
  */
 
 export interface FleetLedgerFilters {
@@ -85,6 +88,9 @@ const BALANCE_INDEX = COLUMNS.findIndex((c) => c.key === 'balance')
 const DESCRIPTION_INDEX = COLUMNS.findIndex((c) => c.key === 'description')
 
 const up = (v: string | null | undefined) => (v || '').toUpperCase()
+/** "1 entry", "2 entries" — a report that says "1 entries" reads as generated
+ * rather than written, which is not what you want on a document going out. */
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
 function rowValues(entry: LedgerRow, index: number) {
   const amount = amountOf(entry)
@@ -121,7 +127,7 @@ function subtitleOf(filters: FleetLedgerFilters, totals: FleetLedgerTotals): str
   if (filters.type && filters.type !== 'all') parts.push(`Type: ${filters.type}`)
   if (filters.category && filters.category !== 'all') parts.push(`Category: ${filters.category}`)
   if (filters.search) parts.push(`Search: "${filters.search}"`)
-  parts.push(`${totals.entries} entries · ${totals.trucks} trucks`)
+  parts.push(`${plural(totals.entries, 'entry', 'entries')} · ${plural(totals.trucks, 'truck')}`)
   return parts.join('   ·   ')
 }
 
@@ -252,7 +258,8 @@ export async function exportFleetLedgerExcel(
   // column happened to be third, which read as a stray value once the truck
   // and driver columns were taken out.
   const totalRow = ws.getRow(cursor)
-  totalRow.getCell(1).value = `FLEET TOTAL — ${totals.entries} entries, ${totals.trucks} trucks`
+  totalRow.getCell(1).value =
+    `FLEET TOTAL — ${plural(totals.entries, 'entry', 'entries')}, ${plural(totals.trucks, 'truck')}`
   ws.mergeCells(cursor, 1, cursor, MONEY_FROM - 1)
   totalRow.getCell('debit').value = totals.debits
   totalRow.getCell('credit').value = totals.credits
@@ -580,6 +587,36 @@ function writeCategorySheet(
 // PDF
 // ══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Roughly what a block needs before it is worth starting one, in mm: its three
+ * head rows and a first entry under them.
+ *
+ * Deliberately approximate — it only decides where a page break falls, never
+ * what the sheet says. Erring high costs a little white space at the foot of a
+ * page; erring low brings back the bug it exists for.
+ */
+const BLOCK_OPENING_MM = 34
+/** Clear of the footer line drawPdfFooters writes. */
+const BOTTOM_MARGIN_MM = 18
+const PAGE_TOP_MM = 20
+
+/**
+ * Starts a truck's block on a page with room to actually begin it.
+ *
+ * Without this a block opening near the foot of a page lays down its band, its
+ * totals and its column headers with nothing beneath them, and autotable then
+ * repeats that whole head on the next page — so the truck is named twice and
+ * the previous page ends on a heading for rows that are not there. It reads as
+ * two trucks with the same plate, one of them empty.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function openBlock(doc: any, y: number): number {
+  const usable = doc.internal.pageSize.getHeight() - BOTTOM_MARGIN_MM
+  if (y + BLOCK_OPENING_MM <= usable) return y
+  doc.addPage()
+  return PAGE_TOP_MM
+}
+
 export async function exportFleetLedgerPdf(
   entries: LedgerEntry[],
   filters: FleetLedgerFilters,
@@ -674,6 +711,7 @@ export async function exportFleetLedgerPdf(
     const { heading, detail } = bandCaption(group, totals)
     const average = group.entries ? group.debits / group.entries : 0
 
+    cursorY = openBlock(doc, cursorY)
     autoTable(doc, {
       startY: cursorY,
       // Three header rows, in the order the block is meant to be read: who
@@ -742,12 +780,15 @@ export async function exportFleetLedgerPdf(
     cursorY = (doc as any).lastAutoTable.finalY + 5
   }
 
-  // The fleet's own bottom line, closing the document.
+  // The fleet's own bottom line, closing the document. Given the same room
+  // check — a total stranded alone at the top of a page is no better than a
+  // heading stranded at the foot of one.
   autoTable(doc, {
-    startY: cursorY,
+    startY: openBlock(doc, cursorY),
     body: [[
       {
-        content: `FLEET TOTAL — ${totals.entries} entries across ${totals.trucks} trucks`,
+        content:
+          `FLEET TOTAL — ${plural(totals.entries, 'entry', 'entries')} across ${plural(totals.trucks, 'truck')}`,
         colSpan: MONEY_FROM - 1,
       },
       pdfNaira(totals.debits), pdfNaira(totals.credits), pdfNaira(totals.balance), '',
