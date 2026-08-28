@@ -49,6 +49,16 @@ export type BroadcastPayload = {
    * template goes out with today's prices.
    */
   depotIds?: number[]
+  /** What the audience meant, recorded on the campaign. */
+  audienceLabel?: string
+  /**
+   * An already-open campaign to file these sends under.
+   *
+   * "Everyone" is two audiences and goes out as two calls; passing the first
+   * call's id into the second is what keeps one press of Send showing up in
+   * the log as one campaign rather than two.
+   */
+  campaignId?: number
 } & (
   | { audience: 'customers'; customerIds: number[]; contacts?: never }
   | { audience: 'contacts'; contacts: BroadcastContact[]; customerIds?: never }
@@ -58,6 +68,8 @@ export interface BroadcastResult {
   recipients: number
   delivered: number
   duplicates: number
+  /** The campaign every send in this call was filed under. */
+  campaignId: number | null
 }
 
 /** POST /notifications/broadcast, one call per <=1000 recipients — the schema's own cap. */
@@ -82,13 +94,20 @@ export function useBroadcast() {
       }
       if (chunks.length === 0) chunks.push([])
 
-      const totals: BroadcastResult = { recipients: 0, delivered: 0, duplicates: 0 }
+      const totals: BroadcastResult = { recipients: 0, delivered: 0, duplicates: 0, campaignId: null }
+      // The campaign opened by the first request, carried into every one after
+      // it. Without this a 3,000-recipient blast would file itself in the log
+      // as three separate campaigns purely because of the chunk size.
+      let campaignId = payload.campaignId ?? null
+
       for (const chunk of chunks) {
         const res = await api.post('/notifications/broadcast', {
           title: payload.title,
           body: payload.body,
           audience: payload.audience,
           channels: payload.channels,
+          ...(payload.audienceLabel ? { audienceLabel: payload.audienceLabel } : {}),
+          ...(campaignId ? { campaignId } : {}),
           ...(payload.depotIds?.length ? { depotIds: payload.depotIds } : {}),
           ...(payload.audience === 'contacts'
             ? { contacts: chunk as BroadcastContact[] }
@@ -98,11 +117,17 @@ export function useBroadcast() {
         totals.recipients += data.recipients || 0
         totals.delivered += data.delivered || 0
         totals.duplicates += data.duplicates || 0
+        campaignId ??= data.campaignId ?? null
       }
+      totals.campaignId = campaignId
       return totals
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['notification-deliveries'] })
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      // The wallet just moved. Refetching is what makes the "before and after"
+      // beside the compose box mean anything.
+      queryClient.invalidateQueries({ queryKey: ['sms-balance'] })
       toast.success(`Sent to ${result.recipients} recipient(s)`)
     },
     onError: (err: any) => {
@@ -182,25 +207,119 @@ export function useRenderedPreview(body: string, depotIds: number[], enabled: bo
 
 export interface NotificationDelivery {
   id: number
+  campaignId: number | null
   customerId: number | null
   staffId: number | null
+  /** Who it went to, as they were named at send time. */
+  recipientName: string
   type: string
   channel: 'in_app' | 'push' | 'email' | 'sms'
   destination: string
   status: 'pending' | 'sent' | 'delivered' | 'failed' | 'skipped' | 'suppressed'
   attempts: number
   error: string | null
+  /** The carrier's own word — "DELIVERED", "Rejected", "Expired". */
+  providerStatus: string
+  providerMessageId: string
   sentAt: string | null
+  deliveredAt: string | null
   createdAt: string
 }
 
-export function useNotificationDeliveries(params?: { channel?: string; status?: string; type?: string; page?: number; limit?: number }) {
+export interface DeliveryLogParams {
+  channel?: string
+  status?: string
+  type?: string
+  campaignId?: number
+  /** Dates, not timestamps — the server widens `to` to the end of its day. */
+  from?: string
+  to?: string
+  /** Matched against the recipient's name and the destination alike. */
+  search?: string
+  page?: number
+  limit?: number
+}
+
+const dropBlanks = (params: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v != null))
+
+export function useNotificationDeliveries(params?: DeliveryLogParams) {
+  const queryParams = dropBlanks({ ...params })
   return useQuery({
-    queryKey: ['notification-deliveries', params],
+    queryKey: ['notification-deliveries', queryParams],
     queryFn: async () => {
-      const res = await api.get('/notifications/deliveries', { params })
+      const res = await api.get('/notifications/deliveries', { params: queryParams })
       return res.data.data as { data: NotificationDelivery[]; pagination: { total: number; page: number; limit: number; pages: number } }
     },
+    placeholderData: (prev) => prev,
+  })
+}
+
+// ─── The Termii wallet ──────────────────────────────────────────────────────
+
+export interface SmsBalance {
+  ok: boolean
+  balance: number | null
+  currency: string
+  error: string | null
+  cached: boolean
+}
+
+/**
+ * What is left in the SMS wallet.
+ *
+ * 346 sends on the live book failed with "Insufficient balance" while the
+ * dashboard showed nothing at all. Cached a minute server-side; refetched
+ * after a send so the figure beside the compose box moves when the money does.
+ */
+export function useSmsBalance() {
+  return useQuery({
+    queryKey: ['sms-balance'],
+    queryFn: async () => {
+      const res = await api.get('/notifications/sms-balance')
+      return res.data.data as SmsBalance
+    },
+    staleTime: 60 * 1000,
+  })
+}
+
+// ─── Campaigns ──────────────────────────────────────────────────────────────
+
+export interface Campaign {
+  id: number
+  title: string
+  body: string
+  channels: Array<'email' | 'sms'>
+  audience: string
+  /** What the audience meant at the time, since the thresholds are tunable. */
+  audienceLabel: string
+  recipientCount: number
+  smsSegments: number
+  balanceBefore: number | null
+  balanceAfter: number | null
+  balanceCurrency: string
+  /**
+   * What the wallet actually moved by. Null — never 0 — when a reading is
+   * missing, because "could not read" and "cost nothing" are different facts.
+   */
+  spent: number | null
+  sentBy: string
+  createdAt: string
+  completedAt: string | null
+  deliveries: { total: number; sent: number; delivered: number; failed: number; skipped: number }
+}
+
+export function useCampaigns(params?: { page?: number; limit?: number }) {
+  return useQuery({
+    queryKey: ['campaigns', params],
+    queryFn: async () => {
+      const res = await api.get('/notifications/campaigns', { params })
+      return res.data.data as {
+        campaigns: Campaign[]
+        pagination: { total: number; page: number; pages: number; limit: number }
+      }
+    },
+    placeholderData: (prev) => prev,
   })
 }
 

@@ -16,17 +16,19 @@ import { ConfirmDialog } from '#/components/ConfirmDialog'
 import {
   Users, Warehouse, Repeat, Clock, Mail, MessageSquare as SmsIcon, Send, Loader2,
   Tag, CheckCircle2, XCircle, AlertCircle, History, Megaphone, BookmarkPlus, Trash2, Sparkles,
-  BookUser, Braces, Eye,
+  BookUser, Braces, Eye, Wallet as WalletIcon, Search, X,
 } from 'lucide-react'
+import { cn } from '#/lib/utils'
 import { useDepots } from '#/lib/hooks/useDepots'
 import { useCustomerList } from '#/lib/hooks/useCustomers'
 import { useContactList, useContactTags } from '#/lib/hooks/useContacts'
 import {
   useCustomerSegment, useBroadcast, useNotificationDeliveries,
   useMessageTemplates, useCreateMessageTemplate, useDeleteMessageTemplate,
-  usePriceList, useRenderedPreview,
-  type SegmentFilters, type MessageTemplate,
+  usePriceList, useRenderedPreview, useSmsBalance, useCampaigns,
+  type SegmentFilters, type MessageTemplate, type Campaign,
 } from '#/lib/hooks/useMessaging'
+import { Pagination } from '#/components/Pagination'
 import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -190,22 +192,96 @@ function formatDate(v: string | null) {
   return new Date(v).toLocaleString('en-NG', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+/**
+ * `delivered` and `sent` used to share a badge, which was fine when nothing
+ * ever wrote `delivered` — the provider's acceptance was the only fact we had.
+ * Now that carrier receipts come back, the two are genuinely different: one
+ * means a handset received it, the other means Termii took it and we have not
+ * heard since. Conflating them would hide every message that quietly never
+ * arrived.
+ */
 function StatusBadge({ status }: { status: string }) {
-  if (status === 'delivered' || status === 'sent') {
-    return <Badge variant="outline" className="bg-success/10 text-success border-success/20 flex items-center gap-1 w-fit font-normal"><CheckCircle2 className="size-3" />{status}</Badge>
+  if (status === 'delivered') {
+    return <Badge variant="outline" className="bg-success/10 text-success border-success/20 flex items-center gap-1 w-fit font-normal"><CheckCircle2 className="size-3" />Delivered</Badge>
+  }
+  if (status === 'sent') {
+    return (
+      <Badge
+        variant="outline"
+        className="flex items-center gap-1 w-fit font-normal text-muted-foreground"
+        title="Accepted by the provider. No delivery receipt has come back for it."
+      >
+        <Send className="size-3" />Sent
+      </Badge>
+    )
   }
   if (status === 'failed') {
     return <Badge variant="destructive" className="flex items-center gap-1 w-fit font-normal"><XCircle className="size-3" />Failed</Badge>
   }
   if (status === 'skipped' || status === 'suppressed') {
-    return <Badge variant="outline" className="text-muted-foreground flex items-center gap-1 w-fit font-normal"><AlertCircle className="size-3" />{status}</Badge>
+    return <Badge variant="outline" className="text-muted-foreground flex items-center gap-1 w-fit font-normal capitalize"><AlertCircle className="size-3" />{status}</Badge>
   }
-  return <Badge variant="outline" className="w-fit font-normal">{status}</Badge>
+  return <Badge variant="outline" className="w-fit font-normal capitalize">{status}</Badge>
+}
+
+const money = (v: number, currency = 'NGN') =>
+  new Intl.NumberFormat('en-NG', {
+    style: 'currency', currency: currency || 'NGN', minimumFractionDigits: 0, maximumFractionDigits: 2,
+  }).format(v)
+
+/**
+ * What is left in the SMS wallet, said quietly.
+ *
+ * 346 sends on the live book failed with "Insufficient balance" while this
+ * page showed nothing at all — the desk found out from customers who never got
+ * their prices. It sits in the header rather than in a banner because on a
+ * normal day it is a number you glance at, not one you act on; it only raises
+ * its voice when the wallet is low enough to threaten the next blast.
+ */
+function SmsWallet() {
+  const { data, isLoading } = useSmsBalance()
+
+  if (isLoading) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3 animate-spin" />SMS balance
+      </span>
+    )
+  }
+  if (!data?.ok) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground" title={data?.error || ''}>
+        <WalletIcon className="size-3.5" />SMS balance unavailable
+      </span>
+    )
+  }
+
+  // A wallet this thin will not carry a price blast to the whole book, and
+  // that is worth colouring. The threshold is deliberately crude — the point
+  // is "top up before you send", not a precise forecast.
+  const low = data.balance !== null && data.balance < 5000
+
+  return (
+    <span
+      className={cn(
+        'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs',
+        low ? 'border-warning/30 bg-warning/10 text-warning' : 'border-border text-muted-foreground',
+      )}
+      title={low ? 'Top up before sending to a large audience' : 'Termii wallet'}
+    >
+      <WalletIcon className="size-3.5" />
+      <span className="font-medium">
+        {data.balance === null ? '—' : money(data.balance, data.currency)}
+      </span>
+      <span className="hidden sm:inline">SMS balance</span>
+    </span>
+  )
 }
 
 function MessagingPage() {
   const toast = useToast()
   const { data: depots = [] } = useDepots()
+  const { data: smsBalance } = useSmsBalance()
 
   // ── Audience ────────────────────────────────────────────────────────────
   const [presetId, setPresetId] = useState('everyone')
@@ -360,6 +436,23 @@ function MessagingPage() {
   // characters and the block it becomes is a few hundred.
   const smsSegments = Math.max(1, Math.ceil(outgoingBody.length / 160))
 
+  /**
+   * The audience in one sentence, thresholds included.
+   *
+   * Written here rather than on the server because this is the only place that
+   * knows what the knobs were set to, and it is stored on the campaign so a
+   * six-month-old blast can still say who it went to.
+   */
+  const audienceDescription = useMemo(() => {
+    if (preset.tune === 'frequent') {
+      return `${preset.label} — at least ${minOrders} order${minOrders === 1 ? '' : 's'} in the last ${sinceDays} days`
+    }
+    if (preset.tune === 'inactive') {
+      return `${preset.label} — no order in the last ${inactiveSinceDays} days`
+    }
+    return preset.label
+  }, [preset, minOrders, sinceDays, inactiveSinceDays])
+
   // ── Send ────────────────────────────────────────────────────────────────
   const [confirmOpen, setConfirmOpen] = useState(false)
   const broadcast = useBroadcast()
@@ -382,18 +475,30 @@ function MessagingPage() {
       body: body.trim(),
       channels,
       depotIds: bodyHasShortcodes ? effectiveDepotIds : undefined,
+      // What "frequent customers" meant on the day, thresholds and all. The
+      // preset id alone would leave a campaign nobody can reconstruct once
+      // someone has moved the sliders.
+      audienceLabel: audienceDescription,
     }
 
     // "Everyone" is two audiences, and the broadcast endpoint takes one at a
     // time — customers are addressed by id, contacts by their details, and the
     // engine resolves them differently. Two calls rather than one, which the
     // recipient total above already reflects.
+    //
+    // The first call opens the campaign; the second is told which one to join,
+    // so one press of Send is one entry in the history rather than two.
+    let campaignId: number | undefined
     if (customerRecipientIds.length > 0) {
-      await broadcast.mutateAsync({ ...common, audience: 'customers' as const, customerIds: customerRecipientIds })
+      const result = await broadcast.mutateAsync({
+        ...common, audience: 'customers' as const, customerIds: customerRecipientIds,
+      })
+      campaignId = result.campaignId ?? undefined
     }
     if (contactRecipients.length > 0) {
       await broadcast.mutateAsync({
         ...common,
+        campaignId,
         audience: 'contacts' as const,
         contacts: contactRecipients.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
       })
@@ -404,15 +509,49 @@ function MessagingPage() {
     setBody('')
   }
 
-  // ── Delivery log ────────────────────────────────────────────────────────
+  // ── History ─────────────────────────────────────────────────────────────
+  //
+  // Two views of the same thing, and the order matters. The campaign list
+  // answers "what did we send?" — the question actually asked — and the
+  // delivery log answers "did this one person get it?", which is a support
+  // question you arrive at from a campaign, not something to open cold.
   const [logChannel, setLogChannel] = useState('all')
   const [logStatus, setLogStatus] = useState('all')
-  const { data: deliveryData, isLoading: deliveriesLoading } = useNotificationDeliveries({
-    channel: logChannel === 'all' ? undefined : logChannel,
-    status: logStatus === 'all' ? undefined : logStatus,
-    type: 'system.announcement',
-    limit: 50,
-  })
+  const [logSearch, setLogSearch] = useState('')
+  const [logFrom, setLogFrom] = useState('')
+  const [logTo, setLogTo] = useState('')
+  const [logPage, setLogPage] = useState(1)
+  const [logPageSize, setLogPageSize] = useState(50)
+  /** Set by "See recipients" on a campaign; narrows the log to that blast. */
+  const [logCampaign, setLogCampaign] = useState<Campaign | null>(null)
+
+  const { data: deliveryData, isLoading: deliveriesLoading, isFetching: deliveriesFetching } =
+    useNotificationDeliveries({
+      channel: logChannel === 'all' ? undefined : logChannel,
+      status: logStatus === 'all' ? undefined : logStatus,
+      campaignId: logCampaign?.id,
+      search: logSearch || undefined,
+      from: logFrom || undefined,
+      to: logTo || undefined,
+      // Narrowed to one campaign, every channel attempt behind it belongs in
+      // view — including the transactional types, if any got filed there.
+      type: logCampaign ? undefined : 'system.announcement',
+      page: logPage,
+      limit: logPageSize,
+    })
+
+  const logSignature = [logChannel, logStatus, logSearch, logFrom, logTo, logCampaign?.id].join('|')
+  const [lastLogSignature, setLastLogSignature] = useState(logSignature)
+  if (lastLogSignature !== logSignature) { setLastLogSignature(logSignature); setLogPage(1) }
+
+  const [campaignPage, setCampaignPage] = useState(1)
+  const { data: campaignData, isLoading: campaignsLoading } = useCampaigns({ page: campaignPage, limit: 10 })
+  const campaigns = campaignData?.campaigns ?? []
+
+  const openCampaignRecipients = (c: Campaign) => {
+    setLogCampaign(c)
+    setLogChannel('all'); setLogStatus('all'); setLogSearch(''); setLogFrom(''); setLogTo('')
+  }
 
   return (
     <div className="space-y-6">
@@ -420,6 +559,7 @@ function MessagingPage() {
         eyebrow="Admin"
         title="Messaging"
         description="Compose and send SMS/email to customers, targeted by segment."
+        actions={<SmsWallet />}
       />
 
       <Card className="border-border/60">
@@ -766,16 +906,165 @@ function MessagingPage() {
         </CardContent>
       </Card>
 
+      {/* ── What we have sent ──────────────────────────────────────────────
+          The question the desk actually asks. Every blast used to dissolve
+          into hundreds of loose delivery rows with nothing tying them
+          together, so "what went out on Tuesday?" had no answer. */}
       <Card className="border-border/60">
-        <CardHeader className="border-b border-border/40 pb-3 flex flex-row items-center justify-between">
+        <CardHeader className="border-b border-border/40 pb-3">
           <div className="flex items-center gap-2">
-            <History className="size-4 text-primary" />
+            <Megaphone className="size-4 text-primary" />
             <div>
-              <CardTitle className="text-base font-semibold">Delivery Log</CardTitle>
-              <CardDescription className="text-xs mt-0.5">Recent broadcast attempts</CardDescription>
+              <CardTitle className="text-base font-semibold">Sent messages</CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Every broadcast, who it went to, how it landed and what it cost
+              </CardDescription>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+        </CardHeader>
+        <CardContent className="p-0">
+          {campaignsLoading ? (
+            <div className="flex items-center justify-center py-12"><Loader2 className="size-5 animate-spin text-primary" /></div>
+          ) : campaigns.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              Nothing sent yet. Messages sent from here will be listed with their delivery results.
+            </div>
+          ) : (
+            <>
+              <div className="divide-y divide-border/60">
+                {campaigns.map((c) => (
+                  <div key={c.id} className="p-4 space-y-2.5">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm">{c.title || 'Untitled message'}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {formatDate(c.createdAt)}
+                          {c.sentBy && <> · by {c.sentBy}</>}
+                          {c.audienceLabel && <> · {c.audienceLabel}</>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {c.channels.map((ch) => (
+                          <Badge key={ch} variant="outline" className="font-normal text-xs">
+                            {ch === 'email' ? <Mail className="size-3 mr-1" /> : <SmsIcon className="size-3 mr-1" />}
+                            {ch === 'email' ? 'Email' : 'SMS'}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">{c.body}</p>
+
+                    {/* Outcomes, and only the ones that happened — a row of
+                        zeroes for statuses nothing reached is noise. */}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                      <span className="text-muted-foreground">
+                        {c.recipientCount.toLocaleString()} recipient{c.recipientCount === 1 ? '' : 's'}
+                      </span>
+                      {c.deliveries.delivered > 0 && (
+                        <span className="flex items-center gap-1 text-success">
+                          <CheckCircle2 className="size-3" />{c.deliveries.delivered.toLocaleString()} delivered
+                        </span>
+                      )}
+                      {c.deliveries.sent > 0 && (
+                        <span
+                          className="flex items-center gap-1 text-muted-foreground"
+                          title="Accepted by the provider. A delivery receipt has not come back for these yet."
+                        >
+                          <Send className="size-3" />{c.deliveries.sent.toLocaleString()} sent
+                        </span>
+                      )}
+                      {c.deliveries.failed > 0 && (
+                        <span className="flex items-center gap-1 text-destructive">
+                          <XCircle className="size-3" />{c.deliveries.failed.toLocaleString()} failed
+                        </span>
+                      )}
+                      {c.deliveries.skipped > 0 && (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <AlertCircle className="size-3" />{c.deliveries.skipped.toLocaleString()} skipped
+                        </span>
+                      )}
+                      {/* What Termii's own wallet moved by. Only shown when
+                          both readings exist — a missing one means "we could
+                          not read it", which is not the same as "free". */}
+                      {c.spent !== null && c.spent > 0 && (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <WalletIcon className="size-3" />{money(c.spent, c.balanceCurrency)} spent
+                        </span>
+                      )}
+                      <Button
+                        variant="ghost" size="sm" className="h-6 px-2 text-xs ml-auto"
+                        onClick={() => openCampaignRecipients(c)}
+                      >
+                        See recipients
+                      </Button>
+                    </div>
+
+                    {c.balanceAfter !== null && (
+                      <p className="text-xs text-muted-foreground">
+                        SMS balance {money(c.balanceBefore ?? 0, c.balanceCurrency)} → {money(c.balanceAfter, c.balanceCurrency)}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {(campaignData?.pagination.pages ?? 1) > 1 && (
+                <Pagination
+                  currentPage={campaignPage}
+                  totalPages={campaignData?.pagination.pages ?? 1}
+                  pageSize={10}
+                  totalItems={campaignData?.pagination.total ?? 0}
+                  onPageChange={setCampaignPage}
+                  // Ten campaigns a page is the right size for a scan-and-open
+                  // list, so the size control has nothing useful to offer.
+                  onPageSizeChange={() => {}}
+                />
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Per-recipient log ─────────────────────────────────────────────── */}
+      <Card className="border-border/60">
+        <CardHeader className="border-b border-border/40 pb-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <History className="size-4 text-primary" />
+              <div>
+                <CardTitle className="text-base font-semibold">Delivery log</CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  {logCampaign
+                    ? `Everyone reached by "${logCampaign.title || 'Untitled message'}"`
+                    : 'Every attempt, with the reason when it did not arrive'}
+                </CardDescription>
+              </div>
+            </div>
+            {logCampaign && (
+              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setLogCampaign(null)}>
+                <X className="size-3 mr-1" />Show everything
+              </Button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-56">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground size-3.5" />
+              <Input
+                placeholder="Name or number…"
+                value={logSearch}
+                onChange={(e) => setLogSearch(e.target.value)}
+                className="pl-9 h-8 text-xs"
+              />
+            </div>
+            <Input
+              type="date" value={logFrom} onChange={(e) => setLogFrom(e.target.value)}
+              className="h-8 w-[9.5rem] text-xs" aria-label="Sent from"
+            />
+            <Input
+              type="date" value={logTo} onChange={(e) => setLogTo(e.target.value)}
+              className="h-8 w-[9.5rem] text-xs" aria-label="Sent up to"
+            />
             <Select value={logChannel} onValueChange={setLogChannel}>
               <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -785,47 +1074,100 @@ function MessagingPage() {
               </SelectContent>
             </Select>
             <Select value={logStatus} onValueChange={setLogStatus}>
-              <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="sent">Sent</SelectItem>
                 <SelectItem value="delivered">Delivered</SelectItem>
+                <SelectItem value="sent">Sent, unconfirmed</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
                 <SelectItem value="skipped">Skipped</SelectItem>
+                <SelectItem value="suppressed">Suppressed</SelectItem>
               </SelectContent>
             </Select>
+            {(logSearch || logFrom || logTo || logChannel !== 'all' || logStatus !== 'all') && (
+              <Button
+                variant="ghost" size="sm" className="h-8 text-xs"
+                onClick={() => {
+                  setLogSearch(''); setLogFrom(''); setLogTo('')
+                  setLogChannel('all'); setLogStatus('all')
+                }}
+              >
+                <X className="size-3 mr-1" />Clear
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-0">
           {deliveriesLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="size-5 animate-spin text-primary" /></div>
           ) : (deliveryData?.data || []).length === 0 ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">No broadcasts sent yet.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase">
-                    <th className="px-4 py-2 font-normal">Sent</th>
-                    <th className="px-4 py-2 font-normal">Channel</th>
-                    <th className="px-4 py-2 font-normal">Destination</th>
-                    <th className="px-4 py-2 font-normal">Status</th>
-                    <th className="px-4 py-2 font-normal">Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(deliveryData?.data || []).map((row) => (
-                    <tr key={row.id} className="border-b border-border/50 last:border-0">
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{formatDate(row.sentAt || row.createdAt)}</td>
-                      <td className="px-4 py-2.5 text-xs capitalize">{row.channel}</td>
-                      <td className="px-4 py-2.5 text-xs font-mono">{row.destination || '—'}</td>
-                      <td className="px-4 py-2.5"><StatusBadge status={row.status} /></td>
-                      <td className="px-4 py-2.5 text-xs text-destructive truncate max-w-[240px]">{row.error || ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              Nothing matches these filters.
             </div>
+          ) : (
+            <>
+              <div className={cn('overflow-x-auto transition-opacity', deliveriesFetching && 'opacity-60')}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase">
+                      <th className="px-4 py-2 font-normal">Sent</th>
+                      <th className="px-4 py-2 font-normal">Recipient</th>
+                      <th className="px-4 py-2 font-normal">Channel</th>
+                      <th className="px-4 py-2 font-normal">Status</th>
+                      <th className="px-4 py-2 font-normal">Why not</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(deliveryData?.data || []).map((row) => (
+                      <tr key={row.id} className="border-b border-border/50 last:border-0 align-top">
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDate(row.sentAt || row.createdAt)}
+                          {/* When the carrier confirmed it, if it ever did. */}
+                          {row.deliveredAt && (
+                            <span className="block text-success">
+                              landed {formatDate(row.deliveredAt)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs">
+                          {/* The name is why this column exists at all — a
+                              broadcast to leads has no account behind it, so
+                              the log could previously only show a number. */}
+                          <span className="block font-medium">{row.recipientName || '—'}</span>
+                          <span className="block font-mono text-muted-foreground">{row.destination || '—'}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-xs capitalize">{row.channel}</td>
+                        <td className="px-4 py-2.5">
+                          <StatusBadge status={row.status} />
+                          {row.providerStatus && (
+                            <span className="mt-0.5 block text-xs text-muted-foreground">{row.providerStatus}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs">
+                          {/* Failures are red; a suppression is not a fault —
+                              it is an opt-out doing its job — so it reads as
+                              ordinary text rather than an error. */}
+                          <span className={cn(
+                            'block max-w-[280px] whitespace-pre-wrap break-words',
+                            row.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+                          )}>
+                            {row.error || ''}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination
+                currentPage={logPage}
+                totalPages={deliveryData?.pagination.pages ?? 1}
+                pageSize={logPageSize}
+                totalItems={deliveryData?.pagination.total ?? 0}
+                onPageChange={setLogPage}
+                onPageSizeChange={(size) => { setLogPageSize(size); setLogPage(1) }}
+              />
+            </>
           )}
         </CardContent>
       </Card>
@@ -845,9 +1187,28 @@ function MessagingPage() {
             {outgoingBody}
           </div>
           {smsOn && (
-            <p className="text-xs text-muted-foreground">
-              {smsSegments} SMS segment{smsSegments === 1 ? '' : 's'} per recipient.
-            </p>
+            <div className="space-y-1.5 rounded-lg border border-border/60 p-3">
+              <p className="text-xs text-muted-foreground">
+                {smsSegments} SMS segment{smsSegments === 1 ? '' : 's'} per recipient ·{' '}
+                <strong>{(smsSegments * recipientCount).toLocaleString()}</strong> in total.
+              </p>
+              {/* The wallet, right where the decision is made. A blast that
+                  runs the balance out halfway through delivers to the first
+                  half and silently fails the rest — which is exactly what 346
+                  sends on the live book did. */}
+              {smsBalance?.ok && smsBalance.balance !== null && (
+                <p className="text-xs text-muted-foreground">
+                  SMS balance before this send: <strong>{money(smsBalance.balance, smsBalance.currency)}</strong>
+                </p>
+              )}
+              {smsBalance?.ok === false && (
+                <p className="flex items-center gap-1.5 text-xs text-warning">
+                  <AlertCircle className="size-3 shrink-0" />
+                  The SMS balance could not be read, so there is no way to tell from here
+                  whether the wallet will cover this.
+                </p>
+              )}
+            </div>
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
