@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
@@ -86,8 +86,25 @@ function PFIDashboard() {
    * letting the totals go quietly wrong again.
    */
   const PAGE_LIMIT = 1000
-  const { data, isLoading, isError, error, refetch } = usePfiList({
-    search: search || undefined,
+
+  /**
+   * The search box types locally and queries on a pause.
+   *
+   * Every keystroke used to become its own request, and because the query key
+   * changed each time the cache had nothing for it — so the page dropped to a
+   * full-screen spinner between letters. Typing four characters meant four
+   * round trips and four blank screens. 300ms of quiet is enough to mean
+   * "finished typing" without feeling laggy, and `placeholderData` in
+   * usePfiList keeps the previous results visible while the new ones land.
+   */
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const { data, isLoading, isError, error, refetch, isFetching } = usePfiList({
+    search: debouncedSearch || undefined,
     status: status !== 'all' ? status : undefined,
     type: type !== 'all' ? type : undefined,
     limit: PAGE_LIMIT,
@@ -363,7 +380,13 @@ function PFIDashboard() {
             {stats.partSold > 0 && <> · * profit not yet meaningful on {stats.partSold}</>}
           </p> */}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {/* Dimmed, not replaced. A refetch used to unmount the whole list
+              into a spinner; fading it keeps the results readable and makes
+              the update obvious without the page appearing to reload. */}
+          <div className={cn(
+            'grid grid-cols-1 gap-4 transition-opacity duration-250 ease-luxe sm:grid-cols-2 xl:grid-cols-3',
+            isFetching && 'opacity-60',
+          )}>
             {rows.map((p) => {
               const f = p.financials
               const finished = p.status === 'finished'

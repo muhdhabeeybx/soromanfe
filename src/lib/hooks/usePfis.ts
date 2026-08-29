@@ -325,6 +325,12 @@ export function usePfiList(params?: { search?: string; status?: string; type?: s
       const res = await api.get('/pfis', { params })
       return res.data.data as { pfis: PfiWithFinancials[]; pagination: any }
     },
+    // Keep the current results on screen while the next set loads. Without
+    // this every keystroke in the search box emptied `data`, which put the
+    // page into `isLoading` and swapped the whole thing for a full-page
+    // spinner — so typing read as the page reloading under you rather than as
+    // a list narrowing.
+    placeholderData: (prev) => prev,
   })
 }
 
