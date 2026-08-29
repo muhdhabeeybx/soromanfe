@@ -38,7 +38,7 @@ type SortKey = 'serial' | 'pfiNumber' | 'cost' | 'revenue' | 'profit' | 'remaini
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: 'serial', label: 'Serial (active first)' },
-  { key: 'profit', label: 'Profit / loss' },
+  { key: 'profit', label: 'Profit/Loss' },
   { key: 'revenue', label: 'Revenue' },
   { key: 'cost', label: 'Total cost' },
   { key: 'remaining', label: 'Stock remaining' },
@@ -236,17 +236,25 @@ function PFIDashboard() {
       if (p.status === 'active') active++
       if (!f.profitIsMeaningful && f.sellThrough != null) partSold++
 
-      // Per-fuel stock. Grouped before the litres check below, because an LPG
-      // batch has a perfectly good tonnage — it just cannot be added to a
-      // litre total. Oversold batches are clamped at zero here: negative
-      // stock is a real signal on the batch that has it (and is named there),
-      // but subtracting it from another batch's genuine stock would report
-      // less PMS on hand than there is.
-      const fuel = fuelLabel(p.productName)
-      const bucket = byFuel.get(fuel) || { qty: 0, unit: p.productUnit || 'Litres', batches: 0 }
-      bucket.qty += Math.max(0, f.remaining)
-      bucket.batches += 1
-      byFuel.set(fuel, bucket)
+      // Per-fuel stock, ACTIVE batches only.
+      //
+      // A finished batch is closed out — whatever its arithmetic still shows
+      // as remaining is not stock anyone can sell, and folding it in would
+      // answer "how much PMS could we ship today" with a number that includes
+      // product from batches settled months ago.
+      //
+      // Grouped before the litres check below, because an LPG batch has a
+      // perfectly good tonnage — it just cannot be added to a litre total.
+      // Oversold batches clamp at zero: negative stock is a real signal on the
+      // batch that has it and is named there, but subtracting it from another
+      // batch's genuine stock would report less PMS on hand than there is.
+      if (p.status === 'active') {
+        const fuel = fuelLabel(p.productName)
+        const bucket = byFuel.get(fuel) || { qty: 0, unit: p.productUnit || 'Litres', batches: 0 }
+        bucket.qty += Math.max(0, f.remaining)
+        bucket.batches += 1
+        byFuel.set(fuel, bucket)
+      }
 
       // A tonne cannot be added to a litre. LPG is bought and sold in metric
       // tonnes, and every quantity total on this page was summing them in
@@ -271,9 +279,9 @@ function PFIDashboard() {
     }
 
     // The fuels people actually ask after, in the order they ask — then
-    // anything else by how much is left. A fuel with no batches at all does
-    // not get a tile; an empty one does, because "PMS: 0" is an answer and a
-    // missing tile is not.
+    // anything else by how much is left. A fuel with no ACTIVE batch at all
+    // does not get a tile; one whose active batches are empty does, because
+    // "PMS: 0" is an answer and a missing tile is not.
     const ORDER = ['PMS', 'AGO', 'LPG', 'DPK']
     const fuels = [...byFuel.entries()]
       .map(([label, v]) => ({ label, ...v }))
@@ -353,7 +361,10 @@ function PFIDashboard() {
             label={`${fuel.label} remaining`}
             value={qty(fuel.qty, fuel.unit)}
             tone={fuel.qty > 0 ? 'amber' : 'green'}
-            description={`across ${fuel.batches} batch${fuel.batches === 1 ? '' : 'es'}`}
+            // Says "active" out loud. Without it the figure invites the
+            // question of whether closed batches are in there, which is
+            // exactly the doubt these tiles exist to remove.
+            description={`across ${fuel.batches} active batch${fuel.batches === 1 ? '' : 'es'}`}
           />
         ))}
         {/* <StatCard

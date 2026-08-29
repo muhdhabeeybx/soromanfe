@@ -917,7 +917,7 @@ function FinanceReportPage() {
           />
           {selectedPfi && (
             <>
-              <SummaryItem label="Initial stock (PFI)" value={`${(summary.initialStock ?? 0).toLocaleString()} L`} />
+              <SummaryItem label="Tank quantity (PFI)" value={`${(summary.initialStock ?? 0).toLocaleString()} L`} />
               <SummaryItem label="Tank balance after (PFI)" value={`${(summary.tankBalanceAfter ?? 0).toLocaleString()} L`} />
             </>
           )}
@@ -941,7 +941,7 @@ function FinanceReportPage() {
                     <TableHead>PFI</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Initial Stock</TableHead>
+                    <TableHead className="text-right">Tank Quantity</TableHead>
                     <TableHead className="text-right">Volume Sold (Period)</TableHead>
                     <TableHead className="text-right">Total Volume Sold</TableHead>
                     <TableHead className="text-right">Volume Remaining</TableHead>

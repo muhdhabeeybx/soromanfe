@@ -55,7 +55,17 @@ export interface FinanceReportSummary {
    * behind it there is nothing to answer them with.
    */
   breakdown?: PaymentBreakdown
-  /** Only meaningful — and only shown — when a single PFI is selected. */
+  /**
+   * The PFI's tank quantity — `startingQtyLitres`, the measured figure that
+   * landed in the tank.
+   *
+   * Printed as "Tank Quantity", the same words the PFI report and the PFI form
+   * use, because it is the same number and two names for one figure is how a
+   * reader ends up believing there are two. The field keeps its older name
+   * only to avoid a rename across this module for no reader's benefit.
+   *
+   * Only meaningful — and only shown — when a single PFI is selected.
+   */
   initialStock: number | null
   tankBalanceAfter: number | null
 }
@@ -65,6 +75,7 @@ export interface PfiStockRow {
   pfiNumber: string
   locationName: string
   productName: string
+  /** The tank quantity, printed under that name. See PfiStockSummary above. */
   initialStock: number
   /** Litres sold within the report's current filters — not all-time. */
   volumeSoldPeriod: number
@@ -317,7 +328,7 @@ function summaryColumns(
       { header: 'Orders Reconciling Exactly', value: b.exactCount },
     )
   }
-  if (summary.initialStock != null) cols.push({ header: 'Initial Stock (PFI)', value: summary.initialStock, fmt: QTY })
+  if (summary.initialStock != null) cols.push({ header: 'Tank Quantity (PFI)', value: summary.initialStock, fmt: QTY })
   if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance After (PFI)', value: summary.tankBalanceAfter, fmt: QTY })
   return cols
 }
@@ -556,7 +567,7 @@ export async function exportFinanceReportExcel(
     cursor = writeSectionHeading(ws, cursor, 'PFI STOCK SUMMARY')
     cursor += 1
 
-    const stockHeaders = ['PFI', 'Location', 'Product', 'Initial Stock', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']
+    const stockHeaders = ['PFI', 'Location', 'Product', 'Tank Quantity', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']
     const stockHeaderRow = ws.getRow(cursor)
     stockHeaderRow.values = stockHeaders
     stockHeaderRow.height = ROW_HEIGHT.header
@@ -827,7 +838,7 @@ export async function exportFinanceReportPdf(
     const periodTotal = pfiStock.reduce((s, p) => s + p.volumeSoldPeriod, 0)
     autoTable(doc, {
       startY: stockY,
-      head: [['PFI', 'Location', 'Product', 'Initial Stock', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']],
+      head: [['PFI', 'Location', 'Product', 'Tank Quantity', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']],
       body: pfiStock.map((p) => [
         up(p.pfiNumber), up(p.locationName), up(p.productName),
         p.initialStock.toLocaleString(), p.volumeSoldPeriod.toLocaleString(),

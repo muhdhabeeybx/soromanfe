@@ -267,7 +267,7 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       // "Still to load" names the gap where the trucks are behind the money.
       title: 'STOCK MOVEMENT',
       pairs: [
-        { label: `Initial Stock (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
+        { label: `Tank Quantity (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
         { label: `Total Sold (${u.plural})`, value: f.sold, fmt: UQTY, bold: true },
         { label: `${gantry ? 'Balance' : 'Tank Balance'} (${u.plural})`, value: f.remaining, fmt: UQTY, bold: true },
         { label: 'Percentage Sold', value: f.sellThrough ?? '—', fmt: f.sellThrough != null ? PCT : undefined },
