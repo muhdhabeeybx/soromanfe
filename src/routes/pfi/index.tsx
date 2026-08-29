@@ -52,7 +52,9 @@ function sortValue(p: PfiWithFinancials, key: SortKey): number | string | null {
   const f = p.financials
   switch (key) {
     case 'pfiNumber': return p.pfiNumber || ''
-    case 'cost': return f.totalCost
+    // Sorting follows the displayed figure — after credit. See the note on
+    // the Total cost card.
+    case 'cost': return f.grandTotalCost
     case 'revenue': return f.revenue
     case 'profit': return f.profitLoss
     case 'remaining': return f.remaining
@@ -131,7 +133,7 @@ function PFIDashboard() {
       revenue += f.revenue
       expenses += f.totalExpenses
       if (f.deficitCost != null) deficitCost += f.deficitCost
-      if (f.totalCost != null) { cost += f.totalCost; costed++ } else uncosted++
+      if (f.grandTotalCost != null) { cost += f.grandTotalCost; costed++ } else uncosted++
       if (p.status === 'active') active++
       if (!f.profitIsMeaningful && f.sellThrough != null) partSold++
 
@@ -151,8 +153,8 @@ function PFIDashboard() {
       // cheap one. Only costed batches contribute, and their quantity goes in
       // with their cost, so the numerator and denominator always describe the
       // same set of batches.
-      if (f.totalCost != null && f.costQtyLitres) {
-        landingCost += f.totalCost
+      if (f.grandTotalCost != null && f.costQtyLitres) {
+        landingCost += f.grandTotalCost
         landingQty += f.costQtyLitres
       }
     }
@@ -366,7 +368,7 @@ function PFIDashboard() {
               const f = p.financials
               const finished = p.status === 'finished'
               const gantry = f.isGantry
-              const uncosted = f.totalCost == null
+              const uncosted = f.grandTotalCost == null
               const heroLabel = uncosted
                 ? 'Cost'
                 : f.profitLoss == null || f.profitLoss === 0 ? 'Profit / loss'
@@ -412,9 +414,19 @@ function PFIDashboard() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                        {/* After any credit note — the figure the landing cost
+                            below divides, so the two reconcile by eye. The
+                            credit is named underneath rather than folded in
+                            silently, or the number would look wrong to anyone
+                            holding the invoice. */}
                         <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">Total cost</p>
-                          <p className="truncate text-sm font-normal">{naira(f.totalCost)}</p>
+                          <p className="truncate text-sm font-normal">{naira(f.grandTotalCost)}</p>
+                          {f.creditBalance > 0 && (
+                            <p className="truncate text-xs text-accent">
+                              after {naira(f.creditBalance)} credit
+                            </p>
+                          )}
                         </div>
                         <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">{gantry ? 'Sales value' : 'Revenue'}</p>

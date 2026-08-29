@@ -283,13 +283,20 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
         { label: gantry ? 'PFI Value' : 'PFI (Cargo) Value', value: f.pfiValue ?? '—', fmt: f.pfiValue != null ? NGN : undefined },
         { label: 'Total Expenses', value: expensesApproved, fmt: NGN },
         { label: 'Pending Expenses', value: awaiting, fmt: NGN, tone: awaiting > 0 ? 'bad' : 'plain' },
-        { label: 'Total Cost', value: f.totalCost ?? '—', fmt: f.totalCost != null ? NGN : undefined },
-        // Grand total cost ÷ the quantity billed — the BL figure on coastal,
-        // the quantity bought on gantry.
+        // The credit is listed BEFORE the total it reduces, so the column
+        // reads as a sum ending in the figure everything below divides. A
+        // credit reduces what the batch cost, so it reads as a gain.
+        ...(f.creditBalance > 0
+          ? ([
+              { label: 'Cost Before Credit', value: f.totalCost ?? '—', fmt: f.totalCost != null ? NGN : undefined },
+              { label: 'Credit Note', value: f.creditBalance, fmt: NGN, tone: 'good' },
+            ] as Pair[])
+          : []),
+        // After any credit — the same figure the cards and the drawer show,
+        // and the one the landing cost below divides.
+        { label: 'Total Cost', value: f.grandTotalCost ?? '—', fmt: f.grandTotalCost != null ? NGN : undefined },
         { label: `Landing Cost/${u.singular}`, value: f.landingCostPerLitre ?? '—', fmt: f.landingCostPerLitre != null ? NGN : undefined, bold: true },
         { label: gantry ? 'Sales Value' : 'Revenue', value: f.revenue, fmt: NGN, tone: 'good' },
-        // A credit reduces what the batch cost, so it reads as a gain.
-        { label: 'Credit Note', value: f.creditBalance || 0, fmt: NGN, tone: f.creditBalance > 0 ? 'good' : 'plain' },
         { label: 'Balance', value: f.profitLoss ?? '—', fmt: f.profitLoss != null ? NGN_SIGNED : undefined, tone: f.profitLoss != null ? 'signed' : 'plain' },
         { label: 'Margin', value: f.margin != null ? f.margin / 100 : '—', fmt: f.margin != null ? PCT : undefined, tone: f.margin != null && f.margin < 0 ? 'bad' : 'plain' },
       ],
@@ -917,7 +924,7 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
     const f = p.financials
     expenses += f.totalExpenses
     revenue += f.revenue
-    if (f.totalCost != null) { cost += f.totalCost; costed++ }
+    if (f.grandTotalCost != null) { cost += f.grandTotalCost; costed++ }
 
     const row = ws.getRow(cursor)
     row.height = ROW_HEIGHT.body
@@ -938,7 +945,7 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
       through: f.sellThrough ?? '',
       cargo: f.pfiValue ?? '',
       exp: f.totalExpenses,
-      cost: f.totalCost ?? '',
+      cost: f.grandTotalCost ?? '',
       landing: f.landingCostPerLitre ?? '',
       rev: f.revenue,
       profit: f.profitLoss ?? '',

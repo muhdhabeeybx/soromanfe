@@ -278,23 +278,26 @@ export function PfiDetailDialog({
                     tone="text-warning"
                   />
                 )}
-                <Row label="Total Cost" value={naira(f.totalCost)} divider />
+                {/* A credit reduces what the batch cost, so it reads as a gain
+                    rather than as another cost line — and it is shown BEFORE
+                    the total, so the total is the last figure in the column
+                    and is the one everything below divides. */}
                 {f.creditBalance > 0 && (
                   <>
-                    {/* A credit reduces what the batch cost, so it reads as a
-                        gain rather than as another cost line. */}
+                    <Row label="Cost before credit" value={naira(f.totalCost)} divider />
                     <Row
                       label={isGantry ? 'Credit Note' : 'Credit Balance'}
                       value={`-${naira(f.creditBalance)}`}
                       tone="text-accent"
-                      // hint="Rebate, discount or claim credited back"
-                    />
-                    <Row
-                      label="Grand Total Cost" value={naira(f.grandTotalCost)}
-                      // hint="Total cost minus credit balance — what profit is computed against"
                     />
                   </>
                 )}
+                <Row
+                  label="Total Cost"
+                  value={naira(f.grandTotalCost)}
+                  divider={f.creditBalance === 0}
+                  hint={f.creditBalance > 0 ? 'After the credit above' : undefined}
+                />
                 {/* Total Cost ÷ the billed quantity — the same Total Cost
                     printed two lines above, so the arithmetic on this panel
                     can be checked by eye. It divided the credit-adjusted
@@ -307,16 +310,6 @@ export function PfiDetailDialog({
                   value={naira(f.landingCostPerLitre)}
                   emphasis
                 />
-                {/* The truer cost once a rebate is settled. Only shown when
-                    there IS one — otherwise it repeats the line above. */}
-                {f.creditBalance > 0 && f.landingCostPerLitreAfterCredit != null && (
-                  <Row
-                    label="— after credit note"
-                    hint={`Grand total cost ÷ ${isGantry ? 'quantity' : 'BL quantity'}`}
-                    value={naira(f.landingCostPerLitreAfterCredit)}
-                    tone="text-accent"
-                  />
-                )}
                 {/* Only worth showing when the two bases actually differ —
                     which is exactly when there was a discharge shortage, and
                     the gap between them is what that shortage cost. */}

@@ -41,22 +41,23 @@ export type PfiFinancials = {
   totalCost: number | null
   /** A rebate, discount or claim credited back against the cargo. */
   creditBalance: number
-  /** totalCost − creditBalance. What profit is actually computed against. */
+  /**
+   * totalCost − creditBalance.
+   *
+   * This is what every screen shows under the label "Total cost", what profit
+   * is measured against, and what the landing cost divides. `totalCost` above
+   * is the gross figure before the credit, shown only on batches that carry
+   * one and labelled "Cost before credit" there.
+   */
   grandTotalCost: number | null
   /**
    * Total Cost ÷ BL quantity — what one litre of the batch cost, all in.
    *
-   * Divides `totalCost`, the same figure the report prints one line above it,
-   * so the two reconcile on the page. Null until totalCost is known.
+   * Divides `grandTotalCost`, which is the same figure displayed as "Total
+   * cost" directly above it wherever both appear, so the division can be
+   * checked by eye. Null until the batch is priced.
    */
   landingCostPerLitre: number | null
-  /**
-   * The same figure after a credit note is taken off (grandTotalCost ÷ BL).
-   *
-   * Identical to landingCostPerLitre whenever there is no credit, which is
-   * most batches — so it is only worth showing when `creditBalance > 0`.
-   */
-  landingCostPerLitreAfterCredit: number | null
   /** The same cost over what actually measured into the tank. Higher than the BL figure when there was a discharge shortage. */
   landingCostPerLitreTank: number | null
   /** Expense lines still walking the approval chain — committed, not yet spent. */
