@@ -4,7 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Search, Plus, Package, Banknote, Droplets, TriangleAlert,
   ArrowUpDown, Lock, Pencil, Download, X, TrendingUp, TrendingDown,
-  FileSpreadsheet, FileText, Gauge,
+  FileSpreadsheet, Gauge,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -24,7 +24,9 @@ import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import {
   naira, litres, qty, unitNames, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
 } from '#/routes/pfi/-pfi-utils'
-import { downloadPfiReport, downloadPfiReportPdf, downloadMasterReport } from '#/routes/pfi/-pfi-report'
+// The PDF builder stays exported for anyone who wants it; the card offers
+// one report, the workbook.
+import { downloadPfiReport, downloadMasterReport } from '#/routes/pfi/-pfi-report'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/pfi/')({
@@ -32,9 +34,10 @@ export const Route = createFileRoute('/pfi/')({
   component: PFIDashboard,
 })
 
-type SortKey = 'pfiNumber' | 'cost' | 'revenue' | 'profit' | 'remaining' | 'sellThrough'
+type SortKey = 'serial' | 'pfiNumber' | 'cost' | 'revenue' | 'profit' | 'remaining' | 'sellThrough'
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: 'serial', label: 'Serial (active first)' },
   { key: 'profit', label: 'Profit / loss' },
   { key: 'revenue', label: 'Revenue' },
   { key: 'cost', label: 'Total cost' },
@@ -44,6 +47,63 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
 ]
 
 /**
+ * The serial out of a PFI number, for ordering the book the way it is spoken
+ * about: 43, 41, 36B, 25B.
+ *
+ * A PFI number carries its serial first and then a description —
+ * "PFI/43/26/DANGOTE/PMS/3ML/AUG", "PFI 36B/26/MT STELLAR/CALABAR" — so a
+ * plain string sort puts 41 above 5 and reads as random. This pulls out the
+ * leading number and the letter that sometimes follows it, and sorts on those.
+ *
+ * @returns [number, letter] — letter is "" when there is none
+ */
+function serialOf(pfiNumber: string | null | undefined): [number, string] {
+  const m = String(pfiNumber || '').match(/(\d+)\s*([A-Za-z]?)/)
+  return m ? [Number(m[1]), (m[2] || '').toUpperCase()] : [-1, '']
+}
+
+/**
+ * Active batches first, then finished; newest serial first within each.
+ *
+ * Two groups rather than one list because they are read for different reasons:
+ * an active batch is something to act on, a finished one is something to look
+ * up. Mixing them by serial alone buries the live batches among the closed
+ * ones the moment the numbering wraps.
+ */
+function compareSerial(a: PfiWithFinancials, b: PfiWithFinancials): number {
+  const aActive = a.status === 'active' ? 0 : 1
+  const bActive = b.status === 'active' ? 0 : 1
+  if (aActive !== bActive) return aActive - bActive
+
+  const [an, al] = serialOf(a.pfiNumber)
+  const [bn, bl] = serialOf(b.pfiNumber)
+  if (an !== bn) return bn - an
+  if (al !== bl) return bl.localeCompare(al)
+  // Same serial and suffix — fall back to the full string so the order is at
+  // least stable rather than left to the sort's own discretion.
+  return String(b.pfiNumber || '').localeCompare(String(a.pfiNumber || ''))
+}
+
+/**
+ * The trading name for a product, so stock can be totalled per fuel.
+ *
+ * The product table calls petrol "Petrol"; the desk calls it PMS, and asks
+ * "how much PMS is left" rather than "how much Petrol". Matching on what is
+ * actually stored and answering in the name people use is the whole job here.
+ * Anything unrecognised keeps its own name rather than being lumped into an
+ * "Other" bucket that hides which fuel it was.
+ */
+function fuelLabel(productName: string | null | undefined): string {
+  const t = String(productName || '').trim()
+  if (!t) return 'Unnamed product'
+  if (/pms|petrol|premium motor/i.test(t)) return 'PMS'
+  if (/ago|diesel|gas\s*oil/i.test(t)) return 'AGO'
+  if (/lpg|cooking gas|propane/i.test(t)) return 'LPG'
+  if (/dpk|kerosene/i.test(t)) return 'DPK'
+  return t
+}
+
+/**
  * Null for an unpriced batch, which is not the same as a low value — sorting
  * one as if it were the worst loss in the book would put the batches nobody
  * has costed at the top of a list about money.
@@ -51,6 +111,8 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
 function sortValue(p: PfiWithFinancials, key: SortKey): number | string | null {
   const f = p.financials
   switch (key) {
+    // Handled by compareSerial before this runs; here for exhaustiveness.
+    case 'serial': return p.pfiNumber || ''
     case 'pfiNumber': return p.pfiNumber || ''
     // Sorting follows the displayed figure — after credit. See the note on
     // the Total cost card.
@@ -67,7 +129,7 @@ function PFIDashboard() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [type, setType] = useState('all')
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'profit', dir: 'asc' })
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'serial', dir: 'desc' })
   const [detailId, setDetailId] = useState<number | null>(null)
   const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
 
@@ -117,6 +179,15 @@ function PFIDashboard() {
 
   const rows = useMemo(() => {
     const list = [...pfis]
+
+    // Serial ordering carries its own grouping rule and ignores the direction
+    // toggle — "active first, newest serial first" is the whole point of it,
+    // and letting it be reversed would just bury the live batches again.
+    if (sort.key === 'serial') {
+      list.sort(compareSerial)
+      return list
+    }
+
     list.sort((a, b) => {
       const av = sortValue(a, sort.key)
       const bv = sortValue(b, sort.key)
@@ -145,6 +216,17 @@ function PFIDashboard() {
     // Batches whose quantity is not in litres — LPG is bought in tonnes.
     let otherUnit = 0
 
+    /**
+     * Stock left, per fuel and in that fuel's own unit.
+     *
+     * One "quantity remaining" number across the whole book answers nothing
+     * useful — PMS and AGO are bought, priced and sold separately, and the
+     * question is always "how much PMS is left", never "how much product".
+     * Kept per unit as well as per fuel so an LPG tonnage is never added to a
+     * litre figure.
+     */
+    const byFuel = new Map<string, { qty: number; unit: string; batches: number }>()
+
     for (const p of pfis) {
       const f = p.financials
       revenue += f.revenue
@@ -153,6 +235,18 @@ function PFIDashboard() {
       if (f.grandTotalCost != null) { cost += f.grandTotalCost; costed++ } else uncosted++
       if (p.status === 'active') active++
       if (!f.profitIsMeaningful && f.sellThrough != null) partSold++
+
+      // Per-fuel stock. Grouped before the litres check below, because an LPG
+      // batch has a perfectly good tonnage — it just cannot be added to a
+      // litre total. Oversold batches are clamped at zero here: negative
+      // stock is a real signal on the batch that has it (and is named there),
+      // but subtracting it from another batch's genuine stock would report
+      // less PMS on hand than there is.
+      const fuel = fuelLabel(p.productName)
+      const bucket = byFuel.get(fuel) || { qty: 0, unit: p.productUnit || 'Litres', batches: 0 }
+      bucket.qty += Math.max(0, f.remaining)
+      bucket.batches += 1
+      byFuel.set(fuel, bucket)
 
       // A tonne cannot be added to a litre. LPG is bought and sold in metric
       // tonnes, and every quantity total on this page was summing them in
@@ -176,9 +270,23 @@ function PFIDashboard() {
       }
     }
 
+    // The fuels people actually ask after, in the order they ask — then
+    // anything else by how much is left. A fuel with no batches at all does
+    // not get a tile; an empty one does, because "PMS: 0" is an answer and a
+    // missing tile is not.
+    const ORDER = ['PMS', 'AGO', 'LPG', 'DPK']
+    const fuels = [...byFuel.entries()]
+      .map(([label, v]) => ({ label, ...v }))
+      .sort((a, b) => {
+        const ai = ORDER.indexOf(a.label)
+        const bi = ORDER.indexOf(b.label)
+        if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi)
+        return b.qty - a.qty
+      })
+
     return {
       cost, revenue, expenses, remaining, deficitCost, costed, uncosted, active, partSold,
-      sold, otherUnit,
+      sold, otherUnit, fuels,
       landing: landingQty > 0 ? landingCost / landingQty : null,
       landingQty,
       profit: costed > 0 ? revenue - cost : null,
@@ -228,26 +336,26 @@ function PFIDashboard() {
         </div>
       )}
 
-      <StatCardGrid count={6}>
+      <StatCardGrid count={5 + stats.fuels.length}>
         <StatCard
           icon={<Package />} label="Active PFIs" value={stats.active}
           tone="blue"
           description={`of ${stats.count} batch${stats.count === 1 ? '' : 'es'}${hasFilters ? ' matching' : ''}`}
         />
-        <StatCard
-          icon={<Droplets />} label="Quantity remaining" value={litres(stats.remaining)}
-          tone={stats.remaining > 0 ? 'amber' : 'green'}
-          description={
-            stats.otherUnit > 0
-              ? `${stats.otherUnit} non-litre batch${stats.otherUnit === 1 ? '' : 'es'} counted separately`
-              : undefined
-          }
-          // description={
-          //   stats.partSold > 0
-          //     ? `${stats.partSold} batch${stats.partSold === 1 ? '' : 'es'} part-sold — profit not yet real`
-          //     : 'Every batch fully sold'
-          // }
-        />
+        {/* Stock per fuel, not one number across the book. PMS and AGO are
+            bought, priced and sold separately, and the question is always
+            "how much PMS is left" — never "how much product". Each is shown
+            in its own unit, so an LPG tonnage is never dressed up as litres. */}
+        {stats.fuels.map((fuel) => (
+          <StatCard
+            key={fuel.label}
+            icon={<Droplets />}
+            label={`${fuel.label} remaining`}
+            value={qty(fuel.qty, fuel.unit)}
+            tone={fuel.qty > 0 ? 'amber' : 'green'}
+            description={`across ${fuel.batches} batch${fuel.batches === 1 ? '' : 'es'}`}
+          />
+        ))}
         {/* <StatCard
           icon={<Lock />} label="Finished batches" value={stats.count - stats.active}
           tone="neutral"
@@ -403,11 +511,16 @@ function PFIDashboard() {
                     <div className={cn(PANEL_RAIL, 'items-start')}>
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold">{p.pfiNumber}</span>
-                          <StatusChip tone={finished ? 'inert' : 'accent'}>
+                          <span className="text-base font-bold tracking-tight">{p.pfiNumber}</span>
+                          {/* Filled rather than outlined. Two chips sit here
+                              side by side and a pair of outlines reads as
+                              clutter around the number rather than as state. */}
+                          <StatusChip fill="solid" tone={finished ? 'inert' : 'accent'}>
                             {finished ? 'Finished' : 'Active'}
                           </StatusChip>
-                          <StatusChip tone="inert">{gantry ? 'Gantry' : 'Coastal'}</StatusChip>
+                          <StatusChip fill="solid" tone="inert">
+                            {gantry ? 'Gantry' : 'Coastal'}
+                          </StatusChip>
                         </div>
                         <p className="mt-0.5 truncate text-sm text-muted-foreground">
                           {[p.productName, p.locationName].filter(Boolean).join(' · ') || '—'}
@@ -495,14 +608,25 @@ function PFIDashboard() {
                           <p className="text-xs text-muted-foreground">Total Expenses</p>
                           <p className="truncate text-sm font-normal">{naira(f.totalExpenses)}</p>
                         </div>
+                        {/* The price the batch was bought at. On gantry there
+                            are no shipping papers and the landing cost can
+                            read "—" on an unpriced batch, so the rate actually
+                            paid is the figure to have in front of you. */}
+                        <div className="min-w-0">
+                          <p className="text-xs text-muted-foreground">
+                            Price / {unitNames(p.productUnit).singular.toLowerCase()}
+                          </p>
+                          <p className="truncate text-sm font-normal">{naira(f.pricePerLitre)}</p>
+                        </div>
                         {/* What one unit of this batch cost, all in — Total
                             Cost ÷ the quantity billed. The number to price
-                            against: sell below it and the batch loses money. */}
+                            against: sell below it and the batch loses money,
+                            which is why it is the one figure here in bold. */}
                         <div className="min-w-0">
                           <p className="text-xs text-muted-foreground">
                             Landing cost / {unitNames(p.productUnit).singular.toLowerCase()}
                           </p>
-                          <p className="truncate text-sm font-semibold">
+                          <p className="truncate text-sm font-bold text-foreground">
                             {naira(f.landingCostPerLitre)}
                           </p>
                         </div>
@@ -511,7 +635,7 @@ function PFIDashboard() {
                           <p className="text-xs text-muted-foreground">
                             Total {unitNames(p.productUnit).plural.toLowerCase()} sold
                           </p>
-                          <p className="truncate text-sm font-normal">
+                          <p className="truncate text-sm font-semibold">
                             {qty(f.sold, p.productUnit)}
                           </p>
                         </div>
@@ -561,34 +685,36 @@ function PFIDashboard() {
                     className={cn(PANEL_FOOTER, 'mt-auto flex-wrap gap-2')}
                     onClick={(e) => e.stopPropagation()}
                   >
+                    {/* Coloured by what each one does, so the row is scanned
+                        by hue rather than read word by word: editing is the
+                        ordinary action, closing a batch is irreversible and
+                        wears the warning tone, and the report is the one you
+                        reach for most so it carries the filled primary. */}
                     <Button
-                      variant="outline" size="sm"
+                      variant="secondary" size="sm"
                       onClick={() => navigate({ to: '/pfi/form', search: { id: String(p.id) } as any })}
                     >
                       <Pencil data-icon="inline-start" />
                       Edit details
                     </Button>
                     {!finished && (
-                      <Button variant="outline" size="sm" onClick={() => setClosing(p)}>
+                      <Button
+                        variant="outline" size="sm"
+                        className="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
+                        onClick={() => setClosing(p)}
+                      >
                         <Lock data-icon="inline-start" />
                         Close PFI
                       </Button>
                     )}
-                    {/* Excel and PDF off the same data — the workbook is for
-                        working with, the PDF for circulating. */}
+                    {/* One report, the workbook. The PDF was a second button
+                        off the same data for a file nobody asked for twice. */}
                     <Button
-                      variant="outline" size="sm" className="ml-auto"
+                      size="sm" className="ml-auto"
                       onClick={() => downloadPfiReport(Number(p.id))}
                     >
                       <FileSpreadsheet data-icon="inline-start" />
-                      Excel
-                    </Button>
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={() => downloadPfiReportPdf(Number(p.id))}
-                    >
-                      <FileText data-icon="inline-start" />
-                      PDF
+                      Report
                     </Button>
                   </div>
                 </div>
