@@ -524,30 +524,59 @@ export function PfiDetailDialog({
                 </Section>
               )}
 
-              <Section title={`Orders · ${data.movements.length}`}>
-                {data.movements.length === 0 ? (
+              {/* ── The sales, not the stock movements ─────────────────────
+                  This listed pfi_movements — the ticketing ledger — under a
+                  heading of "Orders". The two are different facts and they
+                  diverge routinely: PFI/43/26 has four paid orders worth ₦456m
+                  and not a single movement row, because nothing has been
+                  ticketed out yet, so the panel read as empty on a batch that
+                  had made half a billion naira.
+
+                  Now it lists orders whose payment is confirmed — the same
+                  rule behind the revenue and sold figures above, so this panel
+                  and those totals cannot disagree. Loading progress rides
+                  along per row instead of deciding what is listed. */}
+              <Section title={`Orders · ${data.orders.length}`}>
+                {data.orders.length === 0 ? (
                   <p className="py-3 text-sm text-muted-foreground">
-                    No stock has been released against this PFI.
-                    {f.sold === 0 && f.tankQtyLitres > 0 && (
+                    No order against this PFI has had its payment confirmed yet.
+                    {f.tankQtyLitres > 0 && (
                       <> The whole {qty(f.tankQtyLitres, pfi.productUnit)} still shows as remaining.</>
                     )}
                   </p>
                 ) : (
                   <ul className="max-h-56 divide-y divide-foreground/5 overflow-y-auto">
-                    {data.movements.slice(0, 50).map((m) => (
-                      <li key={m.id} className="flex items-center justify-between gap-3 py-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm">{m.order_number || `Movement #${m.id}`}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {[m.customer_name, format(new Date(m.created_at), 'd MMM yyyy')]
-                              .filter(Boolean).join(' · ')}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-sm font-normal">
-                          {qty(m.qty_litres, pfi.productUnit)}
-                        </span>
-                      </li>
-                    ))}
+                    {data.orders.slice(0, 50).map((o) => {
+                      const loaded = Number(o.loaded_qty || 0)
+                      const ordered = Number(o.quantity || 0)
+                      return (
+                        <li key={o.id} className="flex items-start justify-between gap-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm">{o.order_number || `Order #${o.id}`}</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {[o.customer_name, format(new Date(o.created_at), 'd MMM yyyy')]
+                                .filter(Boolean).join(' · ')}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-normal">{qty(ordered, pfi.productUnit)}</p>
+                            {/* Paid is not gone. Saying which of the two this
+                                row is, is the whole reason the panel changed. */}
+                            <p className={cn(
+                              'text-xs',
+                              loaded === 0 ? 'text-warning'
+                                : loaded < ordered ? 'text-warning' : 'text-muted-foreground',
+                            )}>
+                              {loaded === 0
+                                ? 'Paid, not yet loaded'
+                                : loaded < ordered
+                                  ? `${qty(loaded, pfi.productUnit)} loaded`
+                                  : 'Loaded'}
+                            </p>
+                          </div>
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </Section>

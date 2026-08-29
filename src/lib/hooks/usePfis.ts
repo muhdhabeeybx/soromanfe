@@ -318,6 +318,28 @@ export type PfiMovement = {
   created_at: string
 }
 
+/**
+ * A confirmed sale off a batch — payment received, whatever the trucks have
+ * done since.
+ *
+ * Distinct from PfiMovement, which is the ticketing ledger. The two diverge
+ * routinely: an order can be paid for weeks before it loads, and the drawer
+ * used to list movements under a heading of "Orders", so a batch with four
+ * paid orders worth ₦456m and nothing yet ticketed read as having no orders
+ * at all.
+ */
+export type PfiOrder = {
+  id: number
+  order_number: string | null
+  order_status: string
+  quantity: number
+  total_amount: string | number
+  customer_name: string | null
+  created_at: string
+  /** How much of it has actually been ticketed out. 0 = paid and waiting. */
+  loaded_qty: number
+}
+
 export function usePfiList(params?: { search?: string; status?: string; type?: string; location?: string | number; page?: number; limit?: number }) {
   return useQuery({
     queryKey: ['pfis', params],
@@ -383,6 +405,7 @@ export function usePfiDetail(id: number | null) {
         pfi: PfiWithFinancials
         expenses: PfiExpense[]
         movements: PfiMovement[]
+        orders: PfiOrder[]
         explain: FinancialExplanation[]
       }
     },
