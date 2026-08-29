@@ -518,16 +518,35 @@ function PFIDashboard() {
                       </div>
 
                       <div>
-                        <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
-                          <span>Sales Progress</span>
-                          <span>{qty(f.remaining, p.productUnit)} left</span>
+                        <div className="mb-1.5 flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Sales Progress</span>
+                          {/* A negative balance is a batch that sold MORE than
+                              it held, and printing it as "-754,391 L left"
+                              reads as leftover stock to anyone scanning the
+                              card — the opposite of what it means. It is named
+                              instead. */}
+                          {f.remaining < 0 ? (
+                            <span className="font-semibold text-destructive">
+                              Oversold by {qty(Math.abs(f.remaining), p.productUnit)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">
+                              {qty(f.remaining, p.productUnit)} left
+                            </span>
+                          )}
                         </div>
                         <SellThroughBar value={f.sellThrough} />
+                        {f.remaining < 0 && (
+                          <p className="mt-1.5 text-xs text-destructive">
+                            Paid orders exceed what this batch held. Either stock was drawn from
+                            elsewhere, or orders belonging to another batch were booked here.
+                          </p>
+                        )}
                         {/* The balance above counts anything unpaid as unsold,
                             because "sold" means the money landed. Without this
                             line a batch shows stock that is in fact spoken
                             for, and nothing on the card says why. */}
-                        {f.awaitingPayment > 0 && (
+                        {f.remaining >= 0 && f.awaitingPayment > 0 && (
                           <p className="mt-1.5 text-xs text-warning">
                             {qty(f.awaitingPayment, p.productUnit)} of that is on{' '}
                             {f.awaitingPaymentOrders} order{f.awaitingPaymentOrders === 1 ? '' : 's'}{' '}
