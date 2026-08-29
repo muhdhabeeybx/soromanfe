@@ -66,6 +66,11 @@ export type PfiFinancials = {
   profitLoss: number | null
   margin: number | null
   sold: number
+  /** Quantity on orders against this batch whose payment has not cleared. */
+  awaitingPayment: number
+  awaitingPaymentOrders: number
+  /** remaining − awaitingPayment: stock with no order against it at all. */
+  trulyUnsold: number
   remaining: number
   movementQty: number
   allocationQty: number
