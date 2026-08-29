@@ -348,7 +348,7 @@ function PFIDashboard() {
         <StatCard
           icon={<Package />} label="Active PFIs" value={stats.active}
           tone="blue"
-          description={`of ${stats.count} batch${stats.count === 1 ? '' : 'es'}${hasFilters ? ' matching' : ''}`}
+          // description={`of ${stats.count} batch${stats.count === 1 ? '' : 'es'}${hasFilters ? ' matching' : ''}`}
         />
         {/* Stock per fuel, not one number across the book. PMS and AGO are
             bought, priced and sold separately, and the question is always
@@ -364,7 +364,7 @@ function PFIDashboard() {
             // Says "active" out loud. Without it the figure invites the
             // question of whether closed batches are in there, which is
             // exactly the doubt these tiles exist to remove.
-            description={`across ${fuel.batches} active batch${fuel.batches === 1 ? '' : 'es'}`}
+            // description={`across ${fuel.batches} active batch${fuel.batches === 1 ? '' : 'es'}`}
           />
         ))}
         {/* <StatCard
@@ -377,11 +377,11 @@ function PFIDashboard() {
           tone="neutral"
           // An unpriced batch is left out rather than counted as ₦0, so the
           // figure understates the book unless it says how many are missing.
-          description={
-            stats.uncosted > 0
-              ? `${stats.uncosted} batch${stats.uncosted === 1 ? '' : 'es'} not yet priced — excluded`
-              : `Cargo + ${naira(stats.expenses)} expenses`
-          }
+          // description={
+          //   stats.uncosted > 0
+          //     ? `${stats.uncosted} batch${stats.uncosted === 1 ? '' : 'es'} not yet priced — excluded`
+          //     : `Cargo + ${naira(stats.expenses)} expenses`
+          // }
           // description={
           //   stats.uncosted > 0
           //     ? `${stats.uncosted} batch${stats.uncosted === 1 ? '' : 'es'} not yet priced — excluded`
@@ -396,7 +396,7 @@ function PFIDashboard() {
         {/* Sold means payment confirmed, not loaded out — the same rule the
             finance report uses, so this and the Confirmed Orders total are the
             same number by construction. */}
-        <StatCard
+        {/* <StatCard
           icon={<Droplets />} label="Total litres sold" value={litres(stats.sold)}
           tone="blue"
           description={
@@ -404,10 +404,10 @@ function PFIDashboard() {
               ? `${stats.otherUnit} non-litre batch${stats.otherUnit === 1 ? '' : 'es'} excluded`
               : 'Across every batch, on confirmed-paid orders'
           }
-        />
+        /> */}
         {/* Weighted across the portfolio — total cost over total billed
             quantity — not the average of each batch's own figure. */}
-        <StatCard
+        {/* <StatCard
           icon={<Gauge />} label="Landing cost / litre" value={naira(stats.landing)}
           tone="neutral"
           description={
@@ -417,7 +417,7 @@ function PFIDashboard() {
                 ? `Over ${litres(stats.landingQty)} billed · ${stats.uncosted} unpriced excluded`
                 : `Over ${litres(stats.landingQty)} billed`
           }
-        />
+        /> */}
         {/* <StatCard
           icon={stats.profit == null || stats.profit === 0 ? <Banknote /> : stats.profit > 0 ? <TrendingUp /> : <TrendingDown />}
           label="Profit / loss" value={naira(stats.profit)}
