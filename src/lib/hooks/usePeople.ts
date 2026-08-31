@@ -47,6 +47,12 @@ export interface PersonRow {
   /** Why the number is bad, in words. Empty when it is fine. */
   numberReason: string
   hasDuplicate: boolean
+  /**
+   * The customer's OTHER numbers — every one of which also signs in to this
+   * account. Always empty for a lead: extra numbers are a property of an
+   * account, and a lead does not have one.
+   */
+  extraPhones: string[]
 }
 
 export interface PeopleSummary {
@@ -75,7 +81,7 @@ export interface PeopleListParams {
   activity?: string
   hasBalance?: 'yes' | 'no' | ''
   numberStatus?: 'all' | 'ok' | 'invalid' | 'unreachable' | 'duplicate' | ''
-  sort?: 'active' | 'newest' | 'oldest' | 'name' | 'company' | 'value'
+  sort?: 'top' | 'active' | 'newest' | 'oldest' | 'name' | 'company' | 'value'
   page?: number
   limit?: number
 }
@@ -186,7 +192,7 @@ export function useDeleteReviewed() {
         toast.success(`${result.deleted.length} removed`)
       }
     },
-    onError: (err: any) => toast.error(getErrorMessage(err)),
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
   })
 }
 
@@ -230,6 +236,105 @@ export function usePreviewImport() {
       const res = await api.post('/contacts/import/preview', { rows })
       return res.data.data as ImportPreview
     },
-    onError: (err: any) => toast.error(getErrorMessage(err)),
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
+  })
+}
+
+// ─── A customer's numbers ───────────────────────────────────────────────────
+
+export interface CustomerPhone {
+  /**
+   * Null for the primary — it lives on the customer row, not in the phones
+   * table, so there is no row to address. That also means it cannot be
+   * deleted from here, which is correct: a customer with no number could
+   * neither sign in nor be told anything.
+   */
+  id: number | null
+  phone: string
+  phoneNormalized: string
+  /** The desk's own word for it — "Warehouse", "Director". */
+  label: string
+  isPrimary: boolean
+  /** Set once somebody has passed an OTP on this number. */
+  verifiedAt: string | null
+  createdAt: string | null
+}
+
+export function useCustomerPhones(customerId: number | null, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['customer-phones', customerId],
+    queryFn: async () => {
+      const res = await api.get(`/customers/${customerId}/phones`)
+      return res.data.data.phones as CustomerPhone[]
+    },
+    enabled: (options?.enabled ?? true) && Boolean(customerId),
+  })
+}
+
+/**
+ * Invalidates the people list as well as the phone list.
+ *
+ * The row on /people shows how many numbers a customer has, so a number added
+ * in the dialog that left the list behind it saying "1 number" would be the
+ * page contradicting itself on screen.
+ */
+const invalidatePhones = (queryClient: ReturnType<typeof useQueryClient>, customerId: number) => {
+  queryClient.invalidateQueries({ queryKey: ['customer-phones', customerId] })
+  queryClient.invalidateQueries({ queryKey: ['people'] })
+  queryClient.invalidateQueries({ queryKey: ['customers'] })
+}
+
+export function useAddCustomerPhone(customerId: number | null) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async (data: { phone: string; label?: string }) => {
+      const res = await api.post(`/customers/${customerId}/phones`, data)
+      return res.data as { message: string; data: { phones: CustomerPhone[]; numberStatus?: NumberStatus } }
+    },
+    onSuccess: (res) => {
+      if (customerId) invalidatePhones(queryClient, customerId)
+      // The server's own sentence, because it is the one that knows whether
+      // the number can actually receive an SMS — a landline is accepted and
+      // worth keeping, but saying "it can now be used to sign in" about one
+      // would be a lie.
+      toast.success(res.message)
+    },
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
+  })
+}
+
+export function useDeleteCustomerPhone(customerId: number | null) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async (phoneId: number) => {
+      const res = await api.delete(`/customers/${customerId}/phones/${phoneId}`)
+      return res.data.data.phones as CustomerPhone[]
+    },
+    onSuccess: () => {
+      if (customerId) invalidatePhones(queryClient, customerId)
+      toast.success('Number removed')
+    },
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
+  })
+}
+
+export function useMakePhonePrimary(customerId: number | null) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async (phoneId: number) => {
+      const res = await api.post(`/customers/${customerId}/phones/${phoneId}/primary`)
+      return res.data as { message: string }
+    },
+    onSuccess: (res) => {
+      if (customerId) invalidatePhones(queryClient, customerId)
+      toast.success(res.message)
+    },
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
   })
 }

@@ -124,6 +124,7 @@ export function useBroadcast() {
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['notification-deliveries'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-summary'] })
       queryClient.invalidateQueries({ queryKey: ['campaigns'] })
       // The wallet just moved. Refetching is what makes the "before and after"
       // beside the compose box mean anything.
@@ -221,6 +222,25 @@ export interface NotificationDelivery {
   /** The carrier's own word — "DELIVERED", "Rejected", "Expired". */
   providerStatus: string
   providerMessageId: string
+  /**
+   * The raw provider complaint boiled down to one reason code, server-side.
+   *
+   * The full text stays in `error` — it is the evidence. This is the version
+   * a person scanning three hundred failures can act on: "Termii wallet
+   * empty" and "Number on DND" lead somewhere different, and a single
+   * "failed" bucket hides both behind each other.
+   */
+  reasonCode: string
+  reasonLabel: string
+  reasonTone: 'good' | 'fixable' | 'external' | 'expected' | 'pending'
+  /**
+   * True when the name above was looked up from the number just now rather
+   * than recorded at send time. A guess at who holds the number today is not
+   * the same fact as who was addressed, and the log says which it is.
+   */
+  nameResolvedNow: boolean
+  /** The broadcast this went out with, when it was part of one. */
+  campaignTitle: string | null
   sentAt: string | null
   deliveredAt: string | null
   createdAt: string
@@ -236,6 +256,8 @@ export interface DeliveryLogParams {
   to?: string
   /** Matched against the recipient's name and the destination alike. */
   search?: string
+  /** One classified failure reason — "every send that died on an empty wallet". */
+  reason?: string
   page?: number
   limit?: number
 }
@@ -251,6 +273,80 @@ export function useNotificationDeliveries(params?: DeliveryLogParams) {
       const res = await api.get('/notifications/deliveries', { params: queryParams })
       return res.data.data as { data: NotificationDelivery[]; pagination: { total: number; page: number; limit: number; pages: number } }
     },
+    placeholderData: (prev) => prev,
+  })
+}
+
+// ─── The log, rolled up ─────────────────────────────────────────────────────
+
+export interface DeliveryReasonCount {
+  code: string
+  label: string
+  tone: 'good' | 'fixable' | 'external' | 'expected' | 'pending'
+  count: number
+}
+
+export interface DeliveryBucket {
+  /** A date for `day`, a campaign id for `campaign`, null for sends with no campaign. */
+  key: string | null
+  /** The campaign's title. Null when grouping by day — the date is the label. */
+  label: string | null
+  at: string | null
+  total: number
+  delivered: number
+  sent: number
+  failed: number
+  pending: number
+  skipped: number
+  smsAttempts: number
+  emailAttempts: number
+  /**
+   * SMS in this bucket that no campaign paid for — order confirmations, OTPs,
+   * ticket messages. The gap between this and `spent` is why the cost figure
+   * says "broadcasts" rather than "everything".
+   */
+  unpricedSms: number
+  campaigns: number
+  /**
+   * What Termii's wallet actually moved by, read either side of each
+   * broadcast. Null — never 0 — when no reading exists, because "could not
+   * read the wallet" and "cost nothing" are different facts.
+   */
+  spent: number | null
+  currency: string
+  units: number | null
+  /** Why the ones that did not land, did not land. Biggest first. */
+  reasons: DeliveryReasonCount[]
+}
+
+/**
+ * The delivery log rolled up per day or per broadcast.
+ *
+ * The row-by-row log answers "did this one person get it?". This answers the
+ * question the page is actually opened with — what went out, how much of it
+ * failed, why, and what it cost — which 12,000 rows behind a paginator never
+ * add up to on their own.
+ *
+ * Takes the SAME filters as the list beneath it, so the two always describe
+ * the same set of sends.
+ */
+export function useDeliverySummary(
+  params: DeliveryLogParams & { groupBy: 'day' | 'campaign' },
+  options?: { enabled?: boolean },
+) {
+  const queryParams = dropBlanks({ ...params })
+  return useQuery({
+    queryKey: ['delivery-summary', queryParams],
+    queryFn: async () => {
+      const res = await api.get('/notifications/delivery-summary', { params: queryParams })
+      return res.data.data as {
+        groupBy: 'day' | 'campaign'
+        buckets: DeliveryBucket[]
+        /** Every reason code the server can emit, with its label and tone. */
+        reasons: Record<string, { label: string; tone: string }>
+      }
+    },
+    enabled: options?.enabled ?? true,
     placeholderData: (prev) => prev,
   })
 }

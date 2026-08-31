@@ -13,17 +13,19 @@ import {
 } from '#/components/ui/dialog'
 import { MultiSelectPicker, type MultiSelectOption } from '#/components/MultiSelectPicker'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { DeliveryRollupRow, ReasonChip } from '#/components/DeliveryRollupRow'
 import {
   Users, Warehouse, Repeat, Clock, Mail, MessageSquare as SmsIcon, Send, Loader2,
   Tag, CheckCircle2, XCircle, AlertCircle, History, Megaphone, BookmarkPlus, Trash2, Sparkles,
-  BookUser, Braces, Eye, Wallet as WalletIcon, Search, X,
+  BookUser, Braces, Eye, Wallet as WalletIcon, Search, X, CalendarDays, Layers,
 } from 'lucide-react'
 import { cn } from '#/lib/utils'
+import { formatMoneyIn } from '#/lib/format'
 import { useDepots } from '#/lib/hooks/useDepots'
 import { useCustomerList } from '#/lib/hooks/useCustomers'
 import { useContactList, useContactTags } from '#/lib/hooks/useContacts'
 import {
-  useCustomerSegment, useBroadcast, useNotificationDeliveries,
+  useCustomerSegment, useBroadcast, useNotificationDeliveries, useDeliverySummary,
   useMessageTemplates, useCreateMessageTemplate, useDeleteMessageTemplate,
   usePriceList, useRenderedPreview, useSmsBalance, useCampaigns,
   type SegmentFilters, type MessageTemplate, type Campaign,
@@ -224,10 +226,7 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant="outline" className="w-fit font-normal capitalize">{status}</Badge>
 }
 
-const money = (v: number, currency = 'NGN') =>
-  new Intl.NumberFormat('en-NG', {
-    style: 'currency', currency: currency || 'NGN', minimumFractionDigits: 0, maximumFractionDigits: 2,
-  }).format(v)
+const money = formatMoneyIn
 
 /**
  * What is left in the SMS wallet, said quietly.
@@ -524,23 +523,54 @@ function MessagingPage() {
   const [logPageSize, setLogPageSize] = useState(50)
   /** Set by "See recipients" on a campaign; narrows the log to that blast. */
   const [logCampaign, setLogCampaign] = useState<Campaign | null>(null)
+  /**
+   * How the roll-up above the log is bucketed.
+   *
+   * Per day is the running record — "what happened on Tuesday" — and per batch
+   * is the same numbers cut by broadcast, which is the one that carries a
+   * cost, since Termii bills a send and not a date.
+   */
+  const [logGroupBy, setLogGroupBy] = useState<'day' | 'campaign'>('day')
+  /** One classified failure reason, clicked straight off the roll-up. */
+  const [logReason, setLogReason] = useState('')
+  /**
+   * Whether the log covers everything the system sends, or only broadcasts.
+   *
+   * It used to be hard-wired to broadcasts, silently — `type` was pinned to
+   * 'system.announcement' with nothing on screen saying so. That made a log
+   * headed "every attempt" quietly omit every order confirmation, ticket
+   * message and verification code, which are the sends support actually gets
+   * asked about. Everything is the default now, and the choice is visible.
+   */
+  const [logScope, setLogScope] = useState<'all' | 'broadcast'>('all')
+
+  /**
+   * One filter set, read by both the roll-up and the rows beneath it.
+   *
+   * Shared rather than duplicated on purpose: the summary is a claim ABOUT the
+   * list, and the two describing different sets — "412 failed" over a table
+   * showing eleven — would make both untrustworthy.
+   */
+  const logFilters = {
+    channel: logChannel === 'all' ? undefined : logChannel,
+    status: logStatus === 'all' ? undefined : logStatus,
+    reason: logReason || undefined,
+    campaignId: logCampaign?.id,
+    search: logSearch || undefined,
+    from: logFrom || undefined,
+    to: logTo || undefined,
+    // Narrowed to one campaign, every channel attempt behind it belongs in
+    // view — including the transactional types, if any got filed there.
+    type: logCampaign || logScope === 'all' ? undefined : 'system.announcement',
+  }
 
   const { data: deliveryData, isLoading: deliveriesLoading, isFetching: deliveriesFetching } =
-    useNotificationDeliveries({
-      channel: logChannel === 'all' ? undefined : logChannel,
-      status: logStatus === 'all' ? undefined : logStatus,
-      campaignId: logCampaign?.id,
-      search: logSearch || undefined,
-      from: logFrom || undefined,
-      to: logTo || undefined,
-      // Narrowed to one campaign, every channel attempt behind it belongs in
-      // view — including the transactional types, if any got filed there.
-      type: logCampaign ? undefined : 'system.announcement',
-      page: logPage,
-      limit: logPageSize,
-    })
+    useNotificationDeliveries({ ...logFilters, page: logPage, limit: logPageSize })
 
-  const logSignature = [logChannel, logStatus, logSearch, logFrom, logTo, logCampaign?.id].join('|')
+  const { data: summaryData, isLoading: summaryLoading, isFetching: summaryFetching } =
+    useDeliverySummary({ ...logFilters, groupBy: logGroupBy, limit: 60 })
+
+  const logSignature = [logChannel, logStatus, logReason, logScope, logSearch, logFrom, logTo, logCampaign?.id].join('|')
   const [lastLogSignature, setLastLogSignature] = useState(logSignature)
   if (lastLogSignature !== logSignature) { setLastLogSignature(logSignature); setLogPage(1) }
 
@@ -551,6 +581,10 @@ function MessagingPage() {
   const openCampaignRecipients = (c: Campaign) => {
     setLogCampaign(c)
     setLogChannel('all'); setLogStatus('all'); setLogSearch(''); setLogFrom(''); setLogTo('')
+    setLogReason(''); setLogScope('all')
+    // A single blast has one day in it, so grouping the roll-up by day would
+    // be one row saying what the campaign header already says.
+    setLogGroupBy('campaign')
   }
 
   return (
@@ -1036,15 +1070,41 @@ function MessagingPage() {
                 <CardDescription className="text-xs mt-0.5">
                   {logCampaign
                     ? `Everyone reached by "${logCampaign.title || 'Untitled message'}"`
-                    : 'Every attempt, with the reason when it did not arrive'}
+                    : logScope === 'all'
+                      ? 'Every message the system sends — broadcasts, order confirmations and codes alike'
+                      : 'Broadcasts only, with the reason when one did not arrive'}
                 </CardDescription>
               </div>
             </div>
-            {logCampaign && (
-              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setLogCampaign(null)}>
-                <X className="size-3 mr-1" />Show everything
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {/* Per day is the running record; per batch is the same numbers
+                  cut by broadcast, which is the one that carries a cost —
+                  Termii bills a send, not a date. */}
+              <div className="flex rounded-md border border-border p-0.5">
+                {([
+                  ['day', 'Per day', CalendarDays],
+                  ['campaign', 'Per batch', Layers],
+                ] as const).map(([value, label, Icon]) => (
+                  <button
+                    key={value}
+                    onClick={() => setLogGroupBy(value)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs cursor-pointer transition-colors duration-250 ease-luxe',
+                      logGroupBy === value
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <Icon className="size-3" />{label}
+                  </button>
+                ))}
+              </div>
+              {logCampaign && (
+                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setLogCampaign(null)}>
+                  <X className="size-3 mr-1" />Show everything
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -1065,6 +1125,13 @@ function MessagingPage() {
               type="date" value={logTo} onChange={(e) => setLogTo(e.target.value)}
               className="h-8 w-[9.5rem] text-xs" aria-label="Sent up to"
             />
+            <Select value={logScope} onValueChange={(v) => setLogScope(v as 'all' | 'broadcast')}>
+              <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Everything we send</SelectItem>
+                <SelectItem value="broadcast">Broadcasts only</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={logChannel} onValueChange={setLogChannel}>
               <SelectTrigger className="w-[110px] h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -1084,12 +1151,12 @@ function MessagingPage() {
                 <SelectItem value="suppressed">Suppressed</SelectItem>
               </SelectContent>
             </Select>
-            {(logSearch || logFrom || logTo || logChannel !== 'all' || logStatus !== 'all') && (
+            {(logSearch || logFrom || logTo || logReason || logChannel !== 'all' || logStatus !== 'all' || logScope !== 'all') && (
               <Button
                 variant="ghost" size="sm" className="h-8 text-xs"
                 onClick={() => {
                   setLogSearch(''); setLogFrom(''); setLogTo('')
-                  setLogChannel('all'); setLogStatus('all')
+                  setLogChannel('all'); setLogStatus('all'); setLogReason(''); setLogScope('all')
                 }}
               >
                 <X className="size-3 mr-1" />Clear
@@ -1098,6 +1165,42 @@ function MessagingPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {/* The roll-up, above the rows it describes. The per-row log answers
+              "did this one person get it?"; this answers what the page is
+              actually opened with — what went out, how much failed, why, and
+              what it cost. */}
+          {summaryLoading ? (
+            <div className="flex items-center justify-center border-b border-border/40 py-8">
+              <Loader2 className="size-4 animate-spin text-primary" />
+            </div>
+          ) : (summaryData?.buckets || []).length > 0 && (
+            <div className={cn('divide-y divide-border/40 border-b border-border', summaryFetching && 'opacity-60')}>
+              {(summaryData?.buckets || []).map((bucket) => (
+                <DeliveryRollupRow
+                  key={bucket.key ?? 'unbatched'}
+                  bucket={bucket}
+                  groupBy={logGroupBy}
+                  activeReason={logReason}
+                  onReason={setLogReason}
+                />
+              ))}
+            </div>
+          )}
+
+          {logReason && (
+            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2 text-xs">
+              <span className="text-muted-foreground">
+                Showing only:{' '}
+                <strong className="text-foreground">
+                  {summaryData?.reasons?.[logReason]?.label || logReason}
+                </strong>
+              </span>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs ml-auto" onClick={() => setLogReason('')}>
+                <X className="size-3 mr-1" />Show all
+              </Button>
+            </div>
+          )}
+
           {deliveriesLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="size-5 animate-spin text-primary" /></div>
           ) : (deliveryData?.data || []).length === 0 ? (
@@ -1114,7 +1217,7 @@ function MessagingPage() {
                       <th className="px-4 py-2 font-normal">Recipient</th>
                       <th className="px-4 py-2 font-normal">Channel</th>
                       <th className="px-4 py-2 font-normal">Status</th>
-                      <th className="px-4 py-2 font-normal">Why not</th>
+                      <th className="px-4 py-2 font-normal">What happened</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1132,9 +1235,31 @@ function MessagingPage() {
                         <td className="px-4 py-2.5 text-xs">
                           {/* The name is why this column exists at all — a
                               broadcast to leads has no account behind it, so
-                              the log could previously only show a number. */}
-                          <span className="block font-medium">{row.recipientName || '—'}</span>
+                              the log could previously only show a number.
+                              Rows older than the name column get one looked up
+                              from the number, marked as such: who holds a
+                              number today is a fair guess, not a record of who
+                              was addressed. */}
+                          <span className="block font-medium">
+                            {row.recipientName || '—'}
+                            {row.recipientName && row.nameResolvedNow && (
+                              <span
+                                className="ml-1 font-normal text-muted-foreground"
+                                title="Not recorded at the time — this is whoever holds the number now"
+                              >
+                                (matched now)
+                              </span>
+                            )}
+                          </span>
                           <span className="block font-mono text-muted-foreground">{row.destination || '—'}</span>
+                          {/* Which blast it went out with, when the log is not
+                              already narrowed to one. */}
+                          {!logCampaign && row.campaignTitle && (
+                            <span className="mt-0.5 flex items-center gap-0.5 text-muted-foreground">
+                              <Megaphone className="size-3 shrink-0" />
+                              <span className="truncate max-w-[180px]">{row.campaignTitle}</span>
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2.5 text-xs capitalize">{row.channel}</td>
                         <td className="px-4 py-2.5">
@@ -1144,15 +1269,28 @@ function MessagingPage() {
                           )}
                         </td>
                         <td className="px-4 py-2.5 text-xs">
-                          {/* Failures are red; a suppression is not a fault —
-                              it is an opt-out doing its job — so it reads as
-                              ordinary text rather than an error. */}
-                          <span className={cn(
-                            'block max-w-[280px] whitespace-pre-wrap break-words',
-                            row.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
-                          )}>
-                            {row.error || ''}
-                          </span>
+                          {/* The short reason first, because it is the one
+                              that leads somewhere: an empty wallet is topped
+                              up, a DND number is sent transactionally, a dead
+                              number is corrected. The provider's own wording
+                              is kept underneath — it is the evidence, and a
+                              support call sometimes needs it verbatim. */}
+                          <ReasonChip
+                            label={row.reasonLabel}
+                            tone={row.reasonTone}
+                            active={logReason === row.reasonCode}
+                            onClick={() => setLogReason(logReason === row.reasonCode ? '' : row.reasonCode)}
+                          />
+                          {row.error && (
+                            <details className="mt-1 max-w-[280px]">
+                              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                                What the provider said
+                              </summary>
+                              <span className="mt-0.5 block whitespace-pre-wrap break-words text-muted-foreground">
+                                {row.error}
+                              </span>
+                            </details>
+                          )}
                         </td>
                       </tr>
                     ))}

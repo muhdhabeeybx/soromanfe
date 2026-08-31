@@ -15,6 +15,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { CustomerNumbersDialog } from '#/components/CustomerNumbersDialog'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { PageLoader } from '#/components/PageLoader'
@@ -22,7 +23,7 @@ import { Pagination } from '#/components/Pagination'
 import {
   Users, Search, Plus, Upload, Download, X, Phone, Building2, UserPlus, Trash2, Pencil,
   MessageSquare, CheckCircle2, Sparkles, Loader2, Tag as TagIcon, AlertTriangle, ShieldAlert,
-  Wallet, Archive, Copy, PhoneOff,
+  Wallet, Archive, Copy, PhoneOff, PhoneCall,
 } from 'lucide-react'
 import {
   usePeopleList, usePhoneHygiene, useDeleteReviewed, usePreviewImport, fetchAllPeople,
@@ -50,12 +51,16 @@ export const Route = createFileRoute('/people/')({
 const money = (v: number) =>
   new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', minimumFractionDigits: 0 }).format(v)
 
-const compactMoney = (v: number) => {
-  if (Math.abs(v) >= 1_000_000_000) return `₦${(v / 1_000_000_000).toFixed(1)}bn`
-  if (Math.abs(v) >= 1_000_000) return `₦${(v / 1_000_000).toFixed(1)}m`
-  if (Math.abs(v) >= 1_000) return `₦${(v / 1_000).toFixed(0)}k`
-  return money(v)
-}
+/**
+ * Money is written out in full on this page — ₦1,240,500, never ₦1.2m.
+ *
+ * The abbreviated form was rounding to one decimal place, which on a wallet
+ * balance is a difference of up to fifty thousand naira hidden behind a
+ * character saved. A ledger figure the desk reconciles against the bank is
+ * not a place to trade precision for width; the column is right-aligned and
+ * tabular-nums keeps the digits in line, which is what the shortening was
+ * really being asked to do.
+ */
 
 const relativeDate = (iso: string | null) => {
   if (!iso) return 'Never'
@@ -118,7 +123,10 @@ function PeoplePage() {
   const [optedOut, setOptedOut] = useState<'yes' | 'no' | ''>('')
   const [activity, setActivity] = useState('')
   const [numberStatus, setNumberStatus] = useState<PeopleListParams['numberStatus']>('')
-  const [sort, setSort] = useState<PeopleListParams['sort']>('active')
+  // Best customers first, then the newest arrivals — see the `top` sort in
+  // repositories/people.repository.js for why the two are sequenced rather
+  // than one chosen over the other.
+  const [sort, setSort] = useState<PeopleListParams['sort']>('top')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
 
@@ -162,6 +170,7 @@ function PeoplePage() {
   const [deleting, setDeleting] = useState<PersonRow | null>(null)
   const [converting, setConverting] = useState<PersonRow | null>(null)
   const [archiving, setArchiving] = useState<PersonRow | null>(null)
+  const [managingNumbers, setManagingNumbers] = useState<PersonRow | null>(null)
 
   const openAdd = () => { setEditing(null); setForm(EMPTY_FORM); setFormOpen(true) }
   const openEdit = (p: PersonRow) => {
@@ -246,6 +255,24 @@ function PeoplePage() {
   )
   const deleteReviewed = useDeleteReviewed()
   const [confirmPurge, setConfirmPurge] = useState(false)
+  const [confirmPurgeAll, setConfirmPurgeAll] = useState(false)
+
+  /**
+   * Everything on screen that the server would actually let go.
+   *
+   * Computed from the same `deletableReason` the row-level button reads, so
+   * "Remove all 43" cannot promise to delete a customer whose orders the
+   * server is going to refuse a moment later.
+   */
+  const removableAll = useMemo(
+    () =>
+      (hygiene?.issues ?? []).flatMap((group) =>
+        group.records
+          .filter((r) => !r.deletableReason)
+          .map((r) => ({ kind: r.kind, id: r.id })),
+      ),
+    [hygiene],
+  )
 
   const recordKey = (r: HygieneRecord) => `${r.kind}:${r.id}`
   const toggleRecord = (r: HygieneRecord) => {
@@ -427,7 +454,8 @@ function PeoplePage() {
           <option value="duplicate">Duplicated numbers</option>
         </NativeSelect>
 
-        <NativeSelect className="w-44" value={sort} onChange={(e) => setSort(e.target.value as any)}>
+        <NativeSelect className="w-48" value={sort} onChange={(e) => setSort(e.target.value as any)}>
+          <option value="top">Top customers, then newest</option>
           <option value="active">Most recently active</option>
           <option value="value">Highest lifetime value</option>
           <option value="newest">Newest first</option>
@@ -502,6 +530,24 @@ function PeoplePage() {
                               {p.numberStatus === 'ok' ? <Phone className="size-3" /> : <PhoneOff className="size-3" />}
                               {p.phone}
                             </span>
+                            {/* The other numbers this person signs in on. Named
+                                rather than counted when there is one, because
+                                "+2348…" is the thing the desk is looking for
+                                and "1 more" would make them click to find it. */}
+                            {p.extraPhones?.length === 1 && (
+                              <span className="flex items-center gap-1 text-muted-foreground" title="Also signs in on this number">
+                                <PhoneCall className="size-3" />{p.extraPhones[0]}
+                              </span>
+                            )}
+                            {p.extraPhones?.length > 1 && (
+                              <button
+                                onClick={() => setManagingNumbers(p)}
+                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground cursor-pointer transition-colors duration-250 ease-luxe"
+                                title={p.extraPhones.join(', ')}
+                              >
+                                <PhoneCall className="size-3" />{p.extraPhones.length} more numbers
+                              </button>
+                            )}
                             {p.companyName && (
                               <span className="flex items-center gap-1"><Building2 className="size-3" />{p.companyName}</span>
                             )}
@@ -573,12 +619,12 @@ function PeoplePage() {
                           {p.balance === null ? (
                             <span className="text-sm text-muted-foreground">—</span>
                           ) : (
-                            <div className="space-y-0.5">
+                            <div className="space-y-0.5 tabular-nums">
                               <p className={cn('text-sm font-medium', p.balance > 0 && 'text-accent')}>
-                                {compactMoney(p.balance)}
+                                {money(p.balance)}
                               </p>
                               {p.lifetimeValue > 0 && (
-                                <p className="text-xs text-muted-foreground">{compactMoney(p.lifetimeValue)} lifetime</p>
+                                <p className="text-xs text-muted-foreground">{money(p.lifetimeValue)} lifetime</p>
                               )}
                             </div>
                           )}
@@ -597,6 +643,14 @@ function PeoplePage() {
                                   } as any)}
                                 >
                                   Open
+                                </Button>
+                                <Button
+                                  variant="ghost" size="sm"
+                                  className="size-8 p-0 text-muted-foreground hover:text-foreground"
+                                  title={`Numbers ${p.name} signs in on`}
+                                  onClick={() => setManagingNumbers(p)}
+                                >
+                                  <PhoneCall className="size-3.5" />
                                 </Button>
                                 {p.customerStatus === 'Active' && (
                                   <Button
@@ -972,18 +1026,46 @@ function PeoplePage() {
                               </p>
                             )}
                           </div>
-                          {r.kind === 'customer' && (
-                            <Button
-                              variant="ghost" size="sm" className="h-7 px-2 text-xs shrink-0"
-                              onClick={(e) => {
-                                e.preventDefault()
-                                setReviewOpen(false)
-                                navigate({ to: '/customers/details' as any, search: { id: r.id } as any } as any)
-                              }}
-                            >
-                              Open
-                            </Button>
-                          )}
+                          <div className="flex shrink-0 items-center gap-1">
+                            {r.kind === 'customer' && (
+                              <Button
+                                variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  setReviewOpen(false)
+                                  navigate({ to: '/customers/details' as any, search: { id: r.id } as any } as any)
+                                }}
+                              >
+                                Open
+                              </Button>
+                            )}
+                            {/* One click, no confirmation step.
+                                The tick-then-Remove flow is right for clearing
+                                a batch, and wrong for the common case: a single
+                                obviously-dead row — "0802121", a placeholder,
+                                a contact doubled by a re-uploaded CSV — that
+                                the reviewer has already looked at, which is
+                                what this whole panel is for. The safety is not
+                                in the extra click; it is in `deletableReason`,
+                                which hides this button entirely from anything
+                                carrying orders, deposits or a balance, and is
+                                re-checked server-side before any delete is
+                                honoured. */}
+                            {!blocked && (
+                              <Button
+                                variant="ghost" size="sm"
+                                className="size-7 p-0 text-muted-foreground hover:text-destructive"
+                                title={`Remove ${r.name} now`}
+                                disabled={deleteReviewed.isPending}
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  deleteReviewed.mutate([{ kind: r.kind, id: r.id }])
+                                }}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            )}
+                          </div>
                         </label>
                       )
                     })}
@@ -997,10 +1079,27 @@ function PeoplePage() {
             <span className="text-xs text-muted-foreground">
               {selectedList.length > 0
                 ? `${selectedList.length} record${selectedList.length === 1 ? '' : 's'} selected`
-                : 'Tick the records you want gone'}
+                : removableAll.length > 0
+                  ? `${removableAll.length} of these can be removed — the rest have orders or money behind them`
+                  : 'Tick the records you want gone'}
             </span>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setReviewOpen(false)}>Close</Button>
+              {/* Selecting nothing and pressing Remove used to do nothing at
+                  all. When every row on screen is safe to delete, "all of
+                  them" is the answer far more often than any subset, so it is
+                  offered directly — still through the confirmation, because
+                  this one is a batch. */}
+              {!selectedList.length && removableAll.length > 1 && (
+                <Button
+                  variant="destructive"
+                  disabled={deleteReviewed.isPending}
+                  onClick={() => setConfirmPurgeAll(true)}
+                >
+                  {deleteReviewed.isPending && <Loader2 className="size-4 mr-2 animate-spin" />}
+                  Remove all {removableAll.length}
+                </Button>
+              )}
               <Button
                 variant="destructive"
                 disabled={!selectedList.length || deleteReviewed.isPending}
@@ -1030,6 +1129,26 @@ function PeoplePage() {
       />
 
       <ConfirmDialog
+        open={confirmPurgeAll}
+        onOpenChange={setConfirmPurgeAll}
+        title={`Remove all ${removableAll.length} records?`}
+        description="Every record shown here that has nothing financial behind it. Anything with orders, deposits or a wallet balance is checked again on the server and will be kept."
+        confirmLabel={`Remove ${removableAll.length}`}
+        variant="destructive"
+        loading={deleteReviewed.isPending}
+        onConfirm={async () => {
+          // The endpoint takes 200 a request — a deliberate cap on a
+          // destructive call, not a paging accident — so a bigger review is
+          // sent in runs rather than silently truncated to the first 200.
+          for (let i = 0; i < removableAll.length; i += 200) {
+            await deleteReviewed.mutateAsync(removableAll.slice(i, i + 200))
+          }
+          setSelected({})
+          setConfirmPurgeAll(false)
+        }}
+      />
+
+      <ConfirmDialog
         open={converting !== null}
         onOpenChange={(o) => { if (!o) setConverting(null) }}
         title={`Make ${converting?.name ?? ''} a customer?`}
@@ -1055,6 +1174,8 @@ function PeoplePage() {
           setDeleting(null)
         }}
       />
+
+      <CustomerNumbersDialog person={managingNumbers} onClose={() => setManagingNumbers(null)} />
 
       <ConfirmDialog
         open={archiving !== null}

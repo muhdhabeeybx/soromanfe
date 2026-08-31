@@ -11,6 +11,26 @@ export function formatCurrency(amount: number): string {
   return currencyFormatter.format(amount)
 }
 
+/**
+ * Money in a currency that is not necessarily naira.
+ *
+ * `formatCurrency` above is hard-wired to NGN, which is right for the ledger —
+ * everything the business bills and banks is in naira. The SMS wallet is not:
+ * Termii reports its own balance and its own currency, and printing a dollar
+ * figure with a ₦ in front of it would misstate what a broadcast cost.
+ *
+ * Two decimals at most, none when the amount is whole, because a wallet moves
+ * in kobo but a round figure should not be padded to look like it did not.
+ */
+export function formatMoneyIn(amount: number, currency = 'NGN'): string {
+  return new Intl.NumberFormat('en-NG', {
+    style: 'currency',
+    currency: currency || 'NGN',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(amount)
+}
+
 export function formatNumber(amount: number): string {
   return numberFormatter.format(amount)
 }
