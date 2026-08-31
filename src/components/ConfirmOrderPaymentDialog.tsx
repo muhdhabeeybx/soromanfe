@@ -83,6 +83,15 @@ export function ConfirmOrderPaymentDialog({
   if (!order) return null
 
   const total = toNum(order.totalAmount)
+  /**
+   * What this order has already taken, across however many instalments.
+   *
+   * Zero on an untouched order, so this reads correctly against a server that
+   * does not send the field at all.
+   */
+  const alreadyPaid = toNum(order.amountPaid)
+  const outstanding = Math.max(0, total - alreadyPaid)
+
   // Prefer the live customer read over whatever balance was embedded in the
   // orders list — that snapshot goes stale the moment another order for the
   // same customer is confirmed in this same session.
@@ -96,9 +105,27 @@ export function ConfirmOrderPaymentDialog({
   const walletApplied = Math.min(Number(walletAmount || 0), liveBalance)
   const walletOverBalance = Number(walletAmount || 0) > liveBalance
   const available = walletApplied + newDeposit
-  const stillShort = Math.max(0, total - available)
-  const excess = Math.max(0, available - total)
-  const readyToConfirm = stillShort <= 0 && !walletOverBalance
+
+  /**
+   * What this confirmation actually moves against the order.
+   *
+   * The gate used to be "does this cover the total?", and it is the reason
+   * part payment could not be confirmed from here at all: a customer who sent
+   * half the money left the desk with a disabled button and no way to record
+   * what had arrived. Money that has landed is money that has landed, and the
+   * order is designed to take it and stay live for the balance.
+   *
+   * Capped at what is still owed, never the order total — a second instalment
+   * against an already part-paid order must not re-offer the first one's
+   * amount, which the server would refuse outright.
+   */
+  const applying = Math.min(available, outstanding)
+  const remainingAfter = Math.max(0, outstanding - applying)
+  const isPartPayment = applying > 0 && remainingAfter > 0
+  const excess = Math.max(0, available - outstanding)
+  // Anything at all, matched or drawn, is confirmable. The only bar left is
+  // asking for more wallet than the wallet holds.
+  const readyToConfirm = applying > 0 && !walletOverBalance
 
   const handleConfirm = async () => {
     if (!readyToConfirm) return
@@ -116,7 +143,13 @@ export function ConfirmOrderPaymentDialog({
         // instead of trying to re-claim lines that are already matched.
         setStatementLines([])
       }
-      await payOrder.mutateAsync(order.id)
+      await payOrder.mutateAsync({
+        orderId: order.id,
+        // Named only when it is genuinely an instalment. Settling the lot
+        // omits it, which is the server's default and keeps a full payment
+        // sending exactly what it always sent.
+        amount: isPartPayment ? applying : undefined,
+      })
       onOpenChange(false)
     } catch {
       // Both mutations surface their own error toast. If the deposit
@@ -146,6 +179,13 @@ export function ConfirmOrderPaymentDialog({
             <div>
               <p className={cn(MICRO, 'text-muted-foreground')}>Order total</p>
               <p className="mt-0.5 font-semibold">{formatCurrency(total)}</p>
+              {/* Only when there is a history to show — on a first payment
+                  this line would just be a zero taking up room. */}
+              {alreadyPaid > 0 && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {formatCurrency(alreadyPaid)} already paid
+                </p>
+              )}
             </div>
             <div>
               <p className={cn(MICRO, 'text-muted-foreground')}>Wallet balance</p>
@@ -154,10 +194,15 @@ export function ConfirmOrderPaymentDialog({
               </p>
             </div>
             <div>
-              <p className={cn(MICRO, 'text-muted-foreground')}>{stillShort > 0 ? 'Still needed' : 'Spare after this'}</p>
-              <p className={cn('mt-0.5 font-semibold', stillShort > 0 ? 'text-warning' : 'text-success')}>
-                {formatCurrency(stillShort > 0 ? stillShort : excess)}
+              <p className={cn(MICRO, 'text-muted-foreground')}>Confirming now</p>
+              <p className={cn('mt-0.5 font-semibold', applying > 0 ? 'text-success' : 'text-muted-foreground')}>
+                {formatCurrency(applying)}
               </p>
+              {remainingAfter > 0 && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {formatCurrency(remainingAfter)} left to pay
+                </p>
+              )}
             </div>
           </div>
 
@@ -190,12 +235,31 @@ export function ConfirmOrderPaymentDialog({
               A covered order is not a one-click confirm — that left no
               record of what had actually paid for it. */}
           <>
-              {stillShort > 0 && (
+              {/* Nothing matched yet: there is genuinely nothing to confirm,
+                  so this stays a warning and the button stays disabled. */}
+              {applying <= 0 && (
                 <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                   <p>
-                    {formatCurrency(stillShort)} still to account for — match a statement line
-                    below, or draw more from the wallet balance.
+                    Nothing to confirm yet — match a statement line below, or draw from the
+                    wallet balance.
+                  </p>
+                </div>
+              )}
+
+              {/* Short of the full amount, but with money on the table. This
+                  is a normal outcome, not an error: the customer has paid for
+                  part of their order and the desk records exactly that. It
+                  reads as information, in the same blue the Part Paid badge
+                  uses, rather than as something gone wrong. */}
+              {isPartPayment && (
+                <div className="flex items-start gap-2 rounded-lg border border-blue-500/25 bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                  <Wallet className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    This is a part payment. {formatCurrency(applying)} of {formatCurrency(outstanding)}{' '}
+                    is being confirmed — the order stays live for the remaining{' '}
+                    {formatCurrency(remainingAfter)}, and can be loaded up to the quantity this
+                    payment covers.
                   </p>
                 </div>
               )}
@@ -267,7 +331,10 @@ export function ConfirmOrderPaymentDialog({
                     />
                     <Button
                       type="button" variant="outline" size="sm" className="shrink-0"
-                      onClick={() => setWalletAmount(String(Math.min(liveBalance, Math.max(0, total - newDeposit))))}
+                      // Against what is still OWED, not the order total — on a
+                      // second instalment the total would over-draw by the
+                      // amount the first one already settled.
+                      onClick={() => setWalletAmount(String(Math.min(liveBalance, Math.max(0, outstanding - newDeposit))))}
                     >
                       Use what's needed
                     </Button>
@@ -299,17 +366,21 @@ export function ConfirmOrderPaymentDialog({
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-3 border-t border-foreground/10 pt-1">
-                    <span className="font-semibold">Order total</span>
-                    <span className="font-semibold">{formatCurrency(total)}</span>
+                    <span className="font-semibold">Applied to this order</span>
+                    <span className="font-semibold">{formatCurrency(applying)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>{alreadyPaid > 0 ? 'Outstanding before this' : 'Order total'}</span>
+                    <span>{formatCurrency(alreadyPaid > 0 ? outstanding : total)}</span>
                   </div>
                 </div>
               )}
 
-              {(newDeposit > 0 || walletApplied > 0) && stillShort <= 0 && (
+              {(newDeposit > 0 || walletApplied > 0) && remainingAfter <= 0 && (
                 <p className="text-xs leading-tight text-muted-foreground">
                   {excess > 0
-                    ? `Covers the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet, under the reference it came in on, and shows on the finance report as an overpayment against this order.`
-                    : 'Covers the order exactly.'}
+                    ? `Settles the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet, under the reference it came in on, and shows on the finance report as an overpayment against this order.`
+                    : 'Settles the order exactly.'}
                 </p>
               )}
           </>
@@ -321,7 +392,7 @@ export function ConfirmOrderPaymentDialog({
           </Button>
           <Button onClick={handleConfirm} disabled={!readyToConfirm || confirming}>
             {confirming && <Loader2 className="animate-spin" />}
-            Confirm payment
+            {isPartPayment ? 'Confirm part payment' : 'Confirm payment'}
           </Button>
         </DialogFooter>
       </DialogContent>

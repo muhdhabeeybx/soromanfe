@@ -161,8 +161,18 @@ export function usePayOrder() {
 
   return useMutation({
     retry: false,
-    mutationFn: async (orderId: number | string) => {
-      const res = await api.post(`/orders/${orderId}/pay`)
+    /**
+     * `amount` is the naira actually received now. Omit it to settle the whole
+     * outstanding balance — the server's own documented default, and what
+     * every caller sent before orders could be paid in instalments, so a full
+     * payment still puts exactly the same request on the wire as it always
+     * did (no body at all).
+     */
+    mutationFn: async ({ orderId, amount }: { orderId: number | string; amount?: number }) => {
+      const res = await api.post(
+        `/orders/${orderId}/pay`,
+        amount == null ? undefined : { amount },
+      )
       return res.data
     },
     onSuccess: (data) => {
