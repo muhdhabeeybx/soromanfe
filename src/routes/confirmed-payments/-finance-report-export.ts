@@ -333,10 +333,17 @@ function summaryColumns(
   return cols
 }
 
+/** The caption is a note about a NON-default view, so this is the one it stays silent for. */
+const PAYMENT_STATUS_DEFAULT_LABEL = 'Money received (paid & part paid)'
+
 /** Filters that don't earn their own summary column — noted as a caption instead. */
 function extraFilterNote(filters: FinanceReportFilters): string {
   const parts: string[] = []
-  if (filters.paymentStatus !== 'Paid') parts.push(`Payment status: ${filters.paymentStatus}`)
+  // Noted whenever it is not the default view. The default is now "money
+  // received", which covers paid and part-paid alike.
+  if (filters.paymentStatus !== PAYMENT_STATUS_DEFAULT_LABEL) {
+    parts.push(`Payment status: ${filters.paymentStatus}`)
+  }
   if (filters.search) parts.push(`Search: "${filters.search}"`)
   return parts.join('   ·   ')
 }

@@ -169,8 +169,9 @@ function OrderManagementPage() {
           {options.statuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </NativeSelect>
         <NativeSelect className="w-36" value={paymentFilter} onChange={(e) => { setPaymentFilter(e.target.value); setPage(1) }}>
-          <option value={ALL}>Paid & unpaid</option>
+          <option value={ALL}>Any payment</option>
           <option value="Paid">Paid</option>
+          <option value="Part Paid">Part Paid</option>
           <option value="Unpaid">Unpaid</option>
         </NativeSelect>
         <NativeSelect className="w-44" value={locationFilter} onChange={(e) => { setLocationFilter(e.target.value); setPage(1) }}>

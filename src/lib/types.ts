@@ -362,7 +362,7 @@ export interface Order {
   virtualAccountNumber?: string
   virtualAccountBank?: string
   virtualAccountName?: string
-  paymentStatus: 'Unpaid' | 'Paid'
+  paymentStatus: 'Unpaid' | 'Part Paid' | 'Paid'
   /** Matches the order_status enum in the database, not a subset of it. */
   status: 'Pending' | 'Paid' | 'Released' | 'Loading' | 'Completed' | 'Cancelled' | 'Expired'
   /** Computed deadline: when this Pending/unpaid order will expire. Null for non-expirable orders. */

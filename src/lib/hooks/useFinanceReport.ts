@@ -142,7 +142,7 @@ export interface FinanceReportOrder {
   virtualAccountNumber?: string | null
   virtualAccountBank?: string | null
   virtualAccountName?: string | null
-  paymentStatus: 'Unpaid' | 'Paid'
+  paymentStatus: 'Unpaid' | 'Part Paid' | 'Paid'
   status: string
   paymentConfirmedAt?: string | null
   createdAt?: string
@@ -164,7 +164,12 @@ export interface FinanceReportOrder {
 
 export interface FinanceReportParams {
   search?: string
-  paymentStatus?: 'Paid' | 'Unpaid' | 'all'
+  /**
+   * Omitted means "money has landed" — the server reads that as Paid AND Part
+   * Paid. Sending 'Paid' explicitly is narrower and excludes instalments, so
+   * the two are genuinely different requests and the page offers both.
+   */
+  paymentStatus?: 'Paid' | 'Part Paid' | 'Unpaid' | 'all'
   dateFrom?: string
   dateTo?: string
   depotId?: string | number

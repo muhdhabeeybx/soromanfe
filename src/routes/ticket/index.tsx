@@ -38,6 +38,16 @@ export const Route = createFileRoute('/ticket/')({
   component: LoadingTicketsPage,
 })
 
+/**
+ * The payment states that put an order on the loading desk.
+ *
+ * Part Paid belongs here: an order settled in instalments is Released and
+ * ticketable up to the quantity its payment covers. Module scope because it
+ * never changes — declared in the component it would be a new Set every
+ * render, and one the filter's dependency list does not mention.
+ */
+const PAYING = new Set(['Paid', 'Part Paid'])
+
 const ALL = 'all'
 const PAGE_SIZE = 10000
 
@@ -89,12 +99,21 @@ function LoadingTicketsPage() {
     [datePreset, customFrom, customTo],
   )
 
-  // Only paid orders reach the loading desk — payment status, not lifecycle
-  // status, since a paid order stays paid all the way through Loading/Completed.
+  // Only orders that have taken money reach the loading desk — payment status,
+  // not lifecycle status, since a paid order stays paid all the way through
+  // Loading/Completed.
+  //
+  // Part Paid counts. An order settled in instalments is Released and
+  // ticketable up to the quantity its payment covers, so filtering it out here
+  // hid the entire point of part payment: the customer has paid for 50,000 of
+  // their 100,000 litres and cannot collect any of it because the desk cannot
+  // see the order. The cap on HOW MUCH may be ticketed is the server's to
+  // enforce — it holds the price and the amount received — and it refuses an
+  // over-request with the figures in the message.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return orders.filter((o) => {
-      if (o.paymentStatus !== 'Paid') return false
+      if (!PAYING.has(String(o.paymentStatus))) return false
       if (range) {
         if (!o.createdAt) return false
         if (!isWithinInterval(new Date(o.createdAt), { start: range.from, end: range.to })) return false

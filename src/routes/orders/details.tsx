@@ -422,7 +422,18 @@ function RouteComponent() {
           <CardContent className="space-y-4 pt-6">
             <div className="flex justify-between items-center py-2 border-b border-border/50">
               <span className="text-sm text-muted-foreground">Payment Status</span>
-              <Badge className={order.paymentStatus === 'Paid' ? 'bg-success text-success-foreground' : 'bg-warning text-warning-foreground'}>
+              {/* Three states, not two — a part-paid order has taken real
+                  money, and colouring it like an unpaid one tells the desk to
+                  chase a customer who has already paid. */}
+              <Badge
+                className={
+                  order.paymentStatus === 'Paid'
+                    ? 'bg-success text-success-foreground'
+                    : order.paymentStatus === 'Part Paid'
+                      ? 'bg-blue-600 text-white dark:bg-blue-500'
+                      : 'bg-warning text-warning-foreground'
+                }
+              >
                 {order.paymentStatus || 'Unpaid'}
               </Badge>
             </div>

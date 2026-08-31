@@ -54,6 +54,24 @@ export const Route = createFileRoute('/confirmed-payments/')({
   component: FinanceReportPage,
 })
 
+/**
+ * What the payment-status picker can ask for.
+ *
+ * 'received' is a client-side sentinel, not a server value: it means "don't
+ * filter on payment status at all", which the server answers with Paid and
+ * Part Paid together. Everything else is passed straight through.
+ */
+type PaymentFilter = 'received' | 'Paid' | 'Part Paid' | 'Unpaid' | 'all'
+
+/** How each choice is named on an exported report's caption. */
+const PAYMENT_FILTER_LABEL: Record<PaymentFilter, string> = {
+  received: 'Money received (paid & part paid)',
+  Paid: 'Paid in full',
+  'Part Paid': 'Part paid',
+  Unpaid: 'Unpaid',
+  all: 'All',
+}
+
 const ALL = ''
 
 /** A depot or PFI as offered in a filter dropdown — shapes loose enough to cover both. */
@@ -455,7 +473,19 @@ function FinanceReportPage() {
   const [datePreset, setDatePreset] = useState<DatePreset>('today')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
-  const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Unpaid' | 'all'>('Paid')
+  /**
+   * Which orders count as money in.
+   *
+   * 'received' is the default and is NOT sent to the server — omitting the
+   * filter is what the server reads as "Paid and Part Paid". The old default
+   * sent 'Paid' explicitly, which once orders could be settled in instalments
+   * meant every part payment quietly dropped out of the report: the money had
+   * landed, the bank statement showed it, and this page did not.
+   *
+   * 'Paid' is still offered, because "settled in full" is a real question —
+   * it is just a narrower one than "what came in".
+   */
+  const [paymentStatus, setPaymentStatus] = useState<PaymentFilter>('received')
   const [locationId, setLocationId] = useState(ALL)
   const [pfiId, setPfiId] = useState(ALL)
   const [productId, setProductId] = useState(ALL)
@@ -491,7 +521,8 @@ function FinanceReportPage() {
     search: search || undefined,
     dateFrom,
     dateTo,
-    paymentStatus,
+    // Omitted on purpose for 'received' — see the state declaration above.
+    paymentStatus: paymentStatus === 'received' ? undefined : paymentStatus,
     depotId: locationId || undefined,
     pfiId: pfiId || undefined,
     productId: productId || undefined,
@@ -515,7 +546,7 @@ function FinanceReportPage() {
   const rows = useMemo(() => data?.orders || [], [data])
   const totals = data?.totals
   const hasFilters = !!(
-    search || paymentStatus !== 'Paid' || locationId || pfiId || productId || datePreset !== 'today'
+    search || paymentStatus !== 'received' || locationId || pfiId || productId || datePreset !== 'today'
   )
 
   const selectedDepot = useMemo(() => depots.find((d) => idOf(d) === locationId), [depots, locationId])
@@ -667,7 +698,7 @@ function FinanceReportPage() {
     periodLabel,
     dateFrom: range ? format(range.from, 'yyyy-MM-dd') : '',
     dateTo: range ? format(range.to, 'yyyy-MM-dd') : '',
-    paymentStatus: paymentStatus === 'all' ? 'All' : paymentStatus,
+    paymentStatus: PAYMENT_FILTER_LABEL[paymentStatus],
     search,
     locationName,
     pfiNumber: selectedPfi?.pfiNumber || 'All PFIs',
@@ -675,7 +706,7 @@ function FinanceReportPage() {
   }
 
   const clearFilters = () => {
-    setSearch(''); setPaymentStatus('Paid'); setLocationId(ALL); setPfiId(ALL); setProductId(ALL)
+    setSearch(''); setPaymentStatus('received'); setLocationId(ALL); setPfiId(ALL); setProductId(ALL)
     setDatePreset('today'); setCustomFrom(''); setCustomTo('')
   }
 
@@ -735,8 +766,10 @@ function FinanceReportPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <NativeSelect className="w-36" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as any)}>
-          <option value="Paid">Paid</option>
+        <NativeSelect className="w-40" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value as any)}>
+          <option value="received">Money received</option>
+          <option value="Paid">Paid in full</option>
+          <option value="Part Paid">Part paid</option>
           <option value="Unpaid">Unpaid</option>
           <option value="all">All</option>
         </NativeSelect>

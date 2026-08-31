@@ -1146,7 +1146,7 @@ function DepotDetailPage() {
                 {filteredOrders.map((order: any) => {
                   const ordId = String(order._id || order.id)
                   const isExpanded = expandedOrder === ordId
-                  const isSuccessful = ['Paid', 'Released', 'Loading', 'Completed'].includes(order.status) || order.paymentStatus === 'Paid'
+                  const isSuccessful = ['Paid', 'Released', 'Loading', 'Completed'].includes(order.status) || ['Paid', 'Part Paid'].includes(order.paymentStatus)
                   const ordCustomerName = order.customerName || order.customer_name || (typeof order.customer === 'object' ? `${order.customer?.firstName || ''} ${order.customer?.lastName || order.customer?.surname || ''}`.trim() : '') || 'N/A'
                   const ordProductName = order.productName || order.product_name || order.product?.name || 'N/A'
                   const ordDateObj = order.createdAt ? new Date(order.createdAt) : null

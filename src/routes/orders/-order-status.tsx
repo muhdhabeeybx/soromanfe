@@ -1,4 +1,4 @@
-import { Clock, CheckCircle2, Send, Truck, XCircle, CircleDashed, Hourglass } from 'lucide-react'
+import { Clock, CheckCircle2, Send, Truck, XCircle, CircleDashed, Hourglass, CircleDollarSign } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
 
@@ -65,20 +65,50 @@ export function OrderStatusBadge({ status }: { status?: string }) {
   )
 }
 
+/**
+ * Money received, which is three states and not two.
+ *
+ * This was a boolean — `=== 'paid'`, else "Unpaid" in amber. Once an order can
+ * be settled in instalments that is actively wrong: a part-paid order has
+ * taken real money and is ticketable up to the quantity it covers, and calling
+ * it Unpaid tells the desk to chase a customer who has already paid.
+ *
+ * Part Paid is blue rather than amber deliberately. Amber is the colour of
+ * "nothing has arrived, go and ask"; blue says money landed and a balance is
+ * outstanding, which is a different instruction. It follows the `released`
+ * entry above — the system runs one accent, so blue carries the palette
+ * directly with an explicit dark pairing.
+ */
+const PAYMENT: Record<string, { label: string; icon: typeof Clock; className: string }> = {
+  paid: {
+    label: 'Paid', icon: CheckCircle2,
+    className: 'border-accent/40 bg-accent/10 text-accent',
+  },
+  'part paid': {
+    label: 'Part Paid', icon: CircleDollarSign,
+    className: 'border-blue-500/40 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  },
+  unpaid: {
+    label: 'Unpaid', icon: Clock,
+    className: 'border-warning/40 bg-warning/10 text-warning',
+  },
+}
+
 export function PaymentBadge({ paymentStatus }: { paymentStatus?: string }) {
-  const paid = String(paymentStatus || '').toLowerCase() === 'paid'
+  // Unknown falls back to Unpaid, which is the safe reading: an order nobody
+  // can prove was paid is one to chase, not one to release.
+  const entry = PAYMENT[String(paymentStatus || '').toLowerCase()] ?? PAYMENT.unpaid
+  const Icon = entry.icon
   return (
     <span
       className={cn(
         'inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5',
         'text-xs whitespace-nowrap uppercase',
-        paid
-          ? 'border-accent/40 bg-accent/10 text-accent'
-          : 'border-warning/40 bg-warning/10 text-warning',
+        entry.className,
       )}
     >
-      {paid ? <CheckCircle2 className="size-3" /> : <Clock className="size-3" />}
-      {paid ? 'Paid' : 'Unpaid'}
+      <Icon className="size-3" />
+      {entry.label}
     </span>
   )
 }
