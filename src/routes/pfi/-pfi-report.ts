@@ -201,8 +201,8 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
         { label: 'Status', value: pfi.status === 'active' ? 'ACTIVE' : 'FINISHED', bold: true },
         { label: 'Location', value: dash(pfi.locationName) },
         { label: 'Product', value: dash(pfi.productName) },
-        { label: 'PFI Date', value: pfi.pfiDate ? new Date(pfi.pfiDate) : '—', fmt: pfi.pfiDate ? DATE_FMT : undefined },
-        { label: 'Created', value: pfi.createdAt ? new Date(pfi.createdAt) : '—', fmt: pfi.createdAt ? DATE_FMT : undefined },
+        // { label: 'PFI Date', value: pfi.pfiDate ? new Date(pfi.pfiDate) : '—', fmt: pfi.pfiDate ? DATE_FMT : undefined },
+        { label: 'Date Created', value: pfi.createdAt ? new Date(pfi.createdAt) : '—', fmt: pfi.createdAt ? DATE_FMT : undefined },
         { label: 'Date Completed', value: pfi.closureDate ? new Date(pfi.closureDate) : '—', fmt: pfi.closureDate ? DATE_FMT : undefined },
         // A gantry batch has no vessel, no surveyor and no tonnage certificate
         // — printing those four rows as dashes answers questions nobody asked.
@@ -269,7 +269,7 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       pairs: [
         { label: `Tank Quantity (${u.plural})`, value: f.tankQtyLitres, fmt: UQTY },
         { label: `Total Sold (${u.plural})`, value: f.sold, fmt: UQTY, bold: true },
-        { label: `${gantry ? 'Balance' : 'Tank Balance'} (${u.plural})`, value: f.remaining, fmt: UQTY, bold: true },
+        { label: `${gantry ? 'Remaining Quantity' : 'Tank Balance'} (${u.plural})`, value: f.remaining, fmt: UQTY, bold: true },
         { label: 'Percentage Sold', value: f.sellThrough ?? '—', fmt: f.sellThrough != null ? PCT : undefined },
         // { label: 'Orders (Paid)', value: pfi.orderCount ?? 0, fmt: '#,##0' },
         { label: `Loaded Quantity (${u.plural})`, value: f.movementQty, fmt: UQTY },
@@ -304,13 +304,13 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
     {
       title: 'PEOPLE',
       pairs: [
-        { label: 'Marketing', value: dash(pfi.salesManagerName) },
-        { label: 'Finance', value: dash(pfi.commissionOfficerName) },
+        // { label: 'Marketing', value: dash(pfi.salesManagerName) },
+        // { label: 'Finance', value: dash(pfi.commissionOfficerName) },
         { label: 'Sales Manager', value: dash(pfi.salesManagerName) },
-        { label: 'Audit Officer', value: dash(pfi.auditOfficerName) },
-        { label: 'Product Officer', value: dash(pfi.productOfficerName) },
+        { label: 'Product Manager', value: dash(pfi.productOfficerName) },
+        { label: 'Finance/Audit', value: dash(pfi.auditOfficerName) },
         { label: 'IT Compliance', value: dash(pfi.itComplianceOfficerName) },
-        { label: 'Security Exit', value: dash(pfi.securityExitOfficerName) },
+        { label: 'Security/Exit Gate', value: dash(pfi.securityExitOfficerName) },
         { label: 'Commission Officer', value: dash(pfi.commissionOfficerName) },
       ],
     },
