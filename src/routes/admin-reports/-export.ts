@@ -184,35 +184,23 @@ export async function exportReportsHub(
   )
 }
 
-function arrayBufferToBase64(buf: ArrayBuffer) {
-  const bytes = new Uint8Array(buf)
-  let binary = ''
-  // Chunked so a large workbook doesn't blow the call-stack String.fromCharCode
-  // would otherwise take one argument per byte.
-  const CHUNK = 0x8000
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
-  }
-  return btoa(binary)
-}
-
 /**
- * "Email report" button: same workbook, sent to whoever was just typed in
- * rather than downloaded — the browser still does all the building, the
- * server only relays the finished file to Resend.
+ * "Email report" button: the server builds and sends the readable summary for
+ * the date, to whoever was just typed in.
+ *
+ * No workbook goes up with it. This used to base64 the whole spreadsheet into
+ * the request body, which the server then discarded — the email has always
+ * been the summary, and the summary is what it is meant to be. The xlsx is for
+ * the operator who wants to work the numbers, and "Download report" is right
+ * there for that.
  */
 export async function emailReportsHub(
-  rows: DailyReportRow[],
   opts: { date: string; location: string; pfi: string },
   recipients: string[],
 ): Promise<{ message: string }> {
-  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts)
   const res = await api.post('/daily-reports/email', {
     recipients,
     reportDate: opts.date,
-    filename,
-    attachmentBase64: arrayBufferToBase64(buffer),
-    reportCount: rows.length,
     location: opts.location,
     pfi: opts.pfi,
   })

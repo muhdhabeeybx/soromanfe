@@ -297,7 +297,7 @@ function EmailReportDialog({
     if (!recipients.length) return
     setSending(true)
     try {
-      const res = await emailReportsHub(rows, opts, recipients)
+      const res = await emailReportsHub(opts, recipients)
       toast.success(res.message)
       localStorage.setItem(RECIPIENTS_KEY, JSON.stringify(recipients))
       onOpenChange(false)
@@ -316,7 +316,8 @@ function EmailReportDialog({
           <DialogDescription>
             {rows.length} report{rows.length === 1 ? '' : 's'} for {format(new Date(`${opts.date}T00:00:00`), 'd MMM yyyy')}
             {opts.location !== 'all' && ` · ${opts.location}`}
-            {opts.pfi !== 'all' && ` · ${opts.pfi}`} — sent as the same workbook "Download report" produces.
+            {opts.pfi !== 'all' && ` · ${opts.pfi}`} — sent as a readable summary of the day, covering every
+            depot. For the spreadsheet, use "Download report".
           </DialogDescription>
         </DialogHeader>
 
