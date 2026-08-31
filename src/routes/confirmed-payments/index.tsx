@@ -23,7 +23,7 @@ import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
-import { cn } from '#/lib/utils'
+import { cn, toNum } from '#/lib/utils'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
@@ -38,6 +38,7 @@ import {
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { RematchFundingDialog } from '#/components/RematchFundingDialog'
+import { ConfirmOrderPaymentDialog } from '#/components/ConfirmOrderPaymentDialog'
 import { useUnmatchDeposit } from '#/lib/hooks/useDeposits'
 import {
   exportFinanceReportExcel, exportFinanceReportPdf, REPORT_COLUMNS,
@@ -333,8 +334,14 @@ function StatementSourceCard({ row }: { row: StatementRow }) {
   )
 }
 
-function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void; onUnmatch?: (f: OrderFunding) => void }) {
+function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch, onAddPayment }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void; onUnmatch?: (f: OrderFunding) => void; onAddPayment?: () => void }) {
   if (!order) return null
+
+  // What is still owed. Prefer the server's figure; fall back to the
+  // subtraction so this reads correctly against a response that predates it.
+  const outstanding = order.outstandingAmount != null
+    ? Number(order.outstandingAmount)
+    : Math.max(0, Number(order.totalAmount || 0) - toNum(order.amountPaid))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -345,6 +352,31 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch }: 
             {order.reference} · {order.customerName || 'Unknown customer'}
           </DialogDescription>
         </DialogHeader>
+
+        {/* An order settled in instalments is finished off from here.
+            The payable-orders desk only lists orders whose customer is
+            already holding the WHOLE remaining balance, so a part-paid order
+            drops off it the moment the first instalment drains the wallet —
+            leaving nowhere to record the second. This is that somewhere. */}
+        {outstanding > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/25 bg-blue-50 p-3 dark:bg-blue-950">
+            <div className="min-w-0">
+              <p className={cn(MICRO, 'text-blue-700 dark:text-blue-300')}>Still owed on this order</p>
+              <p className="mt-0.5 text-lg font-semibold text-blue-700 tabular-nums dark:text-blue-300">
+                {naira(outstanding)}
+              </p>
+              <p className="mt-0.5 text-xs text-blue-700/80 dark:text-blue-300/80">
+                {naira(toNum(order.amountPaid))} of {naira(Number(order.totalAmount))} received so far
+              </p>
+            </div>
+            {onAddPayment && (
+              <Button size="sm" onClick={onAddPayment}>
+                <Wallet data-icon="inline-start" />
+                Add payment
+              </Button>
+            )}
+          </div>
+        )}
 
         <div className="divide-y divide-foreground/10">
           <div className="pb-3">
@@ -490,6 +522,8 @@ function FinanceReportPage() {
   const [pfiId, setPfiId] = useState(ALL)
   const [productId, setProductId] = useState(ALL)
   const [viewing, setViewing] = useState<FinanceReportOrder | null>(null)
+  /** An order with a balance outstanding, being topped up from this page. */
+  const [payingBalance, setPayingBalance] = useState<FinanceReportOrder | null>(null)
   const [rematching, setRematching] = useState<FinanceReportOrder | null>(null)
   const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; funding: OrderFunding } | null>(null)
   const unmatchDeposit = useUnmatchDeposit()
@@ -1274,6 +1308,17 @@ function FinanceReportPage() {
         onOpenChange={(o) => !o && setViewing(null)}
         onRematch={() => { setRematching(viewing); setViewing(null) }}
         onUnmatch={(f) => viewing && setUnmatching({ order: viewing, funding: f })}
+        onAddPayment={() => { setPayingBalance(viewing); setViewing(null) }}
+      />
+
+      {/* The same dialog the payable-orders desk uses — match a statement
+          line, or draw from wallet balance, and confirm whatever has landed.
+          Reused rather than rebuilt so an instalment is recorded through
+          exactly the flow a first payment is, funding trail included. */}
+      <ConfirmOrderPaymentDialog
+        order={payingBalance}
+        open={payingBalance !== null}
+        onOpenChange={(o) => { if (!o) setPayingBalance(null) }}
       />
 
       <RematchFundingDialog

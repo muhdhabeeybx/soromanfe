@@ -143,6 +143,21 @@ export interface FinanceReportOrder {
   virtualAccountBank?: string | null
   virtualAccountName?: string | null
   paymentStatus: 'Unpaid' | 'Part Paid' | 'Paid'
+  /**
+   * What the order has actually taken, across however many instalments.
+   * Equal to totalAmount on a settled order; 0 on an untouched one.
+   */
+  amountPaid?: string | number
+  /**
+   * Money still owed — totalAmount minus amountPaid.
+   *
+   * Deliberately NOT the same figure as `unattributedAmount`, which is a hole
+   * in the FUNDING TRAIL: money the order was settled with that the ledger
+   * cannot account for. This one is a hole in the MONEY — cash that has never
+   * been sent and is still owed.
+   */
+  outstandingAmount?: number
+  partPaid?: boolean
   status: string
   paymentConfirmedAt?: string | null
   createdAt?: string

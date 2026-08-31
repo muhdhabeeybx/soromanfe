@@ -179,6 +179,10 @@ export function usePayOrder() {
       toast.success(data?.message || 'Order paid successfully')
       queryClient.invalidateQueries({ queryKey: ['orders'] })
       queryClient.invalidateQueries({ queryKey: ['customers'] })
+      // A balance can now be settled from the finance report, so the row this
+      // was launched from has to stop showing the amount just paid as owing.
+      // ['orders'] already covers the payable desk's ['orders','payable'].
+      queryClient.invalidateQueries({ queryKey: ['finance-report'] })
     },
     onError: (err: any) => {
       const status = err?.response?.status
