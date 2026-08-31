@@ -30,6 +30,7 @@ import { cn, toNum } from '#/lib/utils'
 import type { FilingStation, DeliverySale, AccountEntry } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
 import { normalizePlate } from '#/lib/sales-ledger-utils'
+import { buildLoadSplit } from '#/lib/load-split'
 
 export const Route = createFileRoute('/filing-stations/details')({
   beforeLoad: () => routeGuard('/filing-stations'),
@@ -259,7 +260,12 @@ function FilingStationDetailsView() {
       payments = sortPayments(payments)
       payments.forEach(p => matchedIds.add(getObjId(p)))
 
-      const quantity = toNum(loading.quantityAllocated) || payments.reduce((max, s) => Math.max(max, toNum(s.quantity)), 0)
+      // What this station received, not what the truck carried. A truck split
+      // between two stations has one allocation and one `quantityAllocated`
+      // covering both, so reading it here credited a station with the whole
+      // load; the station's own sale rows say what actually came off.
+      const stationShare = buildLoadSplit(loading, payments).shares[0]?.quantity ?? 0
+      const quantity = stationShare > 0 ? stationShare : toNum(loading.quantityAllocated)
       const dailySales = payments.filter(s => toNum(s.quantity) > 0 && toNum(s.quantity) < quantity)
       const expected = dailySales.reduce((sum, s) => sum + toNum(s.salesValue), 0)
       const rate = dailySales.reduce((max, s) => Math.max(max, toNum(s.rate)), 0) || payments.reduce((max, s) => Math.max(max, toNum(s.rate)), 0)

@@ -24,6 +24,8 @@ import type { Pfi } from '#/lib/hooks/usePfis'
 import { routeGuard } from '#/lib/route-guard'
 import { salesForLoading, rateFromSales } from '#/lib/sales-ledger-utils'
 import { buildTruckIndex, resolveLoading } from '#/lib/delivery-records'
+import { buildLoadSplit } from '#/lib/load-split'
+import { SplitBadge, SplitSummaryCard } from '#/components/LoadSplit'
 
 export const Route = createFileRoute('/delivery-operations/details')({
   beforeLoad: () => routeGuard('/delivery-operations'),
@@ -132,11 +134,14 @@ function DeliveryOperationDetailsView() {
       ? customerMap.get(String(inventoryItem.customerId)) || null
       : null
     const resolved = resolveLoading(inventoryItem, { truck, pfi, customer, sales: matchedSales })
+    const split = buildLoadSplit(inventoryItem, matchedSales, customerMap)
     return {
       ...inventoryItem,
       ...resolved,
       unitLabel: pfi?.productUnit || 'Litres',
-      qty: toNum(inventoryItem.quantityAllocated),
+      // The whole truck, not one buyer's share of it — see buildLoadSplit.
+      qty: split.total,
+      split,
       code: (inventoryItem.allocationCode || '').trim().toUpperCase(),
       notes: inventoryItem.notes || '',
     }
@@ -146,9 +151,8 @@ function DeliveryOperationDetailsView() {
   const rateFromLedger = rateFromSales(matchedSales) > 0
 
   const salesSummary = useMemo(() => {
-    let totalQty = 0, totalValue = 0, totalPaid = 0, totalExpenses = 0
+    let totalValue = 0, totalPaid = 0, totalExpenses = 0
     matchedSales.forEach(s => {
-      totalQty += toNum(s.quantity)
       totalValue += toNum(s.salesValue)
       totalPaid += toNum(s.paymentAmount)
       totalExpenses += toNum(s.expensesAmount ?? 0)
@@ -156,6 +160,10 @@ function DeliveryOperationDetailsView() {
     if (totalValue === 0 && record && record.rate > 0) {
       totalValue = record.rate * record.qty
     }
+    // The volume with a buyer against it — the shares, added once. Summing the
+    // quantity column across payment rows counted the same litres again for
+    // every instalment, so a 45,000 L truck paid in three parts read 135,000.
+    const totalQty = record?.split.assigned ?? 0
     return { totalQty, totalValue, totalPaid, totalExpenses, balance: totalValue - (totalPaid + totalExpenses) }
   }, [matchedSales, record])
 
@@ -237,10 +245,25 @@ function DeliveryOperationDetailsView() {
         <Card>
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <div className="text-xs text-muted-foreground font-normal">Quantity Allocated</div>
+              <div className="text-xs text-muted-foreground font-normal">Quantity Loaded</div>
               <div className="text-xl font-semibold text-foreground mt-0.5">
                 {record.qty > 0 ? `${fmtQty(record.qty)} ${record.unitLabel}` : '—'}
               </div>
+              {/* On a split load the headline is the whole truck, so it has to
+                  say what it is made of — otherwise it reads as one customer's. */}
+              {record.split.isSplit && (
+                <div className="mt-1 flex items-center gap-1.5">
+                  <SplitBadge split={record.split} />
+                  <span className="text-xs text-muted-foreground">
+                    {record.split.shares.map(sh => fmtQty(sh.quantity)).join(' + ')}
+                  </span>
+                </div>
+              )}
+              {!record.split.isSplit && record.split.unassigned > 0 && record.split.assigned > 0 && (
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {fmtQty(record.split.unassigned)} {record.unitLabel} unassigned
+                </div>
+              )}
             </div>
             <div className="p-2.5 rounded-xl bg-muted/10 text-muted-foreground">
               <Package className="size-5" />
@@ -320,6 +343,10 @@ function DeliveryOperationDetailsView() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Details */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Who this truck's load actually went to, before the allocation's
+              own single-customer fields, which cannot describe a split. */}
+          <SplitSummaryCard split={record.split} unit={record.unitLabel} />
+
           <Card>
             <CardHeader>
               <CardTitle>Truck & Allocation Details</CardTitle>
@@ -368,9 +395,18 @@ function DeliveryOperationDetailsView() {
                 </div>
                 <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
                   <Users className="size-5 text-muted-foreground shrink-0" />
-                  <div>
-                    <div className="text-xs text-muted-foreground font-normal">Customer</div>
-                    <div className="font-semibold capitalize">{record.customerName || 'N/A'}</div>
+                  <div className="min-w-0">
+                    <div className="text-xs text-muted-foreground font-normal">
+                      {record.split.isSplit ? `Customers (${record.split.shares.length})` : 'Customer'}
+                    </div>
+                    {/* The allocation carries one customer id, which on a split
+                        load names whichever buyer was recorded first and hides
+                        the rest. The shares name all of them. */}
+                    <div className="font-semibold capitalize truncate">
+                      {record.split.isSplit
+                        ? record.split.shares.map(sh => sh.customerName || 'Unassigned').join(', ')
+                        : (record.customerName || 'N/A')}
+                    </div>
                   </div>
                 </div>
                 {record.code && (

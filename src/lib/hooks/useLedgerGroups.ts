@@ -2,6 +2,7 @@ import { useMemo, useCallback } from 'react'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { LedgerGroup } from '#/components/sales-ledger/SalesLedgerDialogs'
 import { toNum, isFillingStation, getCycleKey, normalizeText, normalizePlate, idKey, entityId } from '#/lib/sales-ledger-utils'
+import { buildLoadSplit } from '#/lib/load-split'
 
 interface UseLedgerGroupsParams {
   allSales: DeliverySale[]
@@ -70,35 +71,32 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
       const pfiNumber = getPfiNumber(loading)
       const allocationCode = loading.allocationCode || payments.map(s => s.allocationCode).find(Boolean) || ''
 
-      const byCustomer = new Map<string | null, DeliverySale[]>()
-      payments.forEach(sale => {
-        const cid = idKey(sale.customerId) || null
-        const arr = byCustomer.get(cid) ?? []
-        arr.push(sale)
-        byCustomer.set(cid, arr)
-      })
+      /*
+       * What this truck carried, and how it was divided — one shared answer,
+       * so a load reads the same here as it does in Delivery Operations. The
+       * ledger's own rows are the shares; `split.total` is the whole truck,
+       * which every row now carries so a 30,000 L share can say what it is a
+       * share of.
+       */
+      const split = buildLoadSplit(loading, payments, customerMap)
+      const loadContext = {
+        loadQuantity: split.total,
+        loadAssigned: split.assigned,
+        loadUnassigned: split.unassigned,
+        shareCount: split.shares.length,
+        isSplitLoad: split.isSplit,
+      }
 
-      const isMultiCustomer = byCustomer.size > 1
-
-      if (isMultiCustomer) {
-        const loadingTotalQty = toNum(loading.quantityAllocated)
-        const rawQtyMap = new Map<string | null, number>()
-        byCustomer.forEach((cPayments, cid) => {
-          rawQtyMap.set(cid, cPayments.reduce((mx, s) => Math.max(mx, toNum(s.quantity)), 0))
-        })
-
-        byCustomer.forEach((customerPayments, custId) => {
+      if (split.isSplit) {
+        split.shares.forEach(share => {
+          const custId = share.customerId || null
           const customerObj = custId ? customerMap.get(custId) : null
+          const customerPayments = share.payments
           const firstPayment = customerPayments[0]
           const salesExpected = customerPayments.reduce((mx, s) => Math.max(mx, toNum(s.salesValue)), 0)
-          const salesRate = customerPayments.reduce((mx, s) => Math.max(mx, toNum(s.rate)), 0)
-          const rate = salesRate > 0 ? salesRate : toNum(loading.rate)
-          const totalPaid = customerPayments.reduce((sum, s) => sum + toNum(s.paymentAmount), 0)
-          let quantity = rawQtyMap.get(custId) ?? 0
-          if (loadingTotalQty > 0 && quantity >= loadingTotalQty) {
-            const othersTotal = Array.from(rawQtyMap.entries()).filter(([k]) => k !== custId).reduce((s, [, q]) => s + q, 0)
-            if (othersTotal > 0 && othersTotal < loadingTotalQty) quantity = loadingTotalQty - othersTotal
-          }
+          const rate = share.rate > 0 ? share.rate : toNum(loading.rate)
+          const totalPaid = share.totalPaid
+          const quantity = share.quantity
           const expected = salesExpected > 0 ? salesExpected : (rate > 0 && quantity > 0 ? rate * quantity : 0)
           groups.push({
             key: `loading:${loadingId}:${custId ?? 'none'}`,
@@ -114,6 +112,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
             pfiNumber, allocationCode, code: allocationCode,
             payments: customerPayments,
             isFillingStation: isFillingStation(customerObj),
+            ...loadContext,
           })
         })
       } else {
@@ -124,7 +123,10 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
         const salesRate = payments.reduce((mx, s) => Math.max(mx, toNum(s.rate)), 0)
         const rate = salesRate > 0 ? salesRate : toNum(loading.rate)
         const totalPaid = payments.reduce((sum, s) => sum + toNum(s.paymentAmount), 0)
-        const quantity = toNum(loading.quantityAllocated)
+        // One customer takes the whole load, so the row's quantity IS the
+        // load's — including where the allocation was left at zero and only
+        // the ledger knows what went out.
+        const quantity = split.total
         const expected = salesExpected > 0 ? salesExpected : (rate > 0 && quantity > 0 ? rate * quantity : 0)
         groups.push({
           key: `loading:${loadingId}`,
@@ -139,6 +141,7 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
           pfiNumber, allocationCode, code: allocationCode,
           payments,
           isFillingStation: isFillingStation(customerObj),
+          ...loadContext,
         })
       }
     })
@@ -166,6 +169,12 @@ export function useLedgerGroups({ allSales, allLoadings, customerMap, pfiMap }: 
       // 33,000 L truck as 99,000 L once it had been paid in three parts.
       const quantity = sorted.reduce((mx, s) => Math.max(mx, toNum(s.quantity)), 0)
       groups.push({
+        // No allocation behind these, so there is no load to be a share of.
+        loadQuantity: quantity,
+        loadAssigned: quantity,
+        loadUnassigned: 0,
+        shareCount: 1,
+        isSplitLoad: false,
         key: `sale:${key}`,
         truckNumber: firstPayment.truckNumber,
         dateLoaded: firstPayment.dateLoaded || '',

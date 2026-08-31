@@ -19,7 +19,7 @@ import {
   TrendingUp, Banknote, Building2,
   Calendar as CalendarIcon, X, Users, Tag,
   ChevronRight, ChevronLeft, SlidersHorizontal,
-  Loader2, Landmark, ArrowLeftRight, Pencil, Trash2,
+  Loader2, Landmark, ArrowLeftRight, Pencil, Trash2, Split,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
@@ -884,18 +884,18 @@ function SalesLedgerDashboard() {
                   {(() => {
                     let serial = pageOffset
                     const rows: React.ReactNode[] = []
-                    const multiCustCounts = new Map<number, number>()
-                    filteredLedgerGroups.forEach(g => {
-                      if (g.loadingId && g.key.split(':').length === 3) multiCustCounts.set(g.loadingId, (multiCustCounts.get(g.loadingId) ?? 0) + 1)
-                    })
-                    const multiCustLoadingIds = new Set(Array.from(multiCustCounts.entries()).filter(([, c]) => c > 1).map(([id]) => id))
+                    // Whether a row is one share of a split truck is a fact
+                    // about the load, carried on the group itself. Counting
+                    // sibling rows in the current result instead meant a filter
+                    // that matched only one customer dropped the badge, and the
+                    // row went back to looking like a whole truck.
                     const renderedMultiLoadings = new Set<number>()
 
                     paginatedLedgerGroups.forEach(group => {
                       const theme = getCodeTheme(group.code)
-                      const isMultiCustGroup = group.loadingId != null && multiCustLoadingIds.has(group.loadingId)
-                      const isFirstInMultiGroup = isMultiCustGroup && !renderedMultiLoadings.has(group.loadingId!)
-                      if (isMultiCustGroup) renderedMultiLoadings.add(group.loadingId!)
+                      const isMultiCustGroup = group.isSplitLoad
+                      const isFirstInMultiGroup = isMultiCustGroup && group.loadingId != null && !renderedMultiLoadings.has(group.loadingId)
+                      if (isMultiCustGroup && group.loadingId != null) renderedMultiLoadings.add(group.loadingId)
                       serial += 1
                       const isFullyPaid = group.balance <= 0 && group.expected > 0
 
@@ -934,9 +934,10 @@ function SalesLedgerDashboard() {
                               <div className="flex items-center gap-1.5">
                                 <Truck className="size-3.5 text-warning" />
                                 {group.truckNumber || '—'}
-                                {isFirstInMultiGroup && (
-                                  <span className="ml-0.5 text-xs font-semibold text-muted-foreground bg-muted/10 px-1.5 py-0.5 rounded-full border border-border/20 whitespace-nowrap">
-                                    {multiCustCounts.get(group.loadingId!)} customers
+                                {isMultiCustGroup && (
+                                  <span className="ml-0.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                                    <Split className="size-3" />
+                                    Split · {group.shareCount} customers
                                   </span>
                                 )}
                               </div>
@@ -944,7 +945,20 @@ function SalesLedgerDashboard() {
                           </TableCell>
                           <TableCell className="font-semibold text-foreground uppercase whitespace-nowrap text-xs">{group.customerName || '—'}</TableCell>
                           <TableCell className="text-muted-foreground text-xs uppercase whitespace-nowrap">{group.location || '—'}</TableCell>
-                          <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{group.quantity > 0 ? `${fmtQty(group.quantity)} L` : '—'}</TableCell>
+                          {/* This customer's volume, and — where the truck was
+                              shared — what it is a share of. A bare "30,000 L"
+                              on a 45,000 L truck is the number that started
+                              this: correct for the row, wrong for the load. */}
+                          <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">
+                            {group.quantity > 0 ? (
+                              <div className="flex flex-col items-end">
+                                <span>{fmtQty(group.quantity)} L</span>
+                                {isMultiCustGroup && group.loadQuantity > 0 && (
+                                  <span className="text-xs text-muted-foreground/70">of {fmtQty(group.loadQuantity)} L</span>
+                                )}
+                              </div>
+                            ) : '—'}
+                          </TableCell>
                           <TableCell className="text-right text-muted-foreground whitespace-nowrap text-xs tabular-nums">{group.rate > 0 ? fmt(group.rate) : '—'}</TableCell>
                           <TableCell className="text-right font-normal text-foreground whitespace-nowrap text-xs tabular-nums">{group.expected > 0 ? fmt(group.expected) : '—'}</TableCell>
                           {/* Date paid, payer and account are per-payment —

@@ -8,7 +8,7 @@ import {
   Plus, Search, Download,
   Truck, Droplets, CheckCircle2,
   X, Tag, Settings, Calendar,
-  Loader2,
+  Loader2, Split,
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
@@ -22,6 +22,7 @@ import {
   buildTruckIndex, matchSalesByRecord, resolveLoading, STATUS_DISPLAY,
   type ResolvedLoading,
 } from '#/lib/delivery-records'
+import { buildLoadSplit, formatShareList, type LoadSplit } from '#/lib/load-split'
 import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
@@ -36,14 +37,6 @@ export const Route = createFileRoute('/delivery-operations/')({
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
-
-const toNum = (v: string | number | undefined | null): number => {
-  if (v === undefined || v === null || v === '') return 0
-  if (typeof v === 'number') return v
-  const cleaned = String(v).replace(/[^0-9.]/g, '')
-  const n = Number(cleaned)
-  return Number.isFinite(n) ? n : 0
-}
 
 const fmtQty = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 })
 
@@ -78,6 +71,8 @@ interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, Re
   code: string
   isFillingStation: boolean
   notes: string
+  /** Who this load was sold to, and in what shares. */
+  split: LoadSplit
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -201,6 +196,7 @@ function DeliveryOperationsPage() {
       const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
       const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
       const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
+      const split = buildLoadSplit(entry, sales, customerMap)
 
       return {
         ...entry,
@@ -210,7 +206,11 @@ function DeliveryOperationsPage() {
         custName: resolved.customerName,
         pfiLabel: resolved.batchLabel,
         unitLabel: pfi?.productUnit || 'Litres',
-        qty: toNum(entry.quantityAllocated ?? (entry as any).quantity_allocated ?? (entry as any).quantity),
+        // The whole truck, never one buyer's share of it. `quantity_allocated`
+        // alone reported PFI-40B's KUJ228XC as a 30,000 L load when 45,000 left
+        // the depot on it — see buildLoadSplit.
+        qty: split.total,
+        split,
         code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
         isFillingStation: isFillingStation(customer),
         notes: entry.notes || '',
@@ -387,7 +387,9 @@ function DeliveryOperationsPage() {
 
   const exportCSV = useCallback(() => {
     if (!filtered.length) return
-    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
+    // A split load has to survive the export too — one row per truck with the
+    // whole quantity, and the shares spelled out beside it rather than lost.
+    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Split', 'Customer Split', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
     const rows = filtered.map((r, idx) => [
       idx + 1,
       r.code || '—',
@@ -396,9 +398,11 @@ function DeliveryOperationsPage() {
       r.pfiLabel || '—',
       r.product || '—',
       r.depotDisplay || '—',
-      r.custName || '—',
-      r.destination || '—',
+      r.split.isSplit ? r.split.shares.map(sh => sh.customerName || 'Unassigned').join(' / ') : (r.custName || '—'),
+      r.split.isSplit ? r.split.shares.map(sh => sh.destination || '—').join(' / ') : (r.destination || '—'),
       r.qty,
+      r.split.isSplit ? `${r.split.shares.length} customers` : 'Whole load',
+      formatShareList(r.split) || '—',
       r.rate > 0 ? r.rate : '—',
       r.status.label,
       r.dateLoaded ? (() => { try { return format(parseISO(r.dateLoaded), 'dd/MM/yyyy') } catch { return r.dateLoaded } })() : '',
@@ -591,6 +595,11 @@ function DeliveryOperationsPage() {
               const otherRecords = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
               const otherQty = otherRecords.reduce((s, r) => s + r.qty, 0)
               const unit = records[0]?.unitLabel || 'Litres'
+              // Trucks on this batch sold to more than one customer. Worth
+              // saying on the card: the volume above is whole trucks, and a
+              // split one is read differently once you open it.
+              const splitRecords = records.filter(r => r.split.isSplit)
+              const splitQty = splitRecords.reduce((sum, r) => sum + r.qty, 0)
 
               const distinctPfis = [...new Set(records.map(r => r.pfiLabel).filter(Boolean))]
               const distinctProducts = [...new Set(records.map(r => r.product).filter(Boolean))]
@@ -667,12 +676,25 @@ function DeliveryOperationsPage() {
                     </div>
 
                     {/* Total Quantity / Volume */}
-                    <div className="flex items-center justify-between bg-muted/80 dark:bg-foreground/60 p-2.5 rounded-lg border border-border/70 dark:border-border">
-                      <span className="text-xs font-normal text-muted-foreground">Total Volume</span>
-                      <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground dark:text-muted-foreground">
-                        <Droplets className="size-3.5 text-muted-foreground" />
-                        {fmtQty(totalQty)} {unit}
-                      </span>
+                    <div className="space-y-1.5 bg-muted/80 dark:bg-foreground/60 p-2.5 rounded-lg border border-border/70 dark:border-border">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-normal text-muted-foreground">Total Volume</span>
+                        <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground dark:text-muted-foreground">
+                          <Droplets className="size-3.5 text-muted-foreground" />
+                          {fmtQty(totalQty)} {unit}
+                        </span>
+                      </div>
+                      {splitRecords.length > 0 && (
+                        <div className="flex items-center justify-between border-t border-border/50 pt-1.5">
+                          <span className="flex items-center gap-1 text-xs font-normal text-blue-700 dark:text-blue-300">
+                            <Split className="size-3" />
+                            {splitRecords.length} split {splitRecords.length === 1 ? 'load' : 'loads'}
+                          </span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            {fmtQty(splitQty)} {unit} across {splitRecords.reduce((n, r) => n + r.split.shares.length, 0)} customers
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Status Badges */}

@@ -11,7 +11,7 @@ import {
   Trash2, ShieldAlert, FileText, Building2, User,
   Plus, Pencil, Tag, UserPlus, Phone, Wallet, TrendingUp,
   ChevronRight,
-  Loader2,
+  Loader2, Split,
 } from 'lucide-react'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
@@ -310,10 +310,26 @@ export function SalesLedgerDetails() {
         <Card className="bg-card border-border">
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <div className="text-xs text-muted-foreground font-normal">Quantity Loaded</div>
+              {/* On a shared truck this row is one customer's share, and saying
+                  so is the difference between "30,000 L" meaning this sale and
+                  "30,000 L" meaning the truck. */}
+              <div className="text-xs text-muted-foreground font-normal">
+                {targetGroup.isSplitLoad ? 'This Customer\u2019s Share' : 'Quantity Loaded'}
+              </div>
               <div className="text-xl font-semibold text-foreground mt-0.5">
                 {targetGroup.quantity > 0 ? `${fmtQty(targetGroup.quantity)} L` : '—'}
               </div>
+              {targetGroup.isSplitLoad && targetGroup.loadQuantity > 0 && (
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                    <Split className="size-3" />
+                    Split · {targetGroup.shareCount}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    of {fmtQty(targetGroup.loadQuantity)} L loaded
+                  </span>
+                </div>
+              )}
               <div className="text-xs text-muted-foreground mt-0.5">
                 Rate: {targetGroup.rate > 0 ? fmt(targetGroup.rate) : '—'}
               </div>
@@ -552,6 +568,14 @@ export function SalesLedgerDetails() {
               </CardTitle>
               <CardDescription className="text-xs">
                 All customers receiving fuel from truck {targetGroup.truckNumber}
+                {targetGroup.loadQuantity > 0 && (
+                  <>
+                    {' · '}
+                    <span className="font-semibold text-foreground">{fmtQty(targetGroup.loadQuantity)} L</span>
+                    {' loaded'}
+                    {targetGroup.loadUnassigned > 0 && `, ${fmtQty(targetGroup.loadUnassigned)} L unassigned`}
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-4 space-y-3 text-sm">
@@ -637,7 +661,10 @@ export function SalesLedgerDetails() {
             </CardHeader>
             <CardContent className="pt-4 space-y-3 text-sm">
               {[
-                { label: 'Volume', value: targetGroup.quantity > 0 ? `${fmtQty(targetGroup.quantity)} L` : '—' },
+                {
+                  label: targetGroup.isSplitLoad ? 'Volume (this share)' : 'Volume',
+                  value: targetGroup.quantity > 0 ? `${fmtQty(targetGroup.quantity)} L` : '—',
+                },
                 { label: 'Rate per Litre', value: targetGroup.rate > 0 ? fmt(targetGroup.rate) : '—' },
                 { label: 'Expected Revenue', value: targetGroup.expected > 0 ? fmt(targetGroup.expected) : '—', bold: true },
                 { label: 'Total Paid', value: fmt(targetGroup.totalPaid), className: 'text-accent font-semibold' },

@@ -8,7 +8,7 @@ import {
 import {
   Plus, Loader2, Trash2, Pencil, UserPlus, X,
   Fuel, Banknote, Tag, Truck, ArrowLeftRight,
-  Calendar as CalendarIcon, FileText,
+  Calendar as CalendarIcon, FileText, Split,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import {
@@ -67,6 +67,17 @@ export interface LedgerGroup {
   code: string
   payments: DeliverySale[]
   isFillingStation: boolean
+  /**
+   * The load this row is a share of. On a split truck `quantity` is one
+   * customer's share and these describe the whole: without them a row saying
+   * 30,000 L could not tell you it came off a 45,000 L truck, and every screen
+   * reading it showed a fraction of a load as though it were the load.
+   */
+  loadQuantity: number
+  loadAssigned: number
+  loadUnassigned: number
+  shareCount: number
+  isSplitLoad: boolean
 }
 
 export const makeSaleRow = (): SaleRow => ({
@@ -775,6 +786,15 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
       // the shared row would silently become everyone's. A multi-customer
       // group is built out of its payments, so it always has payment rows to
       // carry the rate instead.
+      //
+      // The quantity is the same trap and did real damage before it was seen.
+      // On a split load this field holds one customer's share — 30,000 of a
+      // 45,000 L truck — and it was written onto `quantityAllocated`, which is
+      // the whole load. Six trucks across five batches had their total silently
+      // replaced by one buyer's share that way, so PFI-40B's KUJ228XC reported
+      // 30,000 L for a truck that carried 45,000. The share belongs on this
+      // customer's own payment rows, below; the load's total belongs to the
+      // allocation and is edited in Delivery Operations.
       if (target.loadingId) {
         const isMulti = target.key.split(':').length > 2
         await updateInventory.mutateAsync({
@@ -785,8 +805,8 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
               customerName: customerName || undefined,
               location: setupDestination.trim() || undefined,
               ...(numRate > 0 ? { rate: numRate } : {}),
+              ...(numQty > 0 ? { quantityAllocated: numQty } : {}),
             }),
-            ...(numQty > 0 ? { quantityAllocated: numQty } : {}),
             allocationCode: normalized || null,
           },
         })
@@ -872,9 +892,27 @@ export function RowSetupDialog({ open, onOpenChange, target, customers, customer
             </div>
           </div>
 
+          {/* A split truck's row holds one customer's share, and the fields
+              below only ever touch that share. Said out loud because it was
+              not: the quantity here used to be written onto the whole
+              allocation, which is how five trucks came to report one buyer's
+              volume as the load that left the depot. */}
+          {target?.isSplitLoad && (
+            <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2 text-xs">
+              <Split className="mt-0.5 size-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
+              <span className="text-muted-foreground">
+                Split load — this row is <strong className="text-foreground">{target.customerName || 'this customer'}</strong>
+                {"'"}s share of a{' '}
+                <strong className="text-foreground">{target.loadQuantity.toLocaleString()} L</strong> truck shared
+                between {target.shareCount} customers. Changes here apply to this share only; the truck{"'"}s total is
+                edited in Delivery Operations.
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label>Quantity (L)</Label>
+              <Label>{target?.isSplitLoad ? 'Quantity — this share (L)' : 'Quantity (L)'}</Label>
               <Input
                 type="text"
                 inputMode="decimal"

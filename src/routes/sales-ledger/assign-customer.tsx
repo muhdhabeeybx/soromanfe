@@ -218,6 +218,12 @@ function AssignCustomerPage() {
 
   // ── Capacity calculations ─────────────────────────────────────────────
   const totalTruckCapacity = useMemo(() => {
+    // The whole load as the ledger already resolves it, which is the stored
+    // allocation except where that was overwritten with one customer's share —
+    // taking the stored figure alone reported a 45,000 L truck with 45,000 L
+    // already assigned as a 30,000 L truck with nothing left to give.
+    const fromGroups = targetCycleGroups.reduce((mx, g) => Math.max(mx, toNum(g.loadQuantity)), 0)
+    if (fromGroups > 0) return fromGroups
     const direct = toNum(selectedLoading?.quantityAllocated)
     if (direct > 0) return direct
     return targetCycleGroups.reduce((mx, g) => Math.max(mx, toNum(g.quantity)), 0)

@@ -69,6 +69,12 @@ const COLUMNS: Array<{
   { header: 'Customer', key: 'customer', width: 26, scope: 'cycle' },
   { header: 'Destination', key: 'destination', width: 20, scope: 'cycle' },
   { header: 'Quantity', key: 'quantity', width: 14, fmt: QTY, scope: 'cycle' },
+  // What the truck carried, beside what this row's customer took off it. On a
+  // split load the two differ, and a Quantity column alone cannot say so — a
+  // reader adding up a batch has no way to tell a 30,000 L share from a
+  // 30,000 L truck.
+  { header: 'Truck Load', key: 'loadQuantity', width: 13, fmt: QTY, scope: 'cycle' },
+  { header: 'Split', key: 'split', width: 11, scope: 'cycle' },
   { header: 'Rate', key: 'rate', width: 12, fmt: NGN, scope: 'cycle' },
   { header: 'Expected', key: 'expected', width: 17, fmt: NGN, scope: 'cycle' },
   // ── the payment side ──
@@ -140,6 +146,8 @@ function cycleValues(group: LedgerGroup, index: number) {
     customer: up(group.customerName) || '—',
     destination: up(group.location) || '—',
     quantity: group.quantity,
+    loadQuantity: group.loadQuantity,
+    split: group.isSplitLoad ? `1 of ${group.shareCount}` : 'Whole load',
     rate: group.rate,
     expected: group.expected,
     totalPaid: toNum(group.totalPaid),
@@ -641,6 +649,8 @@ export async function exportSalesLedgerPdf(
         customer: v.customer,
         destination: v.destination,
         quantity: v.quantity > 0 ? `${v.quantity.toLocaleString()} L` : '—',
+        loadQuantity: v.loadQuantity > 0 ? `${v.loadQuantity.toLocaleString()} L` : '—',
+        split: v.split,
         rate: v.rate > 0 ? pdfNaira(v.rate) : '—',
         expected: v.expected > 0 ? pdfNaira(v.expected) : '—',
         totalPaid: pdfNaira(v.totalPaid),

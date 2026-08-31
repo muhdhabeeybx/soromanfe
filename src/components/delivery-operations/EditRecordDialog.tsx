@@ -4,7 +4,7 @@ import { Label } from '#/components/ui/label'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
 } from '#/components/ui/dialog'
-import { Pencil, Loader2, DollarSign } from 'lucide-react'
+import { Pencil, Loader2, DollarSign, Droplets, Split } from 'lucide-react'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
 interface EditTarget {
@@ -16,6 +16,12 @@ interface EditTarget {
   currentDate: string
   currentLocation: string
   currentRate: number
+  /** The whole load, as shown on the row. */
+  currentQty: number
+  /** What the load's customers already account for. */
+  assignedQty: number
+  /** How many customers share this truck. 1 or 0 is not a split. */
+  shareCount: number
 }
 
 interface EditForm {
@@ -25,6 +31,7 @@ interface EditForm {
   date: string
   location: string
   rate: string
+  quantity: string
 }
 
 interface EditRecordDialogProps {
@@ -128,6 +135,35 @@ export function EditRecordDialog({
                 className="h-9 text-sm"
               />
             </div>
+          </div>
+
+          {/* The load's total volume.
+              This is the field that had no home. A split truck's total lives
+              on the allocation and nowhere else, and the only place it could
+              be typed was the ledger's Row Setup, where the number meant one
+              customer's share — so editing a share overwrote the load. It is
+              editable here now, next to the depot and date it belongs with. */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1">
+              <Droplets className="size-3.5" /> Quantity loaded (whole truck)
+            </Label>
+            <Input
+              type="number"
+              value={form.quantity}
+              onChange={e => setForm({ ...form, quantity: e.target.value })}
+              className="h-9 text-sm"
+              placeholder="e.g. 45000"
+            />
+            {target.shareCount > 1 && (
+              <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <Split className="mt-0.5 size-3 shrink-0 text-blue-600 dark:text-blue-400" />
+                <span>
+                  Split between {target.shareCount} customers accounting for{' '}
+                  <strong className="text-foreground">{target.assignedQty.toLocaleString()} L</strong>. The whole load
+                  should be at least that much.
+                </span>
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">

@@ -11,7 +11,7 @@ import {
 import {
   ArrowLeft, Truck, CheckCircle2,
   Trash2, Loader2, ShieldAlert, FileText,
-  Tag, Pencil, X, Download, Droplets,
+  Tag, Pencil, X, Download, Droplets, Split,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
@@ -25,6 +25,8 @@ import {
   buildTruckIndex, matchSalesByRecord, resolveLoading, STATUS_DISPLAY,
   type ResolvedLoading,
 } from '#/lib/delivery-records'
+import { buildLoadSplit, formatShareList, type LoadSplit } from '#/lib/load-split'
+import { LoadQuantity, ShareList, SplitBadge } from '#/components/LoadSplit'
 import type { DeliveryInventory, DeliverySale, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
@@ -90,6 +92,8 @@ interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, Re
   code: string
   isFillingStation: boolean
   notes: string
+  /** Who this load was sold to, and in what shares. */
+  split: LoadSplit
 }
 
 interface EditTarget {
@@ -101,6 +105,9 @@ interface EditTarget {
   currentDate: string
   currentLocation: string
   currentRate: number
+  currentQty: number
+  assignedQty: number
+  shareCount: number
 }
 
 interface EditForm {
@@ -110,6 +117,7 @@ interface EditForm {
   date: string
   location: string
   rate: string
+  quantity: string
 }
 
 function AllocationDetailsPage() {
@@ -200,6 +208,7 @@ function AllocationDetailsPage() {
         const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
         const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
         const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
+        const split = buildLoadSplit(entry, sales, customerMap)
 
         return {
           ...entry,
@@ -208,7 +217,11 @@ function AllocationDetailsPage() {
           custName: resolved.customerName,
           pfiLabel: resolved.batchLabel,
           unitLabel: pfi?.productUnit || 'Litres',
-          qty: toNum(entry.quantityAllocated ?? (entry as any).quantity_allocated ?? (entry as any).quantity),
+          // The whole truck. `quantity_allocated` on its own reported this
+          // batch's KUJ228XC as 30,000 L when 45,000 went out on it, because a
+          // split had overwritten the column with one customer's share.
+          qty: split.total,
+          split,
           code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
           isFillingStation: isFillingStation(customer),
           notes: entry.notes || '',
@@ -220,48 +233,6 @@ function AllocationDetailsPage() {
         return dateB.localeCompare(dateA)
       })
   }, [codeEntries, truckIndex, customerMap, pfiMap, salesByRecord])
-
-  // ── Match sales to trucks ───────────────────────────────────────────────
-  //
-  // Dated allocations are matched first so that a truck's undated row cannot
-  // swallow the payments belonging to a dated one — the same ordering
-  // useLedgerGroups uses.
-  const truckSalesMap = useMemo(() => {
-    const map = new Map<string, { customerId: string; customerName: string; qty: number; rates: Set<number>; location: string }[]>()
-
-    truckRecords.forEach(loading => {
-      const payments = salesByRecord.get(loading._id || loading.id || '') ?? []
-
-      const customerGroups: { customerId: string; customerName: string; qty: number; rates: Set<number>; location: string }[] = []
-      payments.forEach(s => {
-        const rate = toNum(s.rate)
-        const sQty = toNum(s.quantity)
-        const sCustId = s.customerId ? String(s.customerId) : ''
-        const custEntry = customerGroups.find(e => e.customerId === sCustId)
-        const customerObj = sCustId ? customerMap.get(sCustId as any) : null
-        const isFS = isFillingStation(customerObj)
-        const sLoc = isFS ? (customerObj?.name || s.customerName || '') : (s.location || '')
-
-        if (custEntry) {
-          if (rate > 0) custEntry.rates.add(rate)
-          if (sQty > custEntry.qty) custEntry.qty = sQty
-          if (sLoc && !custEntry.location) custEntry.location = sLoc
-        } else {
-          customerGroups.push({
-            customerId: sCustId,
-            customerName: s.customerName || '',
-            qty: sQty,
-            rates: rate > 0 ? new Set([rate]) : new Set(),
-            location: sLoc,
-          })
-        }
-      })
-
-      map.set(loading._id || loading.id || '', customerGroups)
-    })
-
-    return map
-  }, [salesByRecord, truckRecords, customerMap])
 
   // ── All matched sales for this allocation ───────────────────────────────
   const allocationSales = useMemo((): DeliverySale[] => {
@@ -282,6 +253,7 @@ function AllocationDetailsPage() {
   const stats = useMemo(() => {
     let totalQty = 0, loadedCount = 0, loadedQty = 0, soldCount = 0, soldQty = 0
     let otherCount = 0, otherQty = 0
+    let splitCount = 0, splitCustomers = 0, splitQty = 0, unassignedQty = 0
     truckRecords.forEach(r => {
       totalQty += r.qty
       // Anything that is neither loaded nor offloaded gets its own bucket.
@@ -290,9 +262,18 @@ function AllocationDetailsPage() {
       if (r.status.key === 'loaded') { loadedCount++; loadedQty += r.qty }
       else if (r.status.key === 'offloaded') { soldCount++; soldQty += r.qty }
       else { otherCount++; otherQty += r.qty }
+      if (r.split.isSplit) { splitCount++; splitCustomers += r.split.shares.length; splitQty += r.qty }
+      unassignedQty += r.split.unassigned
     })
-    return { totalQty, loadedCount, loadedQty, soldCount, soldQty, otherCount, otherQty, truckCount: truckRecords.length }
+    return {
+      totalQty, loadedCount, loadedQty, soldCount, soldQty, otherCount, otherQty,
+      truckCount: truckRecords.length,
+      splitCount, splitCustomers, splitQty, unassignedQty,
+    }
   }, [truckRecords])
+
+  /** The trucks on this allocation that went to more than one customer. */
+  const splitRecords = useMemo(() => truckRecords.filter(r => r.split.isSplit), [truckRecords])
 
   // ── PFI Breakdown ───────────────────────────────────────────────────────
   const pfiBreakdown = useMemo(() => {
@@ -320,9 +301,8 @@ function AllocationDetailsPage() {
 
   // ── Sales Summary ───────────────────────────────────────────────────────
   const salesSummary = useMemo(() => {
-    let totalQty = 0, totalValue = 0, totalPaid = 0, totalExpenses = 0
+    let totalValue = 0, totalPaid = 0, totalExpenses = 0
     allocationSales.forEach(s => {
-      totalQty += toNum(s.quantity)
       totalValue += toNum(s.salesValue)
       totalPaid += toNum(s.paymentAmount)
       totalExpenses += toNum(s.expensesAmount ?? 0)
@@ -333,6 +313,10 @@ function AllocationDetailsPage() {
         return sum + (rate > 0 ? rate * r.qty : 0)
       }, 0)
     }
+    // Each customer's share counted once. Adding the quantity column across
+    // payment rows counted the same litres again for every instalment, which
+    // is why Volume Sold could read higher than the trucks ever carried.
+    const totalQty = truckRecords.reduce((sum, r) => sum + r.split.assigned, 0)
     return { totalQty, totalValue, totalPaid, totalExpenses, balance: totalValue - (totalPaid + totalExpenses) }
   }, [allocationSales, truckRecords])
 
@@ -348,7 +332,7 @@ function AllocationDetailsPage() {
   const [deleting, setDeleting] = useState(false)
 
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
-  const [editForm, setEditForm] = useState<EditForm>({ code: '', pfi: '', depot: '', date: '', location: '', rate: '' })
+  const [editForm, setEditForm] = useState<EditForm>({ code: '', pfi: '', depot: '', date: '', location: '', rate: '', quantity: '' })
   const [editSaving, setEditSaving] = useState(false)
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
@@ -440,6 +424,9 @@ function AllocationDetailsPage() {
       currentDate: r.dateAllocated || '',
       currentLocation: r.destination,
       currentRate: toNum(r.rate),
+      currentQty: r.qty,
+      assignedQty: r.split.assigned,
+      shareCount: r.split.shares.length,
     })
     setEditForm({
       code: r.code,
@@ -448,6 +435,7 @@ function AllocationDetailsPage() {
       date: r.dateAllocated || '',
       location: r.destination,
       rate: toNum(r.rate) > 0 ? String(toNum(r.rate)) : '',
+      quantity: r.qty > 0 ? String(r.qty) : '',
     })
   }
 
@@ -456,6 +444,17 @@ function AllocationDetailsPage() {
     setEditSaving(true)
     try {
       const normalizedEditCode = editForm.code.trim().toUpperCase().replace(/\s+/g, '-')
+      const editedQty = toNum(editForm.quantity)
+      // A split load's shares are already recorded against their customers, so
+      // a total below them would be describing a truck that delivered more
+      // than it carried. Refuse rather than store a figure the page will then
+      // have to argue with.
+      if (editTarget.shareCount > 1 && editedQty > 0 && editedQty < editTarget.assignedQty) {
+        toast.error(
+          `${fmtQty(editedQty)} L is less than the ${fmtQty(editTarget.assignedQty)} L already assigned to this truck's ${editTarget.shareCount} customers.`,
+        )
+        return
+      }
       await updateInventory.mutateAsync({
         id: editTarget.id,
         data: {
@@ -465,6 +464,7 @@ function AllocationDetailsPage() {
           dateAllocated: editForm.date || undefined,
           location: editForm.location.trim() || undefined,
           rate: editForm.rate ? Number(editForm.rate) : undefined,
+          ...(editedQty > 0 ? { quantityAllocated: editedQty } : {}),
         } as any,
       })
       toast.success('Record updated')
@@ -535,7 +535,10 @@ function AllocationDetailsPage() {
     if (!truckRecords.length) return
     // Same resolved fields the table shows — an export that reads "—" where
     // the screen above it shows a driver and a rate is worse than no export.
-    const headers = ['S/N', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
+    // A split truck exports as one row carrying the whole load, with its
+    // customers, destinations and shares spelled out across three columns —
+    // the same three the table shows, so the file and the screen agree.
+    const headers = ['S/N', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Split', 'Customer Split', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
     const rows = truckRecords.map((r, idx) => [
       idx + 1,
       r.truckPlate,
@@ -543,9 +546,11 @@ function AllocationDetailsPage() {
       r.pfiLabel || '—',
       r.product || '—',
       r.depotDisplay || '—',
-      r.custName || '—',
-      r.destination || '—',
+      r.split.isSplit ? r.split.shares.map(sh => sh.customerName || 'Unassigned').join(' / ') : (r.custName || '—'),
+      r.split.isSplit ? r.split.shares.map(sh => sh.destination || '—').join(' / ') : (r.destination || '—'),
       r.qty,
+      r.split.isSplit ? `${r.split.shares.length} customers` : 'Whole load',
+      formatShareList(r.split) || '—',
       r.rate > 0 ? r.rate : '—',
       r.status.label,
       r.dateLoaded ? (() => { try { return format(parseISO(r.dateLoaded), 'dd/MM/yyyy') } catch { return r.dateLoaded } })() : '',
@@ -669,7 +674,11 @@ function AllocationDetailsPage() {
               </span>
             </>
           }
-          description="Combined capacity"
+          description={
+            stats.splitCount > 0
+              ? `${stats.splitCount} split across ${stats.splitCustomers} customers`
+              : 'Combined capacity'
+          }
         />
         <StatCard
           tone="amber"
@@ -782,6 +791,72 @@ function AllocationDetailsPage() {
         </Card>
       </div>
 
+      {/* Split loads.
+          A truck sold to two customers is the case every quantity on this page
+          used to get wrong, so it gets said once, plainly, before the table:
+          which trucks were split, into what, and for whom. */}
+      {splitRecords.length > 0 && (
+        <Card className="border border-blue-500/30">
+          <CardHeader className="border-b border-blue-500/20 bg-blue-500/5 px-4 py-3">
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-semibold text-foreground">
+              <span className="flex items-center gap-2">
+                <Split className="size-4 text-blue-600 dark:text-blue-400" />
+                Split loads ({splitRecords.length})
+              </span>
+              <span className="text-xs font-normal text-muted-foreground">
+                {fmtQty(stats.splitQty)} L to {stats.splitCustomers} customers
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+            {splitRecords.map(r => (
+              <div key={`split-${r._id || r.id}`} className="space-y-2 rounded-xl border border-border/70 bg-muted/30 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
+                    <Truck className="size-3 shrink-0 text-accent" />
+                    {r.truckPlate}
+                  </span>
+                  <span className="text-xs font-semibold tabular-nums text-foreground">
+                    {fmtQty(r.qty)} {r.unitLabel}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {r.split.shares.map((share, i) => {
+                    const pct = r.qty > 0 ? Math.round((share.quantity / r.qty) * 100) : 0
+                    return (
+                      <div key={share.customerId || i} className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate capitalize text-foreground">
+                            {share.customerName || 'Unassigned'}
+                            {share.destination && (
+                              <span className="ml-1 capitalize text-muted-foreground">→ {share.destination}</span>
+                            )}
+                          </span>
+                          <span className="whitespace-nowrap font-semibold tabular-nums text-foreground">
+                            {fmtQty(share.quantity)} L
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                          <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {r.split.unassigned > 0 && (
+                    <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-1.5 text-xs">
+                      <span className="italic text-muted-foreground">Not yet assigned</span>
+                      <span className="whitespace-nowrap font-semibold tabular-nums text-muted-foreground">
+                        {fmtQty(r.split.unassigned)} L
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* FULL-WIDTH TRUCK RECORDS SECTION */}
       <div className="w-full space-y-4">
         {/* Bulk Selection Floating Toolbar */}
@@ -867,7 +942,7 @@ function AllocationDetailsPage() {
                   {truckRecords.map((r, idx) => {
                     const badge = r.status
                     const Icon = STATUS_ICON[badge.key] ?? Droplets
-                    const salesEntries = truckSalesMap.get(r._id || r.id || '')
+                    const shares = r.split.shares
                     const recordId = r._id || r.id || ''
 
                     return (
@@ -901,17 +976,14 @@ function AllocationDetailsPage() {
                               <Truck className="size-3 text-accent shrink-0" />
                               {r.truckPlate}
                             </span>
-                            {salesEntries && salesEntries.length > 1 && (
-                              <span className="inline-flex self-start items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-muted/15 text-foreground dark:text-muted-foreground border border-border/20">
-                                Split Load
-                              </span>
-                            )}
+                            <SplitBadge split={r.split} className="self-start" />
                           </div>
                         </TableCell>
 
-                        {/* Quantity */}
-                        <TableCell className="font-semibold text-foreground">
-                          {r.qty > 0 ? `${fmtQty(r.qty)} ${r.unitLabel}` : '—'}
+                        {/* Quantity — the whole truck, with the shares it
+                            breaks into underneath it on a split load. */}
+                        <TableCell>
+                          <LoadQuantity split={r.split} unit={r.unitLabel} />
                         </TableCell>
 
                         {/* Depot */}
@@ -926,41 +998,32 @@ function AllocationDetailsPage() {
                           ) : <span className="text-muted-foreground">—</span>}
                         </TableCell>
 
-                        {/* Customer */}
+                        {/* Customer — every buyer on the load, each with the
+                            volume that went to them. */}
                         <TableCell>
-                          {salesEntries && salesEntries.length > 0 ? (
-                            <div className="flex flex-col gap-1 py-0.5">
-                              {salesEntries.map(e => (
-                                <div key={e.customerId || 'none'} className="flex items-center gap-1.5">
-                                  <span className="text-xs text-foreground font-normal capitalize truncate">
-                                    {e.customerName || `Cust #${e.customerId}`}
-                                  </span>
-                                  {e.qty > 0 && (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-muted text-foreground">
-                                      {fmtQty(e.qty)}L
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
+                          {shares.length > 0 ? (
+                            <ShareList split={r.split} />
                           ) : r.custName ? (
                             <span className="text-xs text-foreground font-normal capitalize truncate">{r.custName}</span>
                           ) : <span className="text-muted-foreground">—</span>}
                         </TableCell>
 
-                        {/* Rates */}
+                        {/* Rates — one line per share, in the same order as
+                            the customers beside them, so the two columns can
+                            be read across. */}
                         <TableCell>
-                          {salesEntries && salesEntries.length > 0 ? (
+                          {shares.length > 0 ? (
                             <div className="flex flex-col gap-1 py-0.5">
-                              {salesEntries.map((e, i) => (
+                              {shares.map((e, i) => (
                                 <div key={e.customerId || i} className="flex items-center">
                                   <span className="text-xs text-foreground font-normal font-mono">
-                                    {e.rates.size > 0
-                                      ? [...e.rates].map(rate => `₦${rate.toLocaleString()}`).join(', ')
-                                      : '—'}
+                                    {e.rate > 0 ? `₦${e.rate.toLocaleString()}` : '—'}
                                   </span>
                                 </div>
                               ))}
+                              {r.split.unassigned > 0 && (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
                             </div>
                           ) : toNum(r.rate) > 0 ? (
                             <span className="text-xs text-foreground font-normal font-mono">
@@ -969,20 +1032,19 @@ function AllocationDetailsPage() {
                           ) : <span className="text-muted-foreground">—</span>}
                         </TableCell>
 
-                        {/* Destination */}
+                        {/* Destination — one line per share, aligned with the
+                            customer and rate columns. */}
                         <TableCell>
-                          {salesEntries && salesEntries.length > 0 ? (
+                          {shares.length > 0 ? (
                             <div className="flex flex-col gap-1 py-0.5">
-                              {salesEntries.map((e, i) => {
-                                const customerObj = e.customerId ? customerMap.get(Number(e.customerId)) : null
-                                const isFS = isFillingStation(customerObj)
-                                const destDisplay = isFS ? (customerObj?.name || e.customerName || '') : (e.location || r.destination || '—')
-                                return (
-                                  <span key={e.customerId || i} className="text-xs text-foreground capitalize truncate">
-                                    {destDisplay || '—'}
-                                  </span>
-                                )
-                              })}
+                              {shares.map((e, i) => (
+                                <span key={e.customerId || i} className="text-xs text-foreground capitalize truncate">
+                                  {e.destination || r.destination || '—'}
+                                </span>
+                              ))}
+                              {r.split.unassigned > 0 && (
+                                <span className="text-xs italic text-muted-foreground">not assigned</span>
+                              )}
                             </div>
                           ) : <span className="text-xs text-foreground capitalize truncate">{r.destination || '—'}</span>}
                         </TableCell>

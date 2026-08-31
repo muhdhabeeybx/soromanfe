@@ -30,6 +30,7 @@ import { cn, toNum, getErrorMessage } from '#/lib/utils'
 import type { FilingStation, DeliverySale, DeliveryCustomer, AccountEntry } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
 import { normalizePlate } from '#/lib/sales-ledger-utils'
+import { buildLoadSplit } from '#/lib/load-split'
 
 export const Route = createFileRoute('/filing-stations/')({
   beforeLoad: () => routeGuard('/filing-stations'),
@@ -491,7 +492,10 @@ function FilingStationsDashboard() {
       const stationObj = stationMap.get(stationId)
       const stationName = loading.customerName || payments[0]?.customerName || stationObj?.name || 'Station'
 
-      const maxSaleQty = payments.reduce((max, s) => Math.max(max, toNum(s.quantity)), 0)
+      // The station's own share, read the same way the ledger reads it — off
+      // the money on the row where the quantity column and the sales value
+      // disagree, which they do wherever a load was split after the fact.
+      const maxSaleQty = buildLoadSplit(loading, payments).shares[0]?.quantity ?? 0
       const quantity = maxSaleQty > 0 ? maxSaleQty : toNum(loading.quantityAllocated)
 
       const dailySales = payments.filter(s => {
