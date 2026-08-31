@@ -101,6 +101,29 @@ export const makeSaleRow = (): SaleRow => ({
 // Record Payment Dialog
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * What a truck has already been sold, keyed by loading id.
+ *
+ * Recording a payment used to prefill the whole allocated quantity into every
+ * new row, on a truck that might already have 30,000 of its 45,000 spoken for.
+ * That is how a share ends up holding the whole load — the stale 45,000 rows
+ * this release had to reason around were made exactly this way.
+ */
+export interface LoadSummary {
+  /** The whole truck. */
+  total: number
+  /** What its customers already account for. */
+  assigned: number
+  /** total − assigned, never negative. */
+  unassigned: number
+  /** How many customers are on it. */
+  shareCount: number
+  /** Their ids, so a follow-up payment is not mistaken for new volume. */
+  customerIds: Set<string>
+  /** Each customer's share, for prefilling a follow-up payment. */
+  shareByCustomer: Map<string, number>
+}
+
 interface RecordPaymentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -112,12 +135,13 @@ interface RecordPaymentDialogProps {
   getCycleKey: (truck: string, date: string | null | undefined) => string
   normalizeCycleDate: (d: string | null | undefined) => string
   assignMode?: boolean
+  loadSummaries?: Map<string, LoadSummary>
 }
 
 export function RecordPaymentDialog({
   open, onOpenChange, trucks, customers, customerMap, tripCodes,
   cycleCustomerRateMap, getCycleKey, normalizeCycleDate,
-  assignMode = false,
+  assignMode = false, loadSummaries,
 }: RecordPaymentDialogProps) {
   const toast = useToast()
   const createSale = useCreateDeliverySale()
@@ -131,6 +155,9 @@ export function RecordPaymentDialog({
   const [saleRows, setSaleRows] = useState<SaleRow[]>([makeSaleRow()])
   const [rowErrors, setRowErrors] = useState<Record<string, Partial<Record<keyof SaleRow, string>>>>({})
   const [saving, setSaving] = useState(false)
+
+  /** What the truck on screen has already been sold. */
+  const selectedLoad = truckLoadingId ? loadSummaries?.get(truckLoadingId) : undefined
 
   const handleTruckSelect = useCallback((loadingId: string) => {
     setTruckLoadingId(loadingId)
@@ -151,7 +178,19 @@ export function RecordPaymentDialog({
     const custObj = custId ? customerMap.get(custId) : null
     const custName = loading.customerName || custObj?.name || ''
     const destination = isFillingStation(custObj) ? custName : (loading.location || '')
-    const qty = toNum(loading.quantityAllocated)
+    /*
+     * What is left to sell, not the whole truck. On a load that already has
+     * customers, prefilling the full allocation invites a second customer to
+     * be recorded against volume that is already spoken for — and a row
+     * carrying the whole load is indistinguishable from a stale one later.
+     * Where this row's customer is already on the truck it is a follow-up
+     * payment, so their existing share is the right default.
+     */
+    const summary = loadSummaries?.get(loadingId)
+    const existingShare = custId ? summary?.shareByCustomer.get(custId) ?? 0 : 0
+    const qty = existingShare > 0
+      ? existingShare
+      : (summary && summary.assigned > 0 ? summary.unassigned : toNum(loading.quantityAllocated))
     const cycleKey = getCycleKey(loading.truckNumber || '', loading.dateAllocated || '')
     const cycleRates = cycleCustomerRateMap.get(cycleKey)
     const existingRate = (custId && cycleRates?.get(custId)) || ''
@@ -176,7 +215,7 @@ export function RecordPaymentDialog({
       phone_number: autoPayerPhone,
       payer_name: autoPayerName,
     }])
-  }, [trucks, customerMap, getCycleKey, cycleCustomerRateMap])
+  }, [trucks, customerMap, getCycleKey, cycleCustomerRateMap, loadSummaries])
 
   const updateSaleRow = useCallback((uid: string, field: keyof Omit<SaleRow, 'uid'>, value: string) => {
     if (rowErrors[uid]?.[field]) {
@@ -267,6 +306,26 @@ export function RecordPaymentDialog({
       if (Object.keys(e).length) errors[row.uid] = e
     })
     if (Object.keys(errors).length) { setRowErrors(errors); toast.error('Please fix the highlighted fields'); return }
+
+    /*
+     * New volume cannot exceed what is left on the truck. Rows for a customer
+     * already on the load are follow-up payments against volume that is
+     * already counted, so only the genuinely new customers are measured
+     * against the remainder.
+     */
+    if (selectedLoad && selectedLoad.total > 0) {
+      const newVolume = filledRows
+        .filter(r => !r.customer || !selectedLoad.customerIds.has(r.customer))
+        .reduce((sum, r) => sum + (Number(stripCommas(r.quantity)) || 0), 0)
+      if (newVolume > selectedLoad.unassigned + 1) {
+        toast.error(
+          `${newVolume.toLocaleString()} L is more than the ${selectedLoad.unassigned.toLocaleString()} L left on this truck ` +
+          `(${selectedLoad.assigned.toLocaleString()} L of ${selectedLoad.total.toLocaleString()} L already assigned).`,
+        )
+        return
+      }
+    }
+
     setRowErrors({}); setSaving(true)
 
     try {
@@ -322,7 +381,7 @@ export function RecordPaymentDialog({
     } finally {
       setSaving(false)
     }
-  }, [truckNumber, dateLoaded, depot, truckLoadingId, dialogTripCode, saleRows, customerMap, assignMode, trucks, createSale, updateInventory, toast, closeDialog])
+  }, [truckNumber, dateLoaded, depot, truckLoadingId, dialogTripCode, saleRows, customerMap, assignMode, trucks, createSale, updateInventory, toast, closeDialog, selectedLoad])
 
   return (
     <Dialog open={open} onOpenChange={closeDialog}>
@@ -364,11 +423,21 @@ export function RecordPaymentDialog({
                 const id = entityId(t)
                 const plate = t.truckNumber || `Truck #${t.truckId}`
                 const custName = t.customerName || ''
-                const qty = toNum(t.quantityAllocated)
+                const summary = loadSummaries?.get(id)
+                const qty = summary?.total || toNum(t.quantityAllocated)
                 const dateLabel = normalizeCycleDate(t.dateAllocated || '')
+                // How much of the truck is still free to sell. Picking a truck
+                // that is already spoken for used to look identical to picking
+                // an empty one.
+                const remaining = summary && summary.assigned > 0
+                  ? (summary.unassigned > 0
+                      ? ` · ${summary.unassigned.toLocaleString()} L left`
+                      : ' · fully assigned')
+                  : ''
+                const splitNote = summary && summary.shareCount > 1 ? ` · split ${summary.shareCount}` : ''
                 return (
                   <option key={id} value={id}>
-                    {plate} | {dateLabel || '-'} | {qty.toLocaleString()} L{custName ? ` → ${custName}` : ''}
+                    {plate} | {dateLabel || '-'} | {qty.toLocaleString()} L{remaining}{splitNote}{custName ? ` → ${custName}` : ''}
                   </option>
                 )
               })}
@@ -393,6 +462,35 @@ export function RecordPaymentDialog({
                   </span>
                 </div>
               </div>
+
+              {/* What is already sold off this truck, before anything is typed
+                  below it. The quantity prefilled into the row is what is
+                  left, and this is the sum that explains it. */}
+              {selectedLoad && selectedLoad.total > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs">
+                  <span className="text-muted-foreground">
+                    Loaded <strong className="text-foreground">{selectedLoad.total.toLocaleString()} L</strong>
+                  </span>
+                  {selectedLoad.assigned > 0 && (
+                    <span className="text-muted-foreground">
+                      Assigned <strong className="text-foreground">{selectedLoad.assigned.toLocaleString()} L</strong>
+                      {selectedLoad.shareCount > 1 && ` to ${selectedLoad.shareCount} customers`}
+                    </span>
+                  )}
+                  <span className={selectedLoad.unassigned > 0 ? 'text-foreground' : 'text-muted-foreground'}>
+                    Left{' '}
+                    <strong className={selectedLoad.unassigned > 0 ? 'text-accent' : 'text-muted-foreground'}>
+                      {selectedLoad.unassigned.toLocaleString()} L
+                    </strong>
+                  </span>
+                  {selectedLoad.shareCount > 1 && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 font-semibold text-blue-700 dark:text-blue-300">
+                      <Split className="size-3" />
+                      Split load
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

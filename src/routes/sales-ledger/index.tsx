@@ -31,6 +31,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
   RecordPaymentDialog, QuickPaymentDialog, RowSetupDialog, TransferOverpaymentDialog,
+  type LoadSummary,
   EditEntryDialog, DeleteConfirmDialog,
   type LedgerGroup,
 } from '#/components/sales-ledger/SalesLedgerDialogs'
@@ -361,6 +362,41 @@ function SalesLedgerDashboard() {
       return normalizeCycleDate(b.dateAllocated || '').localeCompare(normalizeCycleDate(a.dateAllocated || ''))
     })
   }, [allLoadings])
+
+  /**
+   * What each truck has already been sold, for the Record Payment dialog.
+   *
+   * Built from the ledger's own rows so the dialog and the table behind it
+   * cannot disagree about how much of a truck is still free.
+   */
+  const loadSummaries = useMemo(() => {
+    const map = new Map<string, LoadSummary>()
+    ledgerGroups.forEach(g => {
+      if (g.loadingId == null) return
+      const key = idKey(g.loadingId)
+      let entry = map.get(key)
+      if (!entry) {
+        entry = {
+          total: g.loadQuantity,
+          assigned: g.loadAssigned,
+          unassigned: g.loadUnassigned,
+          shareCount: g.shareCount,
+          customerIds: new Set<string>(),
+          shareByCustomer: new Map<string, number>(),
+        }
+        map.set(key, entry)
+      }
+      // Only customers with sales against them. A loading carries a customer
+      // id before anything has been sold, and treating that as volume already
+      // assigned would exempt the first row on a fresh truck from the check
+      // that it fits.
+      if (g.customerId && g.payments.length > 0) {
+        entry.customerIds.add(g.customerId)
+        entry.shareByCustomer.set(g.customerId, g.quantity)
+      }
+    })
+    return map
+  }, [ledgerGroups])
 
   // ── Trip Code Management ───────────────────────────────────────────
   const addTripCode = () => {
@@ -1324,6 +1360,7 @@ function SalesLedgerDashboard() {
         getCycleKey={getCycleKey}
         normalizeCycleDate={normalizeCycleDate}
         assignMode={assignMode}
+        loadSummaries={loadSummaries}
       />
 
       <QuickPaymentDialog
