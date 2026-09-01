@@ -139,18 +139,23 @@ function DepositsDashboard() {
     <div className="space-y-6 animate-fade-in">
       <PageHeader
       eyebrow="Finance"
-      title="Deposits Management"
-      description="View and record customer deposit transactions."
+      title="Wallet history"
+      description="Customer wallet transactions, kept for reference. Payments are recorded against orders now."
       actions={
         <>
+          {/* Transferring balance between customers still moves legacy wallet
+              credit that has not yet been reconciled onto an order. Recording
+              a NEW deposit is gone: money is matched to the order it paid for
+              (see routes/deposits/manual-deposit.tsx). */}
           <Button variant="outline" className="gap-2" onClick={() => setShowTransfer(true)}>
             <Repeat className="size-4" /> Transfer Balance
           </Button>
           <Button
+          variant="outline"
           className="gap-2"
-          onClick={() => navigate({ to: '/deposits/manual-deposit' as any })}
+          onClick={() => navigate({ to: '/payable-orders' as any })}
           >
-          <Plus className="size-4" /> Record Manual Deposit
+          <Plus className="size-4" /> Record a payment
           </Button>
         </>
       }
@@ -276,9 +281,9 @@ function DepositsDashboard() {
             <PageEmpty
               icon={<Banknote className="size-6 text-muted-foreground" />}
               title={hasFilters ? 'No deposits match your filter criteria' : 'No deposits yet'}
-              description={hasFilters ? 'Try clearing or adjusting your search and filter buttons.' : 'Deposit transactions will appear here once recorded.'}
-              actionLabel={hasFilters ? 'Clear Filters' : 'Record Deposit'}
-              onAction={hasFilters ? handleClearFilters : () => navigate({ to: '/deposits/manual-deposit' as any })}
+              description={hasFilters ? 'Try clearing or adjusting your search and filter buttons.' : 'Wallet history from before payments were recorded against orders.'}
+              actionLabel={hasFilters ? 'Clear Filters' : 'Record a payment'}
+              onAction={hasFilters ? handleClearFilters : () => navigate({ to: '/payable-orders' as any })}
               hasFilters={hasFilters}
               onClearFilters={handleClearFilters}
  />

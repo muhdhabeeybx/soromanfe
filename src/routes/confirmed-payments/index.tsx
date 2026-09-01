@@ -2,9 +2,9 @@ import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
-  Search, X, Loader2, Landmark, User, CreditCard,
+  Search, X, Loader2, Landmark, User,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
-  FileSpreadsheet, ArrowRight, RefreshCw, Unlink, Wallet,
+  FileSpreadsheet, Wallet,
   ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle,
 } from 'lucide-react'
 
@@ -16,7 +16,7 @@ import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '#/components/ui/dialog'
 import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
@@ -28,18 +28,15 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, isPaystackFunding, fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
-  orderPaidInto, orderCompany, orderDifferential, orderAmountPaid,
-  paymentBreakdown, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  fundingApplied, transferOutLabel, transferAmount, untracedAmount, untracedReason, untracedLabel,
-  walletStatementRows,
-  type FinanceReportOrder, type OrderFunding, type StatementRow,
+  useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto,
+  orderPaidInto, orderCompany, orderDifferential,
+  paymentBreakdown, isTransferLeg, isUnreconciled,
+  type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
-import { RematchFundingDialog } from '#/components/RematchFundingDialog'
+import { OrderPaymentsDialog } from '#/components/OrderPaymentsDialog'
 import { ConfirmOrderPaymentDialog } from '#/components/ConfirmOrderPaymentDialog'
-import { useUnmatchDeposit } from '#/lib/hooks/useDeposits'
 import {
   exportFinanceReportExcel, exportFinanceReportPdf, REPORT_COLUMNS,
   type FinanceReportFilters, type FinanceReportSummary, type PfiStockRow,
@@ -170,178 +167,93 @@ function SummaryItem({
 }
 
 /**
- * One funding entry — how the deposit behind this order's wallet balance
- * originally landed. Paystack is not a live integration; the gateway-specific
- * breakdown below is commented out on purpose and kept only for reference —
- * see isPaystackFunding.
+ * One payment recorded against this order, as the bank statement has it.
+ *
+ * Every value below is a field on the payment row, copied from the statement
+ * line when the payment was confirmed. The card this replaced had to decide,
+ * per row, whether it was looking at a bank match, a wallet draw, a remainder
+ * carried off another order's credit, or a legacy Paystack record — and it
+ * decided by inspecting a free-text description and a JSON blob. Those
+ * distinctions are now recorded, so the card reads them.
  */
-function FundingCard({ funding, orderId, onUnmatch }: { funding: OrderFunding; orderId: number; onUnmatch?: () => void }) {
-  const ps = (funding.paystackDetails || {}) as Record<string, any>
-  const paystack = isPaystackFunding(funding)
-  const recorder = fundingRecorder(funding) || null
-  const carried = carriedFromOrder(funding, orderId)
-  const source = fundingSource(funding)
-  const isWallet = source === 'wallet'
-  const isTransferOut = source === 'transfer_out'
-  // What the order took of it, where that is less than what arrived. Only a
-  // bank payment larger than the order it was made for shows this, and it is
-  // the sentence that explains the Differential column to whoever is holding
-  // the statement.
-  const received = fundingAmount(funding)
-  const applied = fundingApplied(funding)
-  const surplus = received - applied
+function PaymentCard({ payment }: { payment: OrderPayment }) {
+  const transfer = isTransferLeg(payment)
+  const outgoing = payment.source === 'transfer_out'
+  const legacy = isUnreconciled(payment)
+  const recorder = paymentRecorder(payment) || null
 
   return (
     <div className={cn(
       'rounded-lg border p-3',
-      isWallet ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20' : 'border-warning/20 bg-warning/5',
+      transfer ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20'
+        : legacy ? 'border-warning/25 bg-warning/5'
+          : 'border-foreground/15 bg-muted/20',
     )}>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <Badge className={cn('font-normal', (carried || isWallet || isTransferOut)
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <Badge className={cn('font-normal', transfer
           ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900'
-          : 'bg-warning/15 text-warning border-warning/30')}>
-          {isTransferOut
-            ? transferOutLabel(funding)
-            : isWallet
-              ? 'Drawn from wallet balance'
-              : carried
-                ? `Transfer from ${carried.ref}`
-                : source === 'bank'
-                  ? 'Bank statement match'
-                  : paystack ? 'Legacy deposit record' : 'Manual Bank Transfer'}
+          : legacy
+            ? 'bg-warning/15 text-warning border-warning/30'
+            : 'bg-success/15 text-success border-success/30')}>
+          {outgoing ? `Surplus moved to ${payment.counterpartOrderRef || 'another order'}`
+            : payment.source === 'transfer_in' ? `Surplus received from ${payment.counterpartOrderRef || 'another order'}`
+              : legacy ? 'No bank record'
+                : 'Bank statement match'}
         </Badge>
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">
-            {received < 0 ? `(${naira(Math.abs(received))})` : naira(received)}
-          </span>
-          {/* Unmatch — commented out, not removed. The handler, its confirm
-              dialog and the mutation behind it are all still wired up below;
-              only the way in is closed.
-          {onUnmatch && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
-              onClick={onUnmatch}
-            >
-              <Unlink className="size-3.5" />
-              Unmatch
-            </Button>
-          )} */}
-        </div>
+        <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
+          {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
+        </span>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {/* Paystack gateway breakdown — kept for historical reference only,
-        not rendered: Paystack is not a live payment integration here.
-        {paystack && (
-          <>
-            <Row label="Sender name" value={ps.senderName} icon={Send} />
-            <Row label="Sender bank" value={ps.senderBankName} icon={Landmark} />
-            <Row label="Sender account" value={ps.senderAccountNumber} icon={CreditCard} />
-            <Row label="Sender country" value={ps.senderCountry} icon={Globe} />
-            <Row label="DVA (receiver) bank" value={ps.receiverBankName} icon={Landmark} />
-            <Row label="DVA account number" value={ps.receiverAccountNumber} icon={CreditCard} />
-            <Row label="DVA account name" value={ps.receiverAccountName} icon={User} />
-            <Row label="Gateway status" value={ps.gatewayResponse || ps.status} icon={ShieldCheck} />
-            <Row label="Currency" value={ps.currency} icon={Banknote} />
-            <Row label="Fees" value={ps.fees != null ? naira(Number(ps.fees)) : undefined} />
-            <Row label="Transaction ID" value={ps.transactionId} icon={Hash} />
-            <Row label="Narration" value={ps.senderNarration} icon={FileText} />
-          </>
-        )} */}
-        {!paystack && (
-          <>
-            {isTransferOut ? (
-              <Row
-                label="Where it went"
-                value={
-                  funding.toOrderRef
-                    ? `Surplus moved to ${funding.toOrderRef} — it appears there as money received`
-                    : 'Surplus moved to another order'
-                }
-                icon={Repeat}
-              />
-            ) : isWallet ? (
-              <Row
-                label="Source"
-                value={`${walletOriginLabel(funding)}${fundingDepositor(funding) ? ` · originally paid in by ${fundingDepositor(funding)}` : ''}`}
-                icon={Wallet}
-              />
-            ) : carried ? (
-              <Row
-                label="Source"
-                value={`Remainder of ${fundingReference(funding) || 'a bank credit'}, which settled ${carried.ref}`}
-                icon={Repeat}
-              />
-            ) : (
-              <Row label="Depositor / payer" value={fundingDepositor(funding)} icon={User} />
-            )}
-            <Row label="Receiving bank" value={ps.bankName || ps.receiverBankName} icon={Landmark} />
-            <Row label="Receiving account name" value={ps.accountName || ps.receiverAccountName} icon={User} />
-            <Row label="Receiving account number" value={ps.accountNumber || ps.receiverAccountNumber} icon={CreditCard} />
-            <Row
-              label="Payment date"
-              value={fundingPaidAt(funding) ? format(new Date(String(fundingPaidAt(funding))), 'd MMM yyyy') : undefined}
-              icon={Clock}
-            />
-          </>
-        )}
-        <Row label="Deposit reference" value={fundingReference(funding)} icon={Hash} />
-        <Row label="Recorded by" value={recorder} icon={User} />
-      </div>
-      {/* Where a payment came in larger than the order it was made for. The
-          money is not missing and it has not been rounded away — it is still
-          the customer's, still under this reference, and it is the figure the
-          Differential column is showing. */}
-      {surplus > 0.005 && (
-        <p className="mt-2 flex items-start gap-2 rounded-md bg-background/60 p-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-3.5 shrink-0" />
-          {naira(applied)} of this covered the order; {naira(surplus)} stayed in the customer's
-          wallet under this reference.
+
+      {legacy ? (
+        // Said plainly rather than left as empty cells. This order was
+        // confirmed before payments were recorded against orders, so there is
+        // no statement line to find — and an auditor needs to be told that,
+        // not shown blanks they will spend an afternoon chasing.
+        <p className="text-sm text-muted-foreground">
+          This order was confirmed before payments were recorded against orders. The figure above
+          is the order&apos;s own recorded amount paid, not a bank credit — there is nothing on a
+          statement to match it to.
         </p>
+      ) : transfer ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Row
+            label={outgoing ? 'Where it went' : 'Where it came from'}
+            value={payment.counterpartOrderRef || 'Another order'}
+            icon={Repeat}
+          />
+          <Row label="Reason" value={payment.transferReason || payment.note} icon={FileText} />
+          <Row label="Recorded by" value={recorder || undefined} icon={User} />
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Row label="Depositor / payer" value={paymentPayer(payment)} icon={User} />
+          <Row label="Bank reference" value={payment.bankRef} icon={Hash} />
+          <Row
+            label="Payment date"
+            value={payment.txnDate ? format(new Date(payment.txnDate), 'd MMM yyyy') : undefined}
+            icon={Clock}
+          />
+          <Row label="Paid into" value={paymentPaidInto(payment)} icon={Landmark} />
+          <Row label="Receiving account name" value={payment.accountName} icon={User} />
+          <Row label="Recorded by" value={recorder || undefined} icon={User} />
+        </div>
+      )}
+
+      {/* The raw narration, unabridged: it is what someone scanning the bank
+          statement matches against by eye. */}
+      {payment.narration && !transfer && !legacy && (
+        <p className="mt-2 text-xs break-words text-muted-foreground">{payment.narration}</p>
       )}
     </div>
   )
 }
 
-/**
- * The bank credits that paid for a wallet-funded order.
- *
- * Just the statement lines. The wallet hop that sits between the order and
- * these credits is real, but naming it — "paid from wallet", "transfer from
- * BALA" — is not what anybody reconciling against a bank statement is looking
- * for, so it is left out and the credits speak for themselves.
- */
-function StatementSourceCard({ row }: { row: StatementRow }) {
-  return (
-    <div className="rounded-lg border border-foreground/15 bg-muted/20 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">{row.depositor || '—'}</p>
-          {/* The raw narration, unabridged: it is what someone scanning the
-              bank statement matches against by eye. */}
-          {row.narration && (
-            <p className="mt-0.5 text-xs break-words text-muted-foreground">{row.narration}</p>
-          )}
-        </div>
-        <span className="shrink-0 text-sm font-semibold">{naira(row.amount)}</span>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
-        {row.txnDate && <span>{format(new Date(row.txnDate), 'd MMM yyyy')}</span>}
-        {row.reference && <span>Ref {row.reference}</span>}
-      </div>
-    </div>
-  )
-}
-
-function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch, onAddPayment }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onRematch?: () => void; onUnmatch?: (f: OrderFunding) => void; onAddPayment?: () => void }) {
+function OrderDetailDialog({ order, open, onOpenChange, onManagePayments, onAddPayment }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onManagePayments?: () => void; onAddPayment?: () => void }) {
   if (!order) return null
 
-  // What is still owed. Prefer the server's figure; fall back to the
-  // subtraction so this reads correctly against a response that predates it.
-  const outstanding = order.outstandingAmount != null
-    ? Number(order.outstandingAmount)
-    : Math.max(0, Number(order.totalAmount || 0) - toNum(order.amountPaid))
+  // Straight off the server, which derives both from the order's payment rows.
+  const outstanding = order.shortfall
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -402,7 +314,6 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch, on
               <Row label="Phone" value={order.customerPhone} />
               <Row label="Email" value={order.customerEmail} />
               <Row label="Company" value={order.customerCompanyName} />
-              <Row label="Standing DVA" value={[order.customerVirtualAccountBank, order.customerVirtualAccountNumber].filter(Boolean).join(' · ')} />
             </div>
           </div>
 
@@ -437,61 +348,47 @@ function OrderDetailDialog({ order, open, onOpenChange, onRematch, onUnmatch, on
           <div className="py-3 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <p className={cn(MICRO, 'text-muted-foreground')}>
-                Payment source{order.funding.length ? ` (${order.funding.length})` : ''}
+                Payments{order.payments.length ? ` (${order.payments.length})` : ''}
               </p>
-              {/* Re-match — commented out alongside Unmatch, same reasoning.
-              {order.paymentStatus === 'Paid' && onRematch && (
-                <Button variant="outline" size="sm" onClick={onRematch}>
-                  <RefreshCw data-icon="inline-start" />
-                  Re-match
+              {onManagePayments && (
+                <Button variant="outline" size="sm" onClick={onManagePayments}>
+                  <Repeat data-icon="inline-start" />
+                  Manage
                 </Button>
-              )} */}
+              )}
             </div>
-            {!order.fundingTracked ? (
-              // An order paid from wallet balance writes no allocation row, so
-              // it used to land on the "predates tracking" message even when it
-              // was raised last week. Where the wallet credits behind it can be
-              // traced, they are shown instead; the historical wording is kept
-              // for orders that genuinely have nothing behind them.
-              walletStatementRows(order).length ? (
-                <div className="space-y-2">
-                  {walletStatementRows(order).map((r) => (
-                    <StatementSourceCard key={r.key} row={r} />
-                  ))}
-                </div>
-              ) : (
-                <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
-                  {untracedReason(order) === 'pre-ledger'
-                    ? `This order was confirmed before payment tracking began on 1 July 2026, so no payment was ever recorded against it. The ${naira(untracedAmount(order))} shown as paid is the order's own value, not a bank credit — there is nothing on a statement to match it to.`
-                    : order.walletFunded
-                      ? 'No statement credits could be matched to this payment.'
-                      : 'No payment source has been recorded for this order.'}
-                </p>
-              )
+
+            {order.payments.length === 0 ? (
+              <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
+                No payment has been recorded against this order.
+              </p>
             ) : (
-              <>
-                {order.funding.map((f) => (
-                  <FundingCard
-                    key={f.depositId}
-                    funding={f}
-                    orderId={order.id}
-                    onUnmatch={onUnmatch ? () => onUnmatch(f) : undefined}
-                  />
-                ))}
-                {order.unattributedAmount > 0 && (
-                  <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
-                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                    {/* Not "paid from somewhere untraced" — nothing says this
-                        was paid at all. The order was billed more than the
-                        credits matched to it come to, and that difference is
-                        now a shortfall rather than an assumption. */}
-                    This order was billed {naira(Number(order.totalAmount))} but only{' '}
-                    {naira(orderAmountPaid(order))} has been matched to it —{' '}
-                    {naira(order.unattributedAmount)} has no payment record behind it and appears
-                    on no statement line. It shows as a shortfall in Differential.
-                  </p>
-                )}
-              </>
+              order.payments.map((p) => <PaymentCard key={p.id} payment={p} />)
+            )}
+
+            {/* Money still owed. Distinct from a gap in the paperwork, which
+                is what the old "unattributed" warning meant — that distinction
+                confused the desk into hunting a missing statement line for a
+                payment nobody had made yet. There is only one gap now, and it
+                is a real one. */}
+            {order.shortfall > 0.005 && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                This order was billed {naira(Number(order.totalAmount))} and{' '}
+                {naira(order.received)} has been received against it — {naira(order.shortfall)} is
+                still owed.
+              </p>
+            )}
+
+            {/* Surplus sits on the order that received it, visibly, until
+                somebody moves it. That is the whole point of the model: money
+                stays attached to the order it was paid against. */}
+            {order.surplus > 0.005 && (
+              <p className="flex items-start gap-2 rounded-lg border border-info/25 bg-info/5 p-3 text-sm text-info">
+                <Info className="mt-0.5 size-4 shrink-0" />
+                {naira(order.surplus)} was received beyond this order&apos;s value and is held
+                against it. Use Manage to move it to another order, if that is where it belongs.
+              </p>
             )}
           </div>
         </div>
@@ -518,15 +415,25 @@ function FinanceReportPage() {
    * it is just a narrower one than "what came in".
    */
   const [paymentStatus, setPaymentStatus] = useState<PaymentFilter>('received')
+  /**
+   * Whether the order has a bank statement line behind it.
+   *
+   * The control an external audit is actually run from: 'reconciled' is the
+   * slice that can be checked against a statement, line by line, and
+   * 'unreconciled' is everything confirmed before payments were recorded
+   * against orders — which is most of the history and has no bank evidence at
+   * all. Keeping them separable is the point; hiding the second behind a
+   * plausible-looking funding trail is what the old report did.
+   */
+  const [reconciliation, setReconciliation] = useState<'' | 'reconciled' | 'unreconciled'>('')
   const [locationId, setLocationId] = useState(ALL)
   const [pfiId, setPfiId] = useState(ALL)
   const [productId, setProductId] = useState(ALL)
   const [viewing, setViewing] = useState<FinanceReportOrder | null>(null)
   /** An order with a balance outstanding, being topped up from this page. */
   const [payingBalance, setPayingBalance] = useState<FinanceReportOrder | null>(null)
-  const [rematching, setRematching] = useState<FinanceReportOrder | null>(null)
-  const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; funding: OrderFunding } | null>(null)
-  const unmatchDeposit = useUnmatchDeposit()
+  /** The order whose payments are being inspected or corrected. */
+  const [managing, setManaging] = useState<FinanceReportOrder | null>(null)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
   // A range, not a day. resolveRange already understood `to` — only the UI
@@ -557,6 +464,7 @@ function FinanceReportPage() {
     dateTo,
     // Omitted on purpose for 'received' — see the state declaration above.
     paymentStatus: paymentStatus === 'received' ? undefined : paymentStatus,
+    reconciliation: reconciliation || undefined,
     depotId: locationId || undefined,
     pfiId: pfiId || undefined,
     productId: productId || undefined,
@@ -580,7 +488,8 @@ function FinanceReportPage() {
   const rows = useMemo(() => data?.orders || [], [data])
   const totals = data?.totals
   const hasFilters = !!(
-    search || paymentStatus !== 'received' || locationId || pfiId || productId || datePreset !== 'today'
+    search || paymentStatus !== 'received' || reconciliation || locationId || pfiId || productId ||
+    datePreset !== 'today'
   )
 
   const selectedDepot = useMemo(() => depots.find((d) => idOf(d) === locationId), [depots, locationId])
@@ -601,32 +510,18 @@ function FinanceReportPage() {
   )
 
   /**
-   * What the orders in view were paid — orderAmountPaid, summed, and nothing
-   * else.
+   * What the orders in view actually received — one sum over the payment rows
+   * shown underneath them.
    *
-   * This used to total the funding entries instead, which put it on a
-   * different basis from the Differential column beside it and made the two
-   * impossible to reconcile:
-   *
-   *   - a deposit split across orders was counted whole against each of them
-   *     (FG11437 read 50m over its own sales value)
-   *   - balance predating the allocation ledger appeared in no entry at all
-   *   - an order with no allocation records — 5,742 of them across all time —
-   *     contributed only whatever wallet credits could be traced, usually
-   *     nothing, so a wide date range reported 228bn received against 634bn
-   *     billed and a 406bn shortfall that does not exist
-   *
-   * orderAmountPaid answers one question per order — what was this order
-   * paid — and every figure on the page now derives from it. The funding rows
-   * beneath an order are evidence of where its money came from, not a
-   * competing total: they can be fewer than the order was paid (an untraced
-   * wallet balance) without either being wrong.
-   *
-   * Because it is per-order, nothing needs deduplicating: a payment shared
-   * between two orders contributes its own slice to each.
+   * There is nothing to deduplicate and no second basis to reconcile against.
+   * A bank statement line belongs to exactly one order, `received` is already
+   * net of anything an order transferred away, and the Differential column is
+   * the same subtraction on the same figures. The three earlier attempts at
+   * this number each totalled something subtly different — deposits, wallet
+   * traces, stored amounts — and disagreed with the column beside them.
    */
   const totalAmountPaid = useMemo(
-    () => rows.reduce((sum, o) => sum + orderAmountPaid(o), 0),
+    () => rows.reduce((sum, o) => sum + o.received, 0),
     [rows],
   )
 
@@ -740,7 +635,8 @@ function FinanceReportPage() {
   }
 
   const clearFilters = () => {
-    setSearch(''); setPaymentStatus('received'); setLocationId(ALL); setPfiId(ALL); setProductId(ALL)
+    setSearch(''); setPaymentStatus('received'); setReconciliation(''); setLocationId(ALL)
+    setPfiId(ALL); setProductId(ALL)
     setDatePreset('today'); setCustomFrom(''); setCustomTo('')
   }
 
@@ -806,6 +702,18 @@ function FinanceReportPage() {
           <option value="Part Paid">Part paid</option>
           <option value="Unpaid">Unpaid</option>
           <option value="all">All</option>
+        </NativeSelect>
+        {/* Bank evidence, or the absence of it. Filtered server-side over the
+            same set the stat cards are computed from, so narrowing to what an
+            audit can verify narrows the totals with it. */}
+        <NativeSelect
+          className="w-48"
+          value={reconciliation}
+          onChange={(e) => setReconciliation(e.target.value as any)}
+        >
+          <option value="">Bank-matched or not</option>
+          <option value="reconciled">Bank-matched only</option>
+          <option value="unreconciled">No bank record</option>
         </NativeSelect>
         <NativeSelect
           className="w-44"
@@ -909,49 +817,61 @@ function FinanceReportPage() {
           <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
 
           {/*
-            Overpaid, Unaccounted surplus and Internal transfers are commented
-            out — Net Differential alone is the figure to read.
+            Surplus, Transfers and Shortfall are all worth a card again.
 
-            They were split apart to stop a single "Overpaid" number claiming
-            ₦234.9m was owed back to customers when ₦13,975,500 was actually in
-            wallets. The split is correct, but three more figures on a page is
-            three more things to reconcile, and most of what they were
-            reporting is noise in records that predate the allocation ledger —
-            duplicated legacy deposits (OG10190 carries two of each of its
-            four rows), orders whose rate × litres disagrees with their stored
-            total. Net Differential answers the question that matters without
-            inviting the others.
+            They were commented down to Net Differential alone because the old
+            breakdown could not tell real money from a bookkeeping artefact: it
+            once claimed ₦234.9m was owed back to customers when ₦13,975,500
+            was actually held, the rest being pre-ledger credits whose
+            remainder had long since paid for other orders. Three figures
+            nobody could act on is worse than one.
 
-            paymentBreakdown still computes all of it; restore any line below
-            and it is correct and reconciles — shortTotal − (overpaidTotal +
-            unaccountedTotal) === netDifferential.
-
+            Surplus is now `received − order value`, where received is the sum
+            of the payment rows printed underneath the order. There is no
+            artefact left in it: it is money that arrived, it is on that order,
+            and it is either moved to another order or refunded. So it is
+            something the desk can work through, and it gets a card.
+          */}
           <SummaryItem
             icon={ArrowUpCircle}
-            tone={breakdown.overpaidTotal > 0 ? 'over' : 'plain'}
-            label="Overpaid (still in wallet)"
-            value={naira(breakdown.overpaidTotal)}
+            tone={breakdown.surplusTotal > 0 ? 'over' : 'plain'}
+            label="Surplus held on orders"
+            value={naira(breakdown.surplusTotal)}
             hint={
-              breakdown.overpaidCount > 0
-                ? `${breakdown.overpaidCount} order${breakdown.overpaidCount === 1 ? '' : 's'} · money still held`
+              breakdown.surplusCount > 0
+                ? `${breakdown.surplusCount} order${breakdown.surplusCount === 1 ? '' : 's'} · move or refund`
                 : undefined
             }
           />
-          {breakdown.unaccountedTotal > 0 && (
-            <SummaryItem
-              icon={Info}
-              label="Unaccounted surplus"
-              value={naira(breakdown.unaccountedTotal)}
-              hint={`${breakdown.unaccountedCount} order${breakdown.unaccountedCount === 1 ? '' : 's'} · pre-ledger credits, destination unrecorded`}
-            />
-          )}
           <SummaryItem
             icon={Repeat}
-            tone={breakdown.internalCount > 0 ? 'internal' : 'plain'}
-            label="Internal transfers"
-            value={naira(breakdown.internalTotal)}
+            tone={breakdown.transferCount > 0 ? 'internal' : 'plain'}
+            label="Moved between orders"
+            value={naira(breakdown.transferTotal)}
+            hint={
+              breakdown.transferCount > 0
+                ? `${breakdown.transferCount} leg${breakdown.transferCount === 1 ? '' : 's'}`
+                : undefined
+            }
           />
+          {/*
+            The figure an external audit actually turns on: how much of what is
+            on this page can be checked against a bank statement at all. An
+            order with no statement line behind it was confirmed before
+            payments were recorded against orders, and the report says so
+            rather than filling its bank columns with a plausible guess.
           */}
+          <SummaryItem
+            icon={Landmark}
+            tone={breakdown.unreconciledCount > 0 ? 'owed' : 'plain'}
+            label="Bank-verifiable orders"
+            value={`${breakdown.reconciledCount.toLocaleString()} of ${summary.count.toLocaleString()}`}
+            hint={
+              breakdown.unreconciledCount > 0
+                ? `${breakdown.unreconciledCount.toLocaleString()} with no statement line behind them`
+                : 'Every order matches a bank statement line'
+            }
+          />
           <SummaryItem
             icon={ArrowDownCircle}
             tone={breakdown.shortTotal > 0 ? 'owed' : 'plain'}
@@ -1131,168 +1051,85 @@ function FinanceReportPage() {
                           </TableCell>
                         ))}
                       </TableRow>
-                      {/* A wallet-funded order has no allocation to print, so
-                          the bank credits behind it fill the same columns —
-                          the statement lines and nothing else. */}
-                      {!o.fundingTracked && walletStatementRows(o).map((r) => {
-                        const cells: Record<string, React.ReactNode> = {
+                      {/* One sub-row per payment, and no second branch: the
+                          payments ARE what the order received, so the Amount
+                          Paid column adds down the page to the total at the
+                          top of it by construction. There used to be three
+                          kinds of sub-row here — allocations, traced wallet
+                          credits, and a "balancing" row invented to close the
+                          gap the other two left. */}
+                      {o.payments.map((p) => {
+                        // Money that moved inside the business rather than
+                        // arriving from a bank: no statement line and no
+                        // reference, because none exists. Indistinguishable
+                        // from missing data unless it is said out loud, so it
+                        // is said, in blue.
+                        const internal = isTransferLeg(p)
+                        const legacy = isUnreconciled(p)
+                        const paymentCells: Record<string, React.ReactNode> = {
                           depositDate: (
                             <span className="whitespace-nowrap text-muted-foreground">
-                              {r.txnDate ? format(new Date(r.txnDate), 'd MMM yyyy') : '—'}
-                            </span>
-                          ),
-                          depositor: (
-                            <span className="block max-w-[12rem] truncate" title={r.narration}>
-                              {r.depositor || '—'}
-                            </span>
-                          ),
-                          depositRef: <span className="block max-w-[10rem] truncate">{r.reference || '—'}</span>,
-                          amount: <span className="whitespace-nowrap font-semibold">{naira(r.amount)}</span>,
-                          // Who keyed the credit in. This printed the bank
-                          // narration until the recorder was carried through
-                          // the wallet trace, so a column headed Recorded By
-                          // was naming the payer.
-                          recordedBy: (
-                            <span className="block max-w-[10rem] truncate">{r.recordedBy || '—'}</span>
-                          ),
-                        }
-                        return (
-                          <TableRow key={`${o.id}-stmt-${r.key}`} className="bg-muted/20 hover:bg-muted/30">
-                            {REPORT_COLUMNS.map((c) => (
-                              <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
-                                {c.scope === 'funding' ? cells[c.key] : null}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        )
-                      })}
-                      {o.fundingTracked && o.funding.map((f) => {
-                        // Money that never came through a bank. It has no
-                        // statement line and no reference because none exists,
-                        // which is indistinguishable from missing data unless
-                        // it is said out loud — so it is said in blue.
-                        // A recorded wallet transfer, or a remainder carried
-                        // off another order's bank credit. Both are money that
-                        // did not arrive from a bank on this order, so both
-                        // read blue and neither pretends to a bank reference.
-                        const source = fundingSource(f)
-                        const carried = carriedFromOrder(f, o.id)
-                        const internal = isInternalTransfer(f) || !!carried
-                        // A wallet draw keeps the payer and the bank
-                        // reference its balance arrived under — that is the
-                        // whole reason it is traceable — and says in the
-                        // reference column that it came out of balance rather
-                        // than landing in the bank on this order's account.
-                        const isWallet = source === 'wallet'
-                        const isTransferOut = source === 'transfer_out'
-                        const fundingCells: Record<string, React.ReactNode> = {
-                          depositDate: (
-                            <span className="whitespace-nowrap text-muted-foreground">
-                              {fundingPaidAt(f) ? format(new Date(String(fundingPaidAt(f))), 'd MMM yyyy') : '—'}
+                              {p.txnDate ? format(new Date(p.txnDate), 'd MMM yyyy') : '—'}
                             </span>
                           ),
                           depositor: (
                             <span className={cn('flex items-center gap-1.5', internal && TONE_CLASS.internal)}>
                               {internal && <Repeat className="size-3 shrink-0" />}
-                              <span className="block max-w-[11rem] truncate">
-                                {isTransferOut
-                                  ? transferOutLabel(f)
-                                  : carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—'}
+                              <span
+                                className={cn('block max-w-[11rem] truncate', legacy && 'italic text-muted-foreground')}
+                                title={p.narration || undefined}
+                              >
+                                {legacy ? 'No payment record' : paymentPayer(p) || '—'}
                               </span>
                             </span>
                           ),
-                          depositRef: (
-                            <span
-                              className={cn('block max-w-[10rem] truncate', internal && TONE_CLASS.internal)}
-                              // The bank reference is still on the row for
-                              // anyone tracing it — it is simply no longer
-                              // presented as this order's own bank line.
-                              title={
-                                isWallet
-                                  ? `Drawn from wallet balance that arrived as ${fundingReference(f) || 'an untraced credit'}`
-                                  : carried
-                                    ? `Remainder of ${fundingReference(f)}, which settled ${carried.ref}`
-                                    : undefined
-                              }
-                            >
-                              {isTransferOut
-                                ? `to ${f.toOrderRef || 'another order'}`
-                                : isWallet
-                                  ? walletOriginLabel(f)
-                                  : carried
-                                    ? `off ${fundingReference(f) || 'credit'}`
-                                    : internal ? 'Internal transfer' : fundingReference(f) || '—'}
+                          depositRef: legacy ? (
+                            // Never blank. An empty cell cannot distinguish
+                            // "no reference exists" from "nobody filled it in",
+                            // and on the report an auditor is reading, that is
+                            // the whole question.
+                            <span className="text-xs text-muted-foreground/80">
+                              No bank record — confirmed before payments were tracked
+                            </span>
+                          ) : (
+                            <span className={cn('block max-w-[10rem] truncate', internal && TONE_CLASS.internal)}>
+                              {internal
+                                ? `${p.amount < 0 ? 'to' : 'from'} ${p.counterpartOrderRef || 'another order'}`
+                                : p.bankRef || '—'}
                             </span>
                           ),
                           // Receipts only, always positive, so the column can
-                          // be added straight down the page. A row that is
-                          // purely money moving out leaves it empty.
-                          amount: isTransferOut ? null : (
-                            <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
-                              {naira(fundingAmount(f))}
-                            </span>
+                          // be added straight down the page. A transfer leg
+                          // leaves it empty and lands in Transfers instead.
+                          amount: internal ? null : (
+                            <span className="whitespace-nowrap font-semibold">{naira(p.amount)}</span>
                           ),
-                          transfers: transferAmount(f) ? (
+                          transfers: internal ? (
                             <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
-                              {transferAmount(f) < 0
-                                ? `(${naira(Math.abs(transferAmount(f)))})`
-                                : naira(transferAmount(f))}
+                              {p.amount < 0 ? `(${naira(Math.abs(p.amount))})` : naira(p.amount)}
                             </span>
                           ) : null,
-                          recordedBy: <span className="block max-w-[10rem] truncate">{fundingRecorder(f) || '—'}</span>,
+                          recordedBy: <span className="block max-w-[10rem] truncate">{paymentRecorder(p) || '—'}</span>,
                         }
                         return (
                           <TableRow
-                            key={`${o.id}-funding-${f.depositId}`}
+                            key={`${o.id}-payment-${p.id}`}
                             className={cn(
                               internal
                                 ? 'bg-blue-50/60 hover:bg-blue-50 dark:bg-blue-950/30 dark:hover:bg-blue-950/50'
-                                : 'bg-muted/20 hover:bg-muted/30',
+                                : legacy
+                                  ? 'bg-muted/50 hover:bg-muted/60'
+                                  : 'bg-muted/20 hover:bg-muted/30',
                             )}
                           >
                             {REPORT_COLUMNS.map((c) => (
                               <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
-                                {c.scope === 'funding' ? fundingCells[c.key] : null}
+                                {c.scope === 'funding' ? paymentCells[c.key] : null}
                               </TableCell>
                             ))}
                           </TableRow>
                         )
                       })}
-                      {/* Money the order was paid that no row above accounts
-                          for. Without it the Amount Paid column came up short
-                          of the total at the top of the page, which is the
-                          first thing anyone checking against a statement
-                          notices and the last thing they can explain. */}
-                      {untracedAmount(o) > 0.005 && (() => {
-                        const preLedger = untracedReason(o) === 'pre-ledger'
-                        return (
-                          <TableRow
-                            key={`${o.id}-untraced`}
-                            className={cn(
-                              // Hatched grey for the pre-ledger era, so a row
-                              // that can never be matched to a statement does
-                              // not sit there looking like one that should be.
-                              preLedger ? 'bg-muted/50 hover:bg-muted/60' : 'bg-muted/20 hover:bg-muted/30',
-                            )}
-                          >
-                            {REPORT_COLUMNS.map((c) => (
-                              <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
-                                {c.key === 'depositor' ? (
-                                  <span className="italic text-muted-foreground">{untracedLabel(o)}</span>
-                                ) : c.key === 'depositRef' ? (
-                                  <span className="text-xs text-muted-foreground/80">
-                                    {preLedger ? 'Before 1 Jul 2026 — nothing to match' : 'Not matched to a statement'}
-                                  </span>
-                                ) : c.key === 'amount' ? (
-                                  <span className="whitespace-nowrap font-semibold text-muted-foreground">
-                                    {naira(untracedAmount(o))}
-                                  </span>
-                                ) : null}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        )
-                      })()}
                     </Fragment>
                   )
                 })}
@@ -1306,78 +1143,29 @@ function FinanceReportPage() {
         order={viewing}
         open={!!viewing}
         onOpenChange={(o) => !o && setViewing(null)}
-        onRematch={() => { setRematching(viewing); setViewing(null) }}
-        onUnmatch={(f) => viewing && setUnmatching({ order: viewing, funding: f })}
+        onManagePayments={() => { setManaging(viewing); setViewing(null) }}
         onAddPayment={() => { setPayingBalance(viewing); setViewing(null) }}
       />
 
-      {/* The same dialog the payable-orders desk uses — match a statement
-          line, or draw from wallet balance, and confirm whatever has landed.
-          Reused rather than rebuilt so an instalment is recorded through
-          exactly the flow a first payment is, funding trail included. */}
+      {/* The same dialog the payable-orders desk uses — match the statement
+          line(s) that paid for the order. Reused rather than rebuilt so an
+          instalment is recorded through exactly the flow a first payment is. */}
       <ConfirmOrderPaymentDialog
         order={payingBalance}
         open={payingBalance !== null}
         onOpenChange={(o) => { if (!o) setPayingBalance(null) }}
       />
 
-      <RematchFundingDialog
-        order={rematching}
-        open={rematching !== null}
-        onOpenChange={(o) => { if (!o) setRematching(null) }}
+      {/* Inspecting and correcting what is recorded against one order: remove
+          a payment matched to the wrong order (its statement line goes back to
+          the pool), or move surplus to the order it belongs on. Replaced a
+          Re-match dialog and a separate Unmatch confirm, both of which worked
+          by moving wallet balance around. */}
+      <OrderPaymentsDialog
+        order={managing}
+        open={managing !== null}
+        onOpenChange={(o) => { if (!o) setManaging(null) }}
       />
-
-      {/* Detach one statement match so its line can go to the order it really
-          belongs to. Distinct from Re-match: this leaves the order with less
-          funding rather than swapping a replacement in, so the server refuses
-          it whenever that money is what a live order's hold is holding — which
-          is most of the time here. The copy says so up front rather than
-          letting the refusal be the first the user hears of it. */}
-      <Dialog open={unmatching != null} onOpenChange={(open) => !open && setUnmatching(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Unmatch this payment?</DialogTitle>
-            <DialogDescription>
-              {unmatching && (
-                <>
-                  This takes {naira(Number(unmatching.funding.amount))}
-                  {fundingDepositor(unmatching.funding) ? ` from ${fundingDepositor(unmatching.funding)}` : ''} off{' '}
-                  {unmatching.order.reference} and back out of the wallet, returning its bank
-                  statement line to the unmatched pool so it can be matched elsewhere.
-                </>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
-            If this money is what currently funds a live order, this will be refused — nothing
-            will change. Use <span className="font-semibold text-foreground">Re-match</span> on
-            that order instead, which swaps the correct line in rather than leaving it unfunded.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUnmatching(null)} disabled={unmatchDeposit.isPending}>
-              Keep it
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={unmatchDeposit.isPending}
-              onClick={async () => {
-                if (!unmatching) return
-                try {
-                  await unmatchDeposit.mutateAsync({ id: unmatching.funding.depositId })
-                  setUnmatching(null)
-                } catch {
-                  // Refused — the hook has already surfaced the server's own
-                  // message. The dialog stays open so the reason sits next to
-                  // the action it explains.
-                }
-              }}
-            >
-              {unmatchDeposit.isPending && <Loader2 className="animate-spin" />}
-              Unmatch payment
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
 {/* Delete dialog — commented out with the Delete column above; the
           column was its only trigger. Restore both together.

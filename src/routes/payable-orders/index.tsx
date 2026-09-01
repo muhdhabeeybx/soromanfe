@@ -48,22 +48,32 @@ function PendingOrdersPage() {
   const [locationFilter, setLocationFilter] = useState('')
   const [pfiFilter, setPfiFilter] = useState('')
   const [productFilter, setProductFilter] = useState('')
-  /** Orders the wallet already covers vs. ones still short — the two piles a desk works differently. */
-  const [coverFilter, setCoverFilter] = useState<'' | 'covered' | 'short'>('')
+  /** Untouched orders vs. ones part-paid and waiting on a balance — two different piles of work. */
+  const [coverFilter, setCoverFilter] = useState<'' | 'partpaid' | 'untouched'>('')
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(1000)
   const [confirmingOrder, setConfirmingOrder] = useState<any | null>(null)
 
-  // Every unpaid order awaiting a decision, not just the ones already fully
-  // covered by wallet balance — a shortfall is something staff act on here,
-  // not a reason to hide the order.
+  // Every unpaid order awaiting a decision. Wallet balance no longer has any
+  // bearing on which orders appear here or on what can be confirmed — an order
+  // is paid by matching the bank statement line that paid for it.
   const { data, isLoading, isError, error, refetch } = useAllOrders({ status: 'Pending' })
   const orders: any[] = (data?.orders || []).filter((o: any) => o.paymentStatus !== 'Paid')
 
   // Declared before the filter that uses it — a const arrow function is in
   // the temporal dead zone until its own line, so referencing it above would
   // throw at render, not fail to compile.
-  const shortfallOf = (o: any) => Math.max(0, (Number(o.totalAmount) || 0) - (Number(o.customerBalance) || 0))
+  /**
+   * What the order is still owed — its own value less what has been received
+   * against it.
+   *
+   * This used to be order total less the customer's WALLET BALANCE, which
+   * answered a different question entirely ("could this customer's balance
+   * cover it") and, now that nothing funds a wallet, would report every order
+   * as fully short forever.
+   */
+  const shortfallOf = (o: any) =>
+    Math.max(0, (Number(o.totalAmount) || 0) - (Number(o.amountPaid) || 0))
 
   const options = useMemo(() => {
     const uniq = (v: (string | null | undefined)[]) =>
@@ -80,9 +90,9 @@ function PendingOrdersPage() {
     if (pfiFilter && order.pfiNumber !== pfiFilter) return false
     if (productFilter && order.productName !== productFilter) return false
     if (coverFilter) {
-      const short = shortfallOf(order) > 0
-      if (coverFilter === 'short' && !short) return false
-      if (coverFilter === 'covered' && short) return false
+      const partPaid = Number(order.amountPaid) > 0
+      if (coverFilter === 'partpaid' && !partPaid) return false
+      if (coverFilter === 'untouched' && partPaid) return false
     }
     if (!searchTerm) return true
     const s = searchTerm.toLowerCase()
@@ -111,7 +121,7 @@ function PendingOrdersPage() {
     currentPage * pageSize,
   )
 
-  const fundedCount = filteredOrders.filter((o) => shortfallOf(o) <= 0).length
+  const partPaidCount = filteredOrders.filter((o) => Number(o.amountPaid) > 0).length
   const totalShortfall = filteredOrders.reduce((sum, o) => sum + shortfallOf(o), 0)
 
   if (isLoading) return <PageLoader message="Loading pending orders..." />
@@ -122,7 +132,7 @@ function PendingOrdersPage() {
       <PageHeader
         eyebrow="Finance"
         title="Pending Orders"
-        description="Every order awaiting payment. Confirm payment on one to match a bank statement (or record it manually) — wallet balance applies first, and anything beyond what's needed stays with the customer."
+        description="Every order awaiting payment. Confirm one against the bank statement line that paid for it — anything beyond the order's value stays recorded against that order as surplus."
       />
 
       <StatCardGrid count={3}>
@@ -130,13 +140,13 @@ function PendingOrdersPage() {
           icon={<Package />} label="Awaiting payment" value={totalItems}
         />
         <StatCard
-          icon={<CheckCircle2 />} label="Already covered by wallet" value={fundedCount}
-          description="Ready to confirm with no new matching"
+          icon={<CheckCircle2 />} label="Part paid" value={partPaidCount}
+          description="Money received, a balance still expected"
         />
         <StatCard
           tone={totalShortfall > 0 ? 'amber' : 'green'}
-          icon={<AlertTriangle />} label="Total shortfall" value={formatCurrency(totalShortfall)}
-          description="Across every order still short"
+          icon={<AlertTriangle />} label="Still owed" value={formatCurrency(totalShortfall)}
+          description="Across every order awaiting payment"
         />
       </StatCardGrid>
 
@@ -188,11 +198,11 @@ function PendingOrdersPage() {
         <NativeSelect
           className="w-44"
           value={coverFilter}
-          onChange={(e) => { setCoverFilter(e.target.value as '' | 'covered' | 'short'); setCurrentPage(1) }}
+          onChange={(e) => { setCoverFilter(e.target.value as '' | 'partpaid' | 'untouched'); setCurrentPage(1) }}
         >
-          <option value="">Covered & short</option>
-          <option value="covered">Wallet covers it</option>
-          <option value="short">Still short</option>
+          <option value="">Any progress</option>
+          <option value="partpaid">Part paid</option>
+          <option value="untouched">Nothing received yet</option>
         </NativeSelect>
 
         {hasFilters && (
@@ -239,8 +249,8 @@ function PendingOrdersPage() {
                           row reads quantity × unit price = total. */}
                       <TableHead>Unit Price</TableHead>
                       <TableHead>Total Amount</TableHead>
-                      <TableHead>Wallet Balance</TableHead>
-                      <TableHead>Shortfall</TableHead>
+                      <TableHead>Received</TableHead>
+                      <TableHead>Still Owed</TableHead>
                       <TableHead className="text-center">Action</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -249,7 +259,7 @@ function PendingOrdersPage() {
                       const custName = order.customerName || 'Unknown'
                       const compName = order.companyName
                       const pName = order.productName || 'Unknown'
-                      const balance = Number(order.customerBalance) || 0
+                      const received = Number(order.amountPaid) || 0
                       const total = Number(order.totalAmount) || 0
                       const unitPrice = Number(order.price) || 0
                       const shortfall = shortfallOf(order)
@@ -308,27 +318,22 @@ function PendingOrdersPage() {
                             {formatCurrency(total)}
                           </TableCell>
                           <TableCell>
-                            <span className="font-semibold text-accent">
-                              {formatCurrency(balance)}
+                            <span className={received > 0 ? 'font-semibold text-accent' : 'font-semibold text-muted-foreground'}>
+                              {formatCurrency(received)}
                             </span>
                           </TableCell>
                           <TableCell>
-                            {/* "Wallet covers it", not "covered" — the balance
-                                is not applied until someone says to on the
-                                confirm dialog, so this is what the wallet
-                                could meet, not what it has. */}
                             {shortfall > 0 ? (
                               <span className="font-semibold text-warning">{formatCurrency(shortfall)}</span>
                             ) : (
-                              <span className="text-xs text-success">Wallet covers it</span>
+                              <span className="text-xs text-success">Settled</span>
                             )}
                           </TableCell>
                           <TableCell className="text-center">
-                            {/* Same button whatever the wallet holds. A
-                                covered order used to get a green
-                                confirm-and-go treatment, which read as a
-                                one-click deduction — every payment goes
-                                through the same statement match now. */}
+                            {/* One button, one flow. A wallet-covered order
+                                used to get a green confirm-and-go treatment,
+                                which read as a one-click deduction — every
+                                payment is a statement match now. */}
                             <Button
                               size="sm"
                               variant="outline"

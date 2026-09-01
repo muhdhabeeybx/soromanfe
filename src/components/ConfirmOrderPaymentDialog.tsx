@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Loader2, CheckCircle2, AlertTriangle, Hourglass, Wallet } from 'lucide-react'
+import { Loader2, AlertTriangle, Hourglass, ArrowRightLeft } from 'lucide-react'
 
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import { Button } from '#/components/ui/button'
 import { Label } from '#/components/ui/label'
-import { NumberInput } from '#/components/ui/number-input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '#/components/ui/select'
-import { useCustomerDetails } from '#/lib/hooks/useCustomers'
 import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
-import { useCreateDeposit } from '#/lib/hooks/useDeposits'
-import { usePayOrder } from '#/lib/hooks/useOrders'
+import { useConfirmOrderPayment } from '#/lib/hooks/useFinanceReport'
 import { useExpectedPayments } from '#/lib/hooks/useExpectedPayments'
 import { StatementLinePicker } from '#/components/StatementLinePicker'
 import type { StatementLine } from '#/lib/hooks/useBankStatements'
@@ -23,30 +20,26 @@ function formatCurrency(v: number) {
 }
 
 /**
- * Confirm payment on one specific pending order — the point this whole flow
- * exists for.
+ * Confirm payment on one order, against the bank statement lines that paid
+ * for it.
  *
- * The statement match comes first and is what the order is recorded as being
- * paid by: the lines picked here are tagged with this order's id (see
- * createDeposit's orderId), and the server now allocates those exact deposits
- * to this order, at their face value, before it will touch wallet balance for
- * anything. That tag was already being written; it was simply never read
- * back, so the funding trail was assembled afterwards by walking the wallet
- * oldest-credit-first and an order confirmed against one ₦18m credit was
- * written up as slices of three unrelated ones.
+ * ── What is deliberately not here ──────────────────────────────────────────
  *
- * Wallet balance is drawn on only for a shortfall, only for the amount asked
- * for below, and the report shows what it drew on by name. Anything matched
- * beyond what the order needs stays in the customer's wallet, and shows on
- * the finance report as an overpayment against this order rather than being
- * quietly trimmed to fit.
+ * A "draw from wallet balance" field. It let the desk cover a shortfall out of
+ * whatever the customer happened to have sitting in their wallet, and that is
+ * the single thing that made the finance report unauditable: the order was
+ * marked paid, and nothing recorded which bank payment had paid for it. The
+ * server has no endpoint for it any more either — see
+ * Sman-Backend/db/migrations/0021.
  *
- * Statement only, deliberately — no manual-amount fallback. A line's bank
- * reference is what makes it trustworthy; typing a figure by hand has none
- * of that, and StatementLinePicker only ever offers UNMATCHED lines, so a
- * line already claimed by another payment can't be picked twice — claiming
- * it flips its status server-side in the same transaction, and it drops out
- * of the picker's search from that moment on.
+ * So there is exactly one way to confirm an order: name the bank rows. The
+ * amount is whatever those rows are worth. Nobody types a figure, so nobody can
+ * mistype one, and every naira on the report can be found on a statement.
+ *
+ * A payment larger than the order is NOT trimmed to fit. The surplus lands on
+ * this order and shows there, and moving it to another order is a separate,
+ * recorded act — which is what makes it traceable rather than something that
+ * quietly disappeared into a balance.
  */
 export function ConfirmOrderPaymentDialog({
   order, open, onOpenChange,
@@ -55,109 +48,51 @@ export function ConfirmOrderPaymentDialog({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
-  const customerId = order?.customerId ? String(order.customerId) : ''
-  const { data: customer, isLoading: loadingCustomer } = useCustomerDetails(open ? customerId : '')
   const { data: bankAccounts } = useBankAccounts({ status: 'Active' })
   // What the customer said they'd pay, captured on the order wizard — the
   // amounts and company names to look for in the statement.
   const { data: expected = [] } = useExpectedPayments(
     open && order?.id ? { orderId: order.id, status: 'pending' } : undefined,
   )
-  const createDeposit = useCreateDeposit()
-  const payOrder = usePayOrder()
+  const confirmPayment = useConfirmOrderPayment()
 
   const [bankAccountId, setBankAccountId] = useState('')
   const [statementLines, setStatementLines] = useState<StatementLine[]>([])
   const [statementQuery, setStatementQuery] = useState('')
-  /** How much of the balance already in the wallet to put toward this order. */
-  const [walletAmount, setWalletAmount] = useState('')
-  const [confirming, setConfirming] = useState(false)
 
   useEffect(() => {
     if (!open) {
       setBankAccountId(''); setStatementLines([]); setStatementQuery('')
-      setWalletAmount(''); setConfirming(false)
     }
   }, [open])
 
   if (!order) return null
 
   const total = toNum(order.totalAmount)
-  /**
-   * What this order has already taken, across however many instalments.
-   *
-   * Zero on an untouched order, so this reads correctly against a server that
-   * does not send the field at all.
-   */
+  /** What this order has already taken, across however many instalments. */
   const alreadyPaid = toNum(order.amountPaid)
   const outstanding = Math.max(0, total - alreadyPaid)
 
-  // Prefer the live customer read over whatever balance was embedded in the
-  // orders list — that snapshot goes stale the moment another order for the
-  // same customer is confirmed in this same session.
-  const liveBalance = customer ? toNum(customer.balance) : toNum(order.customerBalance)
-  const newDeposit = statementLines.reduce((s, l) => s + Number(l.amount), 0)
-
-  // Wallet balance is applied only when someone says how much of it to use.
-  // It used to be taken automatically for the whole shortfall, which made a
-  // fully-covered order a one-click confirm with no statement behind it —
-  // and no way afterwards to say what had actually paid for it.
-  const walletApplied = Math.min(Number(walletAmount || 0), liveBalance)
-  const walletOverBalance = Number(walletAmount || 0) > liveBalance
-  const available = walletApplied + newDeposit
-
-  /**
-   * What this confirmation actually moves against the order.
-   *
-   * The gate used to be "does this cover the total?", and it is the reason
-   * part payment could not be confirmed from here at all: a customer who sent
-   * half the money left the desk with a disabled button and no way to record
-   * what had arrived. Money that has landed is money that has landed, and the
-   * order is designed to take it and stay live for the balance.
-   *
-   * Capped at what is still owed, never the order total — a second instalment
-   * against an already part-paid order must not re-offer the first one's
-   * amount, which the server would refuse outright.
-   */
-  const applying = Math.min(available, outstanding)
-  const remainingAfter = Math.max(0, outstanding - applying)
-  const isPartPayment = applying > 0 && remainingAfter > 0
-  const excess = Math.max(0, available - outstanding)
-  // Anything at all, matched or drawn, is confirmable. The only bar left is
-  // asking for more wallet than the wallet holds.
-  const readyToConfirm = applying > 0 && !walletOverBalance
+  const matched = statementLines.reduce((s, l) => s + Number(l.amount), 0)
+  const receivedAfter = alreadyPaid + matched
+  const shortfallAfter = Math.max(0, total - receivedAfter)
+  const surplusAfter = Math.max(0, receivedAfter - total)
+  const isPartPayment = matched > 0 && shortfallAfter > 0
+  const readyToConfirm = statementLines.length > 0 && !!bankAccountId
 
   const handleConfirm = async () => {
     if (!readyToConfirm) return
-    setConfirming(true)
     try {
-      if (newDeposit > 0) {
-        await createDeposit.mutateAsync({
-          customer: order.customerId,
-          bankAccountId,
-          lineIds: statementLines.map((l) => l.id),
-          orderId: order.id,
-        })
-        // The deposit already landed — clear the selection so a retry below
-        // (if paying fails) falls back to the now-updated wallet balance
-        // instead of trying to re-claim lines that are already matched.
-        setStatementLines([])
-      }
-      await payOrder.mutateAsync({
+      await confirmPayment.mutateAsync({
         orderId: order.id,
-        // Named only when it is genuinely an instalment. Settling the lot
-        // omits it, which is the server's default and keeps a full payment
-        // sending exactly what it always sent.
-        amount: isPartPayment ? applying : undefined,
+        bankAccountId: Number(bankAccountId),
+        lineIds: statementLines.map((l) => l.id),
       })
       onOpenChange(false)
     } catch {
-      // Both mutations surface their own error toast. If the deposit
-      // succeeded but paying failed, the money is safely in the wallet —
-      // the dialog stays open (now showing no shortfall) so staff can just
-      // hit Confirm again.
-    } finally {
-      setConfirming(false)
+      // The mutation raises its own error toast. The dialog stays open with
+      // the selection intact so the desk can adjust and retry — the lines are
+      // only claimed server-side on success, so nothing is half-done.
     }
   }
 
@@ -183,24 +118,22 @@ export function ConfirmOrderPaymentDialog({
                   this line would just be a zero taking up room. */}
               {alreadyPaid > 0 && (
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {formatCurrency(alreadyPaid)} already paid
+                  {formatCurrency(alreadyPaid)} already received
                 </p>
               )}
             </div>
             <div>
-              <p className={cn(MICRO, 'text-muted-foreground')}>Wallet balance</p>
-              <p className="mt-0.5 font-semibold">
-                {loadingCustomer ? <Loader2 className="size-3.5 animate-spin" /> : formatCurrency(liveBalance)}
-              </p>
+              <p className={cn(MICRO, 'text-muted-foreground')}>Still owed</p>
+              <p className="mt-0.5 font-semibold">{formatCurrency(outstanding)}</p>
             </div>
             <div>
-              <p className={cn(MICRO, 'text-muted-foreground')}>Confirming now</p>
-              <p className={cn('mt-0.5 font-semibold', applying > 0 ? 'text-success' : 'text-muted-foreground')}>
-                {formatCurrency(applying)}
+              <p className={cn(MICRO, 'text-muted-foreground')}>Matching now</p>
+              <p className={cn('mt-0.5 font-semibold', matched > 0 ? 'text-success' : 'text-muted-foreground')}>
+                {formatCurrency(matched)}
               </p>
-              {remainingAfter > 0 && (
+              {matched > 0 && shortfallAfter > 0 && (
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {formatCurrency(remainingAfter)} left to pay
+                  {formatCurrency(shortfallAfter)} would remain
                 </p>
               )}
             </div>
@@ -230,168 +163,101 @@ export function ConfirmOrderPaymentDialog({
             </div>
           )}
 
-          {/* One flow, always: match the statement, and say explicitly how
-              much of any existing wallet balance to put toward this order.
-              A covered order is not a one-click confirm — that left no
-              record of what had actually paid for it. */}
-          <>
-              {/* Nothing matched yet: there is genuinely nothing to confirm,
-                  so this stays a warning and the button stays disabled. */}
-              {applying <= 0 && (
-                <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
-                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                  <p>
-                    Nothing to confirm yet — match a statement line below, or draw from the
-                    wallet balance.
-                  </p>
-                </div>
-              )}
+          {statementLines.length === 0 && (
+            <div className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm text-warning">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <p>
+                Pick the bank statement line(s) that paid for this order. An order can only be
+                confirmed against money the bank has actually received.
+              </p>
+            </div>
+          )}
 
-              {/* Short of the full amount, but with money on the table. This
-                  is a normal outcome, not an error: the customer has paid for
-                  part of their order and the desk records exactly that. It
-                  reads as information, in the same blue the Part Paid badge
-                  uses, rather than as something gone wrong. */}
+          <div className="space-y-1.5">
+            <Label className={cn(MICRO, 'text-muted-foreground')}>Receiving bank account</Label>
+            <Select
+              value={bankAccountId}
+              onValueChange={(v) => { setBankAccountId(v); setStatementLines([]) }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Choose bank account…" />
+              </SelectTrigger>
+              <SelectContent>
+                {(bankAccounts || []).map((b) => (
+                  <SelectItem key={b.id} value={String(b.id)}>
+                    {b.bankName} — {b.accountNumber} · {b.accountName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className={cn(MICRO, 'text-muted-foreground')}>Match to bank statement</Label>
+            <StatementLinePicker
+              bankAccountId={bankAccountId || undefined}
+              selected={statementLines}
+              onToggle={(line) => {
+                setStatementLines((prev) =>
+                  prev.some((l) => l.id === line.id) ? prev.filter((l) => l.id !== line.id) : [...prev, line],
+                )
+              }}
+              onClear={() => setStatementLines([])}
+              query={statementQuery}
+              onQueryChange={setStatementQuery}
+            />
+            {statementLines.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {statementLines.length} line{statementLines.length === 1 ? '' : 's'} selected · {formatCurrency(matched)}
+              </p>
+            )}
+          </div>
+
+          {/* Where this leaves the order. Three outcomes, and each one is a
+              normal thing that happens — a part payment is not an error, and
+              nor is an overpayment. */}
+          {matched > 0 && (
+            <div className="space-y-1 rounded-lg border border-foreground/15 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Received after this</span>
+                <span className="font-semibold">{formatCurrency(receivedAfter)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>Order value</span>
+                <span>{formatCurrency(total)}</span>
+              </div>
               {isPartPayment && (
-                <div className="flex items-start gap-2 rounded-lg border border-blue-500/25 bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                  <Wallet className="mt-0.5 size-4 shrink-0" />
-                  <p>
-                    This is a part payment. {formatCurrency(applying)} of {formatCurrency(outstanding)}{' '}
-                    is being confirmed — the order stays live for the remaining{' '}
-                    {formatCurrency(remainingAfter)}, and can be loaded up to the quantity this
-                    payment covers.
-                  </p>
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <Label className={cn(MICRO, 'text-muted-foreground')}>Receiving bank account</Label>
-                <Select
-                  value={bankAccountId}
-                  onValueChange={(v) => { setBankAccountId(v); setStatementLines([]) }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Choose bank account…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(bankAccounts || []).map((b) => (
-                      <SelectItem key={b.id} value={String(b.id)}>
-                        {b.bankName} — {b.accountNumber} · {b.accountName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className={cn(MICRO, 'text-muted-foreground')}>Match to bank statement</Label>
-                <StatementLinePicker
-                  bankAccountId={bankAccountId || undefined}
-                  selected={statementLines}
-                  onToggle={(line) => {
-                    setStatementLines((prev) =>
-                      prev.some((l) => l.id === line.id) ? prev.filter((l) => l.id !== line.id) : [...prev, line],
-                    )
-                  }}
-                  onClear={() => setStatementLines([])}
-                  query={statementQuery}
-                  onQueryChange={setStatementQuery}
-                />
-                {statementLines.length > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {statementLines.length} line{statementLines.length === 1 ? '' : 's'} selected · {formatCurrency(newDeposit)}
-                  </p>
-                )}
-              </div>
-
-              {/* Existing balance is only ever used if someone asks for it,
-                  and for the amount they ask for. Whatever is drawn stays
-                  traceable: the report's funding rows follow each deposit
-                  the wallet drew on back to the statement line it came
-                  from, so "from wallet" still names an original payment. */}
-              {liveBalance > 0 && (
-                <div className="space-y-1.5 rounded-lg border border-foreground/15 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <Label className={cn(MICRO, 'flex items-center gap-1.5 text-muted-foreground')}>
-                      <Wallet className="size-3.5" />
-                      Draw from wallet balance
-                    </Label>
-                    <span className="text-xs text-muted-foreground">
-                      {formatCurrency(liveBalance)} available
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      allowDecimal
-                      placeholder="0"
-                      className="text-right"
-                      value={walletAmount}
-                      onValueChange={setWalletAmount}
-                      aria-invalid={walletOverBalance || undefined}
-                    />
-                    <Button
-                      type="button" variant="outline" size="sm" className="shrink-0"
-                      // Against what is still OWED, not the order total — on a
-                      // second instalment the total would over-draw by the
-                      // amount the first one already settled.
-                      onClick={() => setWalletAmount(String(Math.min(liveBalance, Math.max(0, outstanding - newDeposit))))}
-                    >
-                      Use what's needed
-                    </Button>
-                  </div>
-                  {walletOverBalance && (
-                    <p className="text-xs text-destructive">
-                      That is more than the {formatCurrency(liveBalance)} in the wallet.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* How the order's total is actually being met. */}
-              {(newDeposit > 0 || walletApplied > 0) && (
-                <div className="space-y-1 rounded-lg border border-foreground/15 p-3 text-sm">
-                  {newDeposit > 0 && (
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">From this statement match</span>
-                      <span className="font-semibold">{formatCurrency(newDeposit)}</span>
-                    </div>
-                  )}
-                  {walletApplied > 0 && (
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="flex items-center gap-1.5 text-muted-foreground">
-                        <Wallet className="size-3.5" />
-                        From wallet balance
-                      </span>
-                      <span className="font-semibold">{formatCurrency(walletApplied)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between gap-3 border-t border-foreground/10 pt-1">
-                    <span className="font-semibold">Applied to this order</span>
-                    <span className="font-semibold">{formatCurrency(applying)}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>{alreadyPaid > 0 ? 'Outstanding before this' : 'Order total'}</span>
-                    <span>{formatCurrency(alreadyPaid > 0 ? outstanding : total)}</span>
-                  </div>
-                </div>
-              )}
-
-              {(newDeposit > 0 || walletApplied > 0) && remainingAfter <= 0 && (
-                <p className="text-xs leading-tight text-muted-foreground">
-                  {excess > 0
-                    ? `Settles the order with ${formatCurrency(excess)} left over — that stays in ${order.customerName || 'the customer'}'s wallet, under the reference it came in on, and shows on the finance report as an overpayment against this order.`
-                    : 'Settles the order exactly.'}
+                <p className="border-t border-foreground/10 pt-2 text-xs leading-tight text-blue-700 dark:text-blue-300">
+                  This is a part payment. The order stays live for the remaining{' '}
+                  {formatCurrency(shortfallAfter)}, and can be loaded up to the quantity this
+                  payment covers.
                 </p>
               )}
-          </>
+              {surplusAfter > 0 && (
+                <p className="flex items-start gap-1.5 border-t border-foreground/10 pt-2 text-xs leading-tight text-muted-foreground">
+                  <ArrowRightLeft className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    {formatCurrency(surplusAfter)} more than this order is worth. It stays recorded
+                    against <strong>{order.orderNumber}</strong> and shows there as surplus — move it
+                    to another order from the finance report if that is where it belongs.
+                  </span>
+                </p>
+              )}
+              {!isPartPayment && surplusAfter === 0 && (
+                <p className="border-t border-foreground/10 pt-2 text-xs text-muted-foreground">
+                  Settles the order exactly.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={confirming}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={confirmPayment.isPending}>
             Cancel
           </Button>
-          <Button onClick={handleConfirm} disabled={!readyToConfirm || confirming}>
-            {confirming && <Loader2 className="animate-spin" />}
+          <Button onClick={handleConfirm} disabled={!readyToConfirm || confirmPayment.isPending}>
+            {confirmPayment.isPending && <Loader2 className="animate-spin" />}
             {isPartPayment ? 'Confirm part payment' : 'Confirm payment'}
           </Button>
         </DialogFooter>

@@ -2,8 +2,8 @@ import { format } from 'date-fns'
 import api from '#/lib/api/http'
 import type { PfiWithFinancials, PfiExpense, FinancialExplanation } from '#/lib/hooks/usePfis'
 import {
-  orderCompany, orderPaidInto, orderSalesValue, orderDifferential, fundingAmount,
-  fundingDepositor, fundingPaidAt, fundingReference, fundingRecorder,
+  orderCompany, orderPaidInto, orderSalesValue, orderDifferential,
+  paymentPayer, paymentRecorder, isTransferLeg, isUnreconciled,
   type FinanceReportOrder,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -158,19 +158,16 @@ async function fetchReportData(pfiId: number): Promise<PfiReportData> {
   return { pfi, expenses, orders, explain: explain || [] }
 }
 
-/** The finance-report totals, computed over just this batch's orders. */
+/**
+ * The finance-report totals, computed over just this batch's orders.
+ *
+ * `received` is already net of anything an order transferred away, and a bank
+ * statement line now belongs to exactly one order — so this is a plain sum.
+ * It used to have to de-duplicate by deposit id, because one deposit could be
+ * shown in full under several orders and summing the column double-counted it.
+ */
 function financeTotals(orders: FinanceReportOrder[]) {
-  const seen = new Set<number>()
-  let totalAmountPaid = 0
-  for (const o of orders) {
-    for (const f of o.funding) {
-      // One deposit can fund several orders and is shown in full under each,
-      // so it is counted once — the same rule the finance report itself uses.
-      if (seen.has(f.depositId)) continue
-      seen.add(f.depositId)
-      totalAmountPaid += fundingAmount(f)
-    }
-  }
+  const totalAmountPaid = orders.reduce((s, o) => s + o.received, 0)
   return {
     totalQuantity: orders.reduce((s, o) => s + Number(o.quantity || 0), 0),
     totalSalesValue: orders.reduce((s, o) => s + orderSalesValue(o), 0),
@@ -749,19 +746,23 @@ export async function downloadPfiReportPdf(pfiId: number) {
           paidInto: up(orderPaidInto(ord) || '—'),
         }),
       )
-      if (ord.fundingTracked) {
-        for (const fund of ord.funding) {
-          const paidAt = fundingPaidAt(fund)
-          body.push(
-            cellsFor('funding', {
-              depositDate: paidAt ? format(new Date(String(paidAt)), DATE_PATTERN) : '—',
-              depositor: up(fundingDepositor(fund) || '—'),
-              depositRef: up(fundingReference(fund) || '—'),
-              amount: pdfNaira(fundingAmount(fund)),
-              recordedBy: up(fundingRecorder(fund) || '—'),
-            }),
-          )
-        }
+      for (const pay of ord.payments) {
+        body.push(
+          cellsFor('funding', {
+            depositDate: pay.txnDate ? format(new Date(pay.txnDate), DATE_PATTERN) : '—',
+            depositor: up(paymentPayer(pay) || (isUnreconciled(pay) ? 'NO PAYMENT RECORD' : '—')),
+            // Never blank, and never invented: a legacy row says it has no
+            // bank record, and a transfer leg names the order at the other end.
+            depositRef: isUnreconciled(pay)
+              ? 'NO BANK RECORD'
+              : isTransferLeg(pay)
+                ? up(`${pay.amount < 0 ? 'MOVED TO' : 'MOVED FROM'} ${pay.counterpartOrderRef || 'ANOTHER ORDER'}`)
+                : up(pay.bankRef || '—'),
+            amount: isTransferLeg(pay) ? '' : pdfNaira(pay.amount),
+            transfers: isTransferLeg(pay) ? pdfNaira(pay.amount) : '',
+            recordedBy: up(paymentRecorder(pay) || '—'),
+          }),
+        )
       }
     })
 

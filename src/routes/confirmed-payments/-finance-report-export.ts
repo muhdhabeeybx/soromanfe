@@ -1,10 +1,8 @@
 import { format } from 'date-fns'
 import {
-  fundingRecorder, fundingDepositor, fundingPaidAt, fundingReference, fundingAmount,
+  paymentRecorder, paymentPayer, isTransferLeg, isUnreconciled,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  walletStatementRows, isInternalTransfer, carriedFromOrder, fundingSource, walletOriginLabel,
-  transferOutLabel, transferAmount, untracedAmount, untracedReason, untracedLabel,
-  type FinanceReportOrder, type OrderFunding, type StatementRow, type PaymentBreakdown,
+  type FinanceReportOrder, type OrderPayment, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
   XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
@@ -197,83 +195,45 @@ function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
 }
 
 /**
- * A statement credit behind a wallet-funded order, as the bank carries it.
+ * One payment, as the bank statement has it.
  *
- * Fills the same columns a funding sub-row would, because it answers the same
- * question — who paid, when, how much, under what reference. The wallet hop
- * between the order and this credit is not printed: it is not what anybody
- * reconciling against a statement is looking for.
+ * Every field on this row is copied from the payment record, which copied it
+ * from the statement line when the payment was confirmed. Nothing here is
+ * derived, inferred or reconstructed — which is the difference between a sheet
+ * that can be checked against a statement and the three earlier variants of
+ * this function, which between them printed a FIFO guess, a regex over a
+ * description field, and a "balancing" row invented to make the column add up.
  */
-function statementRowValues(r: StatementRow) {
+function paymentRowValues(p: OrderPayment) {
+  const outgoing = p.source === 'transfer_out'
+  const legacy = isUnreconciled(p)
   return {
-    amount: r.amount,
-    depositor: up(r.depositor || '—'),
-    depositRef: up(r.reference || '—'),
-    depositDate: r.txnDate ? new Date(r.txnDate) : null,
-    // The staff member who keyed the credit in, matching what the funding
-    // sub-row puts here. This used to carry the full bank narration so the
-    // sheet could be matched against the statement by eye, but the column is
-    // headed Recorded By and a narration names the payer, not the recorder.
-    recordedBy: up(r.recordedBy || '—'),
+    // Receipts only. A movement OUT is a negative in the Transfers column, not
+    // a negative in a column of money received — that column has to stay
+    // something you can select and sum, which is the first thing anyone does
+    // with this sheet.
+    amount: isTransferLeg(p) ? null : p.amount,
+    transfers: isTransferLeg(p) ? p.amount : null,
+    depositor: up(paymentPayer(p) || (legacy ? 'NO PAYMENT RECORD' : '—')),
+    /**
+     * Named, never blank. An empty reference cell cannot distinguish "there is
+     * no bank reference because no bank was involved" from "somebody left it
+     * out", and on the sheet an auditor is holding, that distinction is the
+     * whole question.
+     */
+    depositRef: legacy
+      ? 'NO BANK RECORD — CONFIRMED BEFORE PAYMENTS WERE TRACKED'
+      : outgoing
+        ? up(`MOVED TO ${p.counterpartOrderRef || 'ANOTHER ORDER'}`)
+        : p.source === 'transfer_in'
+          ? up(`MOVED FROM ${p.counterpartOrderRef || 'ANOTHER ORDER'}`)
+          : up(p.bankRef || '—'),
+    // The banking date — when the money reached the account — not when the row
+    // was keyed in. Those differ by days on a back-dated match.
+    depositDate: p.txnDate ? new Date(p.txnDate) : null,
+    recordedBy: up(paymentRecorder(p) || '—'),
   }
 }
-
-/**
- * The balancing sub-row: money the order was paid that no other row accounts
- * for. See untracedAmount — without it the Amount Paid column does not sum to
- * the total the report prints above it.
- */
-function untracedRowValues(o: FinanceReportOrder) {
-  const preLedger = untracedReason(o) === 'pre-ledger'
-  return {
-    depositor: up(untracedLabel(o)),
-    // Says why it cannot be matched, on the row, in the sheet someone is
-    // holding next to a bank statement. That is the moment the question gets
-    // asked, so that is where the answer belongs.
-    depositRef: preLedger ? 'BEFORE 1 JUL 2026 — NOTHING TO MATCH' : 'NOT MATCHED TO A STATEMENT',
-    amount: untracedAmount(o),
-    depositDate: null,
-    recordedBy: '—',
-  }
-}
-
-/** A funding sub-row — no order details repeated, just where that money came from. */
-function fundingRowValues(f: OrderFunding, orderId: number) {
-  const carried = carriedFromOrder(f, orderId)
-  const source = fundingSource(f)
-  const isWallet = source === 'wallet'
-  const isTransferOut = source === 'transfer_out'
-  return {
-    // The payment as it actually arrived — the statement line at face value,
-    // never netted down to what the order needed. See fundingAmount. A row
-    // that is purely a movement out leaves this blank rather than writing a
-    // negative into a column of receipts.
-    amount: isTransferOut ? null : fundingAmount(f),
-    transfers: transferAmount(f) || null,
-    depositor: up(
-      isTransferOut
-        ? transferOutLabel(f)
-        : carried ? `TRF FROM ${carried.ref}` : fundingDepositor(f) || '—',
-    ),
-    // Named, not blank: an internal transfer has no bank reference because no
-    // bank was involved, and an empty cell cannot say that.
-    // A wallet draw names the bank reference its balance originally arrived
-    // under, so the sheet still traces to a statement line — it just does not
-    // claim the money landed in the bank against this order.
-    depositRef: isTransferOut
-      ? up(`TO ${f.toOrderRef || 'ANOTHER ORDER'}`)
-      : isWallet
-        ? up(walletOriginLabel(f))
-        : carried
-          ? up(`OFF ${fundingReference(f) || 'CREDIT'}`)
-          : isInternalTransfer(f) ? 'INTERNAL TRANSFER' : up(fundingReference(f) || '—'),
-    // When the money landed per the bank statement, not when the deposit row
-    // happened to be keyed in — those differ by days on a back-dated match.
-    depositDate: fundingPaidAt(f) ? new Date(String(fundingPaidAt(f))) : null,
-    recordedBy: up(fundingRecorder(f) || '—'),
-  }
-}
-
 
 /** "ZENITH-DEPOT PAYMENTS REPORT 22-08-26" — PFI takes precedence over location, since it's the narrower filter. */
 export function buildFilename(filters: FinanceReportFilters) {
@@ -399,52 +359,25 @@ export function writeFinanceTable(
     if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
     cursor++
 
-    if (o.fundingTracked) {
-      for (const f of o.funding) {
-        // Blue, matching the screen: this money never came through a bank, so
-        // its empty reference column is a fact rather than an omission.
-        const internal = isInternalTransfer(f) || !!carriedFromOrder(f, o.id)
-        const subRow = ws.getRow(cursor)
-        subRow.values = fundingRowValues(f, o.id)
-        subRow.height = ROW_HEIGHT.body
-        for (const c of COLUMNS) {
-          const cell = subRow.getCell(c.key)
-          cell.border = ALL_BORDERS
-          cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
-          if (internal) cell.font = { color: { argb: XL.internal } }
-          if (c.key === 'amount') cell.numFmt = NGN
-        }
-        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
-        cursor++
-      }
-    } else {
-      // A wallet-funded order has no allocation to print, and used to leave
-      // the depositor and reference columns blank on every row.
-      for (const r of walletStatementRows(o)) {
-        const subRow = ws.getRow(cursor)
-        subRow.values = statementRowValues(r)
-        subRow.height = ROW_HEIGHT.body
-        for (const c of COLUMNS) {
-          const cell = subRow.getCell(c.key)
-          cell.border = ALL_BORDERS
-          cell.fill = SUBROW_FILL
-          if (c.key === 'amount') cell.numFmt = NGN
-        }
-        if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
-        cursor++
-      }
-    }
-
-    if (untracedAmount(o) > 0.005) {
+    // One sub-row per payment. There is no second branch and no balancing row:
+    // the payments ARE what the order received, so the column sums to the
+    // total above it by construction rather than by correction.
+    for (const p of o.payments) {
+      // Blue, matching the screen: money that moved inside the business, so
+      // its lack of a bank reference is a fact rather than an omission.
+      const internal = isTransferLeg(p)
       const subRow = ws.getRow(cursor)
-      subRow.values = untracedRowValues(o)
+      subRow.values = paymentRowValues(p)
       subRow.height = ROW_HEIGHT.body
       for (const c of COLUMNS) {
         const cell = subRow.getCell(c.key)
         cell.border = ALL_BORDERS
-        cell.fill = SUBROW_FILL
+        cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
+        if (internal) cell.font = { color: { argb: XL.internal } }
         if (c.key === 'amount') cell.numFmt = NGN
+        if (c.key === 'transfers') cell.numFmt = NGN_SIGNED
       }
+      if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
     }
   })
@@ -721,46 +654,18 @@ export async function exportFinanceReportPdf(
       }),
     )
 
-    if (o.fundingTracked) {
-      for (const f of o.funding) {
-        const fv = fundingRowValues(f, o.id)
-        body.push(
-          cellsFor('funding', {
-            depositDate: fv.depositDate ? format(fv.depositDate, DATE_PATTERN) : '—',
-            depositor: fv.depositor,
-            depositRef: fv.depositRef,
-            amount: fv.amount == null ? '' : naira(fv.amount),
-            transfers: fv.transfers == null ? '' : naira(fv.transfers),
-            recordedBy: fv.recordedBy,
-          }),
-        )
-      }
-    } else {
-      // The statement credits behind a wallet-funded order — the same rows as
-      // the workbook, so the two documents say the same thing.
-      for (const r of walletStatementRows(o)) {
-        const sv = statementRowValues(r)
-        body.push(
-          cellsFor('funding', {
-            depositDate: sv.depositDate ? format(sv.depositDate, DATE_PATTERN) : '—',
-            depositor: sv.depositor,
-            depositRef: sv.depositRef,
-            amount: naira(sv.amount),
-            recordedBy: sv.recordedBy,
-          }),
-        )
-      }
-    }
-
-    if (untracedAmount(o) > 0.005) {
-      const uv = untracedRowValues(o)
+    // The same rows as the workbook, built from the same function, so the two
+    // documents cannot say different things.
+    for (const p of o.payments) {
+      const pv = paymentRowValues(p)
       body.push(
         cellsFor('funding', {
-          depositDate: '—',
-          depositor: uv.depositor,
-          depositRef: uv.depositRef,
-          amount: naira(uv.amount),
-          recordedBy: uv.recordedBy,
+          depositDate: pv.depositDate ? format(pv.depositDate, DATE_PATTERN) : '—',
+          depositor: pv.depositor,
+          depositRef: pv.depositRef,
+          amount: pv.amount == null ? '' : naira(pv.amount),
+          transfers: pv.transfers == null ? '' : naira(pv.transfers),
+          recordedBy: pv.recordedBy,
         }),
       )
     }
