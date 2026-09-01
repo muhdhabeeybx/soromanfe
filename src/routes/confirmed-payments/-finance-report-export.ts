@@ -133,7 +133,9 @@ const COLUMNS: Array<{
   { header: 'Sales Value', key: 'salesValue', width: 16, fmt: NGN, scope: 'order' },
   { header: 'Deposit Date', key: 'depositDate', width: 13, scope: 'funding' },
   { header: 'Depositor', key: 'depositor', width: 22, scope: 'funding' },
-  { header: 'Bank Reference', key: 'depositRef', width: 20, scope: 'funding' },
+  // Wide enough for a teller reference and for a transfer's own handle
+  // ("TRF-9 · from ref 33531928491"), which both live in this column.
+  { header: 'Bank Reference', key: 'depositRef', width: 30, scope: 'funding' },
   /**
    * The bank statement's own figure, never netted by anything that happened
    * afterwards. This is the column a reconciliation ticks off line by line, so
@@ -261,9 +263,7 @@ function paymentRowValues(p: OrderPayment) {
      * the only question they will be asking. Blank cells here read as missing
      * data and sent people hunting for a line that was never there.
      */
-    depositRef: transfer
-      ? up(origin || p.transferReason || 'MOVED BETWEEN ORDERS')
-      : up(p.bankRef || '—'),
+    depositRef: transfer ? up(origin) : up(p.bankRef || '—'),
     // The banking date on a statement row; on a transfer leg, the day it was
     // moved — those are different facts and the column below says which.
     depositDate: when.date ? new Date(when.date) : null,

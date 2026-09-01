@@ -256,8 +256,11 @@ export function shortDepositor(narration: string | null | undefined): string {
  * rather than borrowing a plausible name from somewhere else.
  */
 export function paymentPayer(p: OrderPayment): string {
-  if (p.source === 'transfer_in') return `From ${p.counterpartOrderRef || 'another order'}`
-  if (p.source === 'transfer_out') return `To ${p.counterpartOrderRef || 'another order'}`
+  // "Transfer to/from", not a bare order reference: on a row sitting under a
+  // column headed Depositor, a bare "AM11595" reads as the name of whoever
+  // paid, which is exactly what it is not.
+  if (p.source === 'transfer_in') return `Transfer from ${p.counterpartOrderRef || 'another order'}`
+  if (p.source === 'transfer_out') return `Transfer to ${p.counterpartOrderRef || 'another order'}`
   return p.depositor || shortDepositor(p.narration)
 }
 
@@ -280,14 +283,24 @@ export function paymentDate(p: OrderPayment): { date: string | null; banking: bo
 /**
  * What a transfer leg says in the reference column.
  *
- * Not blank, and not a bare order id. Where the source order has one payer,
- * this names the bank payment the money actually arrived as — so an auditor
- * following a transfer lands on a reference they can find on a statement,
- * which is the entire question they will be asking.
+ * Its own identifier first — TRF-9 — because a transfer is a real, single
+ * event with two legs, and both legs printing the same handle is what lets a
+ * reader pair them up and cite one. That is the thing an auditor needs and the
+ * one thing a transfer genuinely has.
+ *
+ * A bank reference is appended ONLY where the source order has exactly one
+ * statement line, so it is unambiguous which payment the money came out of.
+ * This used to append every reference on the source order: the three transfers
+ * out of AM11589 each printed the same four references, which read as though
+ * each transfer had come from all four lines. Nothing records which line a
+ * transfer came out of — a transfer moves surplus, and surplus is not
+ * attributable to a particular line — so where there is more than one, the
+ * honest answer is to say nothing rather than list them all.
  */
 export function transferOrigin(p: OrderPayment): string {
-  const parts = [p.originDepositor, p.originBankRefs && `ref ${p.originBankRefs}`].filter(Boolean)
-  return parts.join(' · ')
+  const handle = p.transferId != null ? `TRF-${p.transferId}` : 'Transfer'
+  const from = p.originBankRefs ? `from ref ${p.originBankRefs}` : ''
+  return [handle, from].filter(Boolean).join(' · ')
 }
 
 /** The account the money landed in — "Zenith Bank · 1311924890". */

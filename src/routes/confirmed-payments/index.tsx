@@ -1138,10 +1138,10 @@ function FinanceReportPage() {
                           ),
                           depositRef: (
                             <span
-                              className={cn('block max-w-[13rem] truncate', internal && TONE_CLASS.internal)}
+                              className={cn('block max-w-[15rem] truncate', internal && TONE_CLASS.internal)}
                               title={internal ? (origin || p.transferReason || undefined) : undefined}
                             >
-                              {internal ? (origin || p.transferReason || 'moved between orders') : (p.bankRef || '—')}
+                              {internal ? origin : (p.bankRef || '—')}
                             </span>
                           ),
                           // Receipts only, always positive, so the column can
