@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
-  orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
+  orderPaidInto, orderCompany, orderSalesValue,
   type FinanceReportOrder, type OrderPayment, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -43,9 +43,14 @@ export interface FinanceReportSummary {
   count: number
   totalQuantity: number
   totalSalesValue: number
+  /** The bank statement total — transfer legs excluded. See amountPaidIn. */
   totalAmountPaid: number
-  /** Sum of the per-order differentials — see orderDifferential for the basis. */
+  /** Sales value against the bank figure, BEFORE any transfer. */
   totalDifferential: number
+  /** Money moved between orders, netted and signed. */
+  totalTransferred: number
+  /** What is left after the bank figure AND the transfers. Zero when settled. */
+  totalBalance: number
   /**
    * Where billed and received come apart — see paymentBreakdown.
    *
@@ -129,15 +134,34 @@ const COLUMNS: Array<{
   { header: 'Deposit Date', key: 'depositDate', width: 13, scope: 'funding' },
   { header: 'Depositor', key: 'depositor', width: 22, scope: 'funding' },
   { header: 'Bank Reference', key: 'depositRef', width: 20, scope: 'funding' },
-  { header: 'Amount Paid', key: 'amount', width: 16, fmt: NGN, scope: 'funding' },
-  // Internal movement between orders, deliberately its own column. It used to
-  // be netted into Amount Paid as a bracketed negative, which stopped that
-  // column being something you could select and sum — the first thing anyone
-  // does with this sheet. Negative where a surplus leaves, positive where it
-  // lands, so this column is its own record and nets to zero across a period
-  // holding both ends.
-  { header: 'Transfers', key: 'transfers', width: 16, fmt: NGN_SIGNED, scope: 'funding', signed: true },
+  /**
+   * The bank statement's own figure, never netted by anything that happened
+   * afterwards. This is the column a reconciliation ticks off line by line, so
+   * it has to be the number printed on the statement — an order that received
+   * ₦163,350,000 and later moved ₦54,450,000 to another order reads
+   * ₦163,350,000 here, because that is what the bank shows.
+   */
+  { header: 'Amount Paid', key: 'amount', width: 18, fmt: NGN, scope: 'funding' },
+  /**
+   * Sales value against the bank figure — BEFORE any transfer. Positive is
+   * still owed, negative is more received than the order was worth. It is
+   * deliberately not affected by a later transfer: the question "does the bank
+   * money match what we billed" has one answer, and moving the surplus
+   * elsewhere afterwards does not change it.
+   */
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
+  /**
+   * Movement between orders, on its own. Negative where money left, positive
+   * where it landed, so it nets to zero across a window holding both ends —
+   * and the sub-row beneath names the order at the other end.
+   */
+  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED, scope: 'funding', signed: true },
+  /**
+   * What is left once the bank figure and the transfers are both accounted
+   * for. A dash all the way down a clean day; anything else is a real gap
+   * somebody has to close.
+   */
+  { header: 'Balance', key: 'balance', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -173,7 +197,8 @@ function rowValues(o: FinanceReportOrder, i: number) {
     product: up(o.productName || '—'),
     rate,
     salesValue: orderSalesValue(o),
-    differential: orderDifferential(o),
+    differential: o.differential,
+    balance: o.balance,
     paidInto: up(orderPaidInto(o) || '—'),
     /**
      * Money with no bank record behind it, carried on the ORDER line.
@@ -279,6 +304,8 @@ function summaryColumns(
     { header: 'Total Sales Value', value: summary.totalSalesValue, fmt: NGN },
     { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_SIGNED, signed: true },
+    { header: 'Total Transferred', value: summary.totalTransferred, fmt: NGN_SIGNED, signed: true },
+    { header: 'Balance', value: summary.totalBalance, fmt: NGN_SIGNED, signed: true },
   ]
   // Shortfall and the exact-reconciliation count, so a differential on a
   // printed sheet can be checked rather than just read.
@@ -334,7 +361,10 @@ export function writeFinanceTable(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ws: any,
   rows: FinanceReportOrder[],
-  summary: Pick<FinanceReportSummary, 'totalQuantity' | 'totalSalesValue' | 'totalAmountPaid' | 'totalDifferential'>,
+  summary: Pick<
+    FinanceReportSummary,
+    'totalQuantity' | 'totalSalesValue' | 'totalAmountPaid' | 'totalDifferential'
+  > & { totalTransferred?: number; totalBalance?: number },
   startRow: number,
 ): number {
   let cursor = startRow
@@ -405,6 +435,8 @@ export function writeFinanceTable(
     salesValue: summary.totalSalesValue,
     amount: summary.totalAmountPaid,
     differential: summary.totalDifferential,
+    transfers: summary.totalTransferred ?? 0,
+    balance: summary.totalBalance ?? summary.totalDifferential,
   }
   totalRow.height = ROW_HEIGHT.total
   // eachCell() alone would skip the columns this row never set a value for,
@@ -418,6 +450,8 @@ export function writeFinanceTable(
   }
   totalRow.getCell('differential').numFmt = NGN_SIGNED
   paintSigned(totalRow.getCell('differential'), summary.totalDifferential)
+  paintSigned(totalRow.getCell('transfers'), summary.totalTransferred ?? 0)
+  paintSigned(totalRow.getCell('balance'), summary.totalBalance ?? summary.totalDifferential)
   totalRow.getCell('qty').numFmt = QTY
   totalRow.getCell('salesValue').numFmt = NGN
   totalRow.getCell('amount').numFmt = NGN
@@ -704,6 +738,8 @@ export async function exportFinanceReportPdf(
   footAt('salesValue', naira(summary.totalSalesValue))
   footAt('amount', naira(summary.totalAmountPaid))
   footAt('differential', naira(summary.totalDifferential))
+  footAt('transfers', naira(summary.totalTransferred))
+  footAt('balance', naira(summary.totalBalance))
 
   const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
   const differentialIndex = COLUMNS.findIndex((c) => c.key === 'differential')

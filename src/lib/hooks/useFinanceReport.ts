@@ -113,7 +113,26 @@ export interface FinanceReportOrder {
 
   /** Every payment on this order, in banking-date order. */
   payments: OrderPayment[]
-  /** What the order got, net of any surplus it has since given away. */
+  /**
+   * The bank statement's own figure — money paid IN against this order, never
+   * reduced by a transfer made afterwards.
+   *
+   * This is what the Amount Paid column shows and what a reconciliation ticks
+   * off against the statement. It used to be netted, so an order that received
+   * ₦163,350,000 and later moved ₦54,450,000 elsewhere displayed
+   * ₦108,900,000 — a figure on no statement anywhere.
+   */
+  amountPaidIn: number
+  /** Sales value less the bank figure, BEFORE any transfer. Positive is owed. */
+  differential: number
+  transferredIn: number
+  /** Negative — money that left this order. */
+  transferredOut: number
+  /** Signed net of the two. */
+  netTransfers: number
+  /** What is left after the bank figure AND the transfers. Zero when settled. */
+  balance: number
+  /** What the order holds now, after transfers. */
   received: number
   /** What settled the order's value. Never more than the value. */
   applied: number
@@ -153,8 +172,18 @@ export interface FinanceReportTotals {
   count: number
   totalAmount: number
   totalQuantity: number
-  /** Money actually received against the listed orders. */
+  /** The bank statement total — what the Amount Paid column sums to. */
+  totalAmountPaidIn: number
+  /** Sales value against the bank figure, before any transfer. */
+  totalDifferential: number
+  /** Netted; zero over a window holding both ends of every transfer. */
+  totalNetTransfers: number
+  /** The outgoing side unsigned — how much money actually moved. */
+  totalTransferredOut: number
+  /** What the listed orders hold once transfers are accounted for. */
   totalReceived: number
+  /** What is left after both. Zero on a fully settled window. */
+  totalBalance: number
   /** Summed per order, never netted against shortfall — see the note below. */
   totalSurplus: number
   totalShortfall: number
@@ -290,14 +319,19 @@ export function orderSalesValue(o: FinanceReportOrder): number {
 }
 
 /**
- * Positive means still owed, negative means surplus held on the order.
+ * Sales value against the BANK figure. Positive is still owed, negative is
+ * more received than the order was worth.
  *
- * One subtraction, from two figures the rows underneath already show. It used
- * to be assembled from a stored `amountPaid`, an inferred funding trail and a
- * regex over deposit descriptions, and those three could and did disagree.
+ * Deliberately unaffected by a transfer made afterwards — "does the bank money
+ * match what we billed" has one answer, and moving a surplus elsewhere later
+ * does not change it. What is left after transfers is `balance`, which is a
+ * different question and has its own column.
+ *
+ * Computed server-side so the screen, the workbook and the PDF cannot each
+ * arrive at their own version of it.
  */
 export function orderDifferential(o: FinanceReportOrder): number {
-  return Number(o.totalAmount || 0) - o.received
+  return o.differential
 }
 
 /** The account(s) this order's money was paid into. */

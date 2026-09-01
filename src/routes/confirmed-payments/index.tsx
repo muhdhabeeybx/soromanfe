@@ -30,7 +30,7 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate,
   transferOrigin, visiblePayments, legacyAmount,
-  orderPaidInto, orderCompany, orderDifferential,
+  orderPaidInto, orderCompany,
   paymentBreakdown, isTransferLeg, isUnreconciled,
   type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
@@ -46,7 +46,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential', 'balance'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -526,26 +526,33 @@ function FinanceReportPage() {
    * shown underneath them.
    *
    * There is nothing to deduplicate and no second basis to reconcile against.
-   * A bank statement line belongs to exactly one order, `received` is already
-   * net of anything an order transferred away, and the Differential column is
-   * the same subtraction on the same figures. The three earlier attempts at
-   * this number each totalled something subtly different — deposits, wallet
-   * traces, stored amounts — and disagreed with the column beside them.
+   * A bank statement line belongs to exactly one order, and the Differential
+   * column is the same subtraction on the same figures. The three earlier
+   * attempts at this number each totalled something subtly different —
+   * deposits, wallet traces, stored amounts — and disagreed with the column
+   * beside them.
+   *
+   * Transfer legs are excluded. This is the figure the report is checked
+   * against a bank statement with, so it has to be what the bank paid in, not
+   * what an order was left holding after money moved between orders later.
    */
   const totalAmountPaid = useMemo(
-    () => rows.reduce((sum, o) => sum + o.received, 0),
+    () => rows.reduce((sum, o) => sum + o.amountPaidIn, 0),
     [rows],
   )
 
-  // Summed from the per-order differentials rather than computed as
-  // totalSalesValue − totalAmountPaid: those two are on different bases (the
-  // paid figure counts each DEPOSIT once, the differential counts what each
-  // ORDER was attributed), so subtracting the aggregates would not equal the
-  // column it is supposed to total.
+  /** Sales value against the bank figure, before any transfer. */
   const totalDifferential = useMemo(
-    () => rows.reduce((sum, o) => sum + orderDifferential(o), 0),
+    () => rows.reduce((sum, o) => sum + o.differential, 0),
     [rows],
   )
+
+  /** Money that moved between orders, netted, and what is left after it. */
+  const totalTransferred = useMemo(
+    () => rows.reduce((sum, o) => sum + o.netTransfers, 0),
+    [rows],
+  )
+  const totalBalance = useMemo(() => rows.reduce((sum, o) => sum + o.balance, 0), [rows])
 
   /**
    * Where the difference between billed and received actually is.
@@ -567,13 +574,15 @@ function FinanceReportPage() {
     totalSalesValue,
     totalAmountPaid,
     totalDifferential,
+    totalTransferred,
+    totalBalance,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
   }
-  // An order isn't marked Paid until its wallet hold covers the total in
-  // full, so this is normally 0 — nonzero only when a total was corrected
-  // by hand after the order was already paid.
-  const totalOutstanding = summary.totalSalesValue - summary.totalAmountPaid
+  // What is still genuinely outstanding once transfers are counted — the
+  // Balance column, totalled. Distinct from totalDifferential, which is the
+  // gap against the BANK before any transfer.
+  const totalOutstanding = summary.totalBalance
 
   // Which PFIs the Stock Summary block covers.
   //
@@ -1038,17 +1047,32 @@ function FinanceReportPage() {
                     product: <span className="text-muted-foreground">{o.productName || '—'}</span>,
                     rate: <span className="whitespace-nowrap">{naira(Number(o.price))}</span>,
                     salesValue: <span className="whitespace-nowrap font-semibold">{naira(salesValue)}</span>,
-                    // Sales value less what this ORDER was attributed, not
-                    // less the deposit figures listed beneath it — see
-                    // orderDifferential. Positive is still owed, negative is
-                    // overpaid, and a clean order reads as a quiet dash
-                    // rather than a loud zero.
+                    // Sales value against the BANK figure, before any transfer
+                    // — see orderDifferential. Positive is still owed, negative
+                    // is more received than the order was worth, and a clean
+                    // order reads as a quiet dash rather than a loud zero.
                     differential: (() => {
-                      const d = orderDifferential(o)
+                      const d = o.differential
                       if (Math.abs(d) < 0.005) return <span className="text-muted-foreground">—</span>
                       return (
                         <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
                           {d > 0 ? naira(d) : `(${naira(Math.abs(d))})`}
+                        </span>
+                      )
+                    })(),
+                    /**
+                     * What is left once the bank figure and the transfers are
+                     * both accounted for. On a settled order this is a dash
+                     * whichever route its money took — so a clean day reads as
+                     * a column of dashes, and anything that is not a dash is a
+                     * real gap somebody has to close.
+                     */
+                    balance: (() => {
+                      const b = o.balance
+                      if (Math.abs(b) < 0.005) return <span className="text-muted-foreground">—</span>
+                      return (
+                        <span className={cn('whitespace-nowrap font-semibold', b > 0 ? 'text-destructive' : 'text-accent')}>
+                          {b > 0 ? naira(b) : `(${naira(Math.abs(b))})`}
                         </span>
                       )
                     })(),

@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import api from '#/lib/api/http'
 import type { PfiWithFinancials, PfiExpense, FinancialExplanation } from '#/lib/hooks/usePfis'
 import {
-  orderCompany, orderPaidInto, orderSalesValue, orderDifferential,
+  orderCompany, orderPaidInto, orderSalesValue,
   paymentPayer, paymentRecorder, isTransferLeg, isUnreconciled,
   type FinanceReportOrder,
 } from '#/lib/hooks/useFinanceReport'
@@ -172,7 +172,9 @@ function financeTotals(orders: FinanceReportOrder[]) {
     totalQuantity: orders.reduce((s, o) => s + Number(o.quantity || 0), 0),
     totalSalesValue: orders.reduce((s, o) => s + orderSalesValue(o), 0),
     totalAmountPaid,
-    totalDifferential: orders.reduce((s, o) => s + orderDifferential(o), 0),
+    totalDifferential: orders.reduce((s, o) => s + o.differential, 0),
+    totalTransferred: orders.reduce((s, o) => s + o.netTransfers, 0),
+    totalBalance: orders.reduce((s, o) => s + o.balance, 0),
   }
 }
 
@@ -729,7 +731,7 @@ export async function downloadPfiReportPdf(pfiId: number) {
 
     const body: (string | number)[][] = []
     orders.forEach((ord, i) => {
-      const d = orderDifferential(ord)
+      const d = ord.differential
       body.push(
         cellsFor('order', {
           sn: i + 1,
@@ -743,6 +745,7 @@ export async function downloadPfiReportPdf(pfiId: number) {
           rate: pdfNaira(Number(ord.price || 0)),
           salesValue: pdfNaira(orderSalesValue(ord)),
           differential: Math.abs(d) < 0.005 ? '—' : pdfNaira(d),
+          balance: Math.abs(ord.balance) < 0.005 ? '—' : pdfNaira(ord.balance),
           paidInto: up(orderPaidInto(ord) || '—'),
         }),
       )
@@ -776,6 +779,8 @@ export async function downloadPfiReportPdf(pfiId: number) {
     footAt('salesValue', pdfNaira(totals.totalSalesValue))
     footAt('amount', pdfNaira(totals.totalAmountPaid))
     footAt('differential', pdfNaira(totals.totalDifferential))
+    footAt('transfers', pdfNaira(totals.totalTransferred))
+    footAt('balance', pdfNaira(totals.totalBalance))
 
     const refIdx = REPORT_COLUMNS.findIndex((c) => c.key === 'ref')
     const diffIdx = REPORT_COLUMNS.findIndex((c) => c.key === 'differential')
