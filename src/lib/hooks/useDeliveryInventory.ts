@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '#/lib/api/http'
+import { fetchAllPages } from '#/lib/api/fetch-all-pages'
 import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
 import type { DeliveryInventory } from '#/lib/types'
@@ -13,9 +14,16 @@ export function useDeliveryInventoryList(params?: {
   refetchInterval?: number
 }) {
   const { refetchInterval, ...queryParams } = params || {}
+  // As in useDeliverySalesList: no page asked for means every row. There are
+  // 257 allocations against a 500-row default page, so this has not bitten
+  // yet — it would have, silently, the day the table crossed 500.
+  const wantsEveryRow = params?.page === undefined && params?.limit === undefined
   return useQuery({
     queryKey: ['delivery-inventory', queryParams],
     queryFn: async () => {
+      if (wantsEveryRow) {
+        return fetchAllPages<DeliveryInventory>('/delivery-inventory', queryParams, (b) => b?.loadings || b?.inventory || b || [])
+      }
       const res = await api.get('/delivery-inventory', { params: queryParams })
       return (res.data.data?.loadings || res.data.data?.inventory || res.data.data || []) as DeliveryInventory[]
     },

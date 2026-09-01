@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '#/lib/api/http'
+import { fetchAllPages } from '#/lib/api/fetch-all-pages'
 import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
 import type { DeliverySale } from '#/lib/types'
@@ -15,9 +16,18 @@ export function useDeliverySalesList(params?: {
   refetchInterval?: number
 }) {
   const { refetchInterval, ...queryParams } = params || {}
+  // No page asked for means "all of them" — every screen that calls this
+  // groups across the whole table. Taking the server's default page instead
+  // handed the delivery screens 500 of 1,363 sales, and a truck whose sales
+  // fell outside that window rendered as if it had none: the split vanished
+  // and the allocation's own customer took the entire load. See fetchAllPages.
+  const wantsEveryRow = params?.page === undefined && params?.limit === undefined
   return useQuery({
     queryKey: ['delivery-sales', queryParams],
     queryFn: async () => {
+      if (wantsEveryRow) {
+        return fetchAllPages<DeliverySale>('/delivery-sales', queryParams, (b) => b?.sales || b || [])
+      }
       const res = await api.get('/delivery-sales', { params: queryParams })
       return (res.data.data?.sales || res.data.data || []) as DeliverySale[]
     },
