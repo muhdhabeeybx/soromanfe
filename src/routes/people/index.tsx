@@ -11,10 +11,12 @@ import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
+import { Checkbox } from '#/components/ui/checkbox'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { MergePeopleDialog, type MergeCandidate } from '#/components/MergePeopleDialog'
 import { CustomerNumbersDialog } from '#/components/CustomerNumbersDialog'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -23,7 +25,7 @@ import { Pagination } from '#/components/Pagination'
 import {
   Users, Search, Plus, Upload, Download, X, Phone, Building2, UserPlus, Trash2, Pencil,
   MessageSquare, CheckCircle2, Sparkles, Loader2, Tag as TagIcon, AlertTriangle, ShieldAlert,
-  Wallet, Archive, Copy, PhoneOff, PhoneCall,
+  Wallet, Archive, Copy, PhoneOff, PhoneCall, Merge,
 } from 'lucide-react'
 import {
   usePeopleList, usePhoneHygiene, useDeleteReviewed, usePreviewImport, fetchAllPeople,
@@ -41,6 +43,8 @@ import { useToast } from '#/lib/hooks/useToast'
 import { triggerDownload } from '#/lib/report-theme'
 import { cn } from '#/lib/utils'
 import { routeGuard } from '#/lib/route-guard'
+import { useCurrentUserRoles } from '#/lib/hooks/useRoles'
+import { hasAnyRole, Roles } from '#/lib/rbac'
 import { parseCsv, toImportRows, type ParsedImport } from '#/lib/contact-csv'
 
 export const Route = createFileRoute('/people/')({
@@ -74,6 +78,17 @@ const relativeDate = (iso: string | null) => {
 
 /** RFC 4180 enough for Excel: quote everything, double any inner quote. */
 const csvCell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+
+/**
+ * A row's identity across the two books.
+ *
+ * `${kind}-${id}` would collide: customer 41 and contact 41 are different
+ * people and the ids are independent sequences. The table's React key, the
+ * merge tray and the tick state all read this one function so a row selected
+ * on page two is still the same row when the desk pages back to it.
+ */
+const personKey = (p: { customerId: number | null; contactId: number | null }) =>
+  p.customerId ? `customer:${p.customerId}` : `contact:${p.contactId}`
 
 const KIND_LABEL: Record<PersonKind, string> = {
   customer: 'Customer',
@@ -123,6 +138,7 @@ function PeoplePage() {
   const [optedOut, setOptedOut] = useState<'yes' | 'no' | ''>('')
   const [activity, setActivity] = useState('')
   const [numberStatus, setNumberStatus] = useState<PeopleListParams['numberStatus']>('')
+  const [duplicates, setDuplicates] = useState<PeopleListParams['duplicates']>('')
   // Best customers first, then the newest arrivals — see the `top` sort in
   // repositories/people.repository.js for why the two are sequenced rather
   // than one chosen over the other.
@@ -131,7 +147,7 @@ function PeoplePage() {
   const [pageSize, setPageSize] = useState(50)
 
   const filters: PeopleListParams = {
-    search: search || undefined, kind, converted, locationId, tag, optedOut, activity, numberStatus, sort,
+    search: search || undefined, kind, converted, locationId, tag, optedOut, activity, numberStatus, duplicates, sort,
   }
   const { data, isLoading, isError, error, refetch, isFetching } = usePeopleList({
     ...filters, page, limit: pageSize,
@@ -146,14 +162,14 @@ function PeoplePage() {
 
   // Filter changes reset to page one, adjusted during render rather than in an
   // effect so the list never paints a stale page first.
-  const signature = [search, kind, converted, locationId, tag, optedOut, activity, numberStatus, sort].join('|')
+  const signature = [search, kind, converted, locationId, tag, optedOut, activity, numberStatus, duplicates, sort].join('|')
   const [lastSignature, setLastSignature] = useState(signature)
   if (lastSignature !== signature) { setLastSignature(signature); setPage(1) }
 
-  const hasFilters = Boolean(search || kind || converted || locationId || tag || optedOut || activity || numberStatus)
+  const hasFilters = Boolean(search || kind || converted || locationId || tag || optedOut || activity || numberStatus || duplicates)
   const clearFilters = () => {
     setSearch(''); setKind(''); setConverted(''); setLocationId('')
-    setTag(''); setOptedOut(''); setActivity(''); setNumberStatus('')
+    setTag(''); setOptedOut(''); setActivity(''); setNumberStatus(''); setDuplicates('')
   }
 
   // ── Mutations ───────────────────────────────────────────────────────────
@@ -171,6 +187,38 @@ function PeoplePage() {
   const [converting, setConverting] = useState<PersonRow | null>(null)
   const [archiving, setArchiving] = useState<PersonRow | null>(null)
   const [managingNumbers, setManagingNumbers] = useState<PersonRow | null>(null)
+
+  // ── Folding duplicates into one ─────────────────────────────────────────
+  //
+  // The rows themselves are kept, not just their ids: the merge dialog has to
+  // list who it is about to fold together, and the desk ticks a row on page
+  // one and another on page three — by which time the first is no longer in
+  // `people` to look up.
+  const [ticked, setTicked] = useState<Record<string, MergeCandidate>>({})
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const canMerge = hasAnyRole(useCurrentUserRoles(), [Roles.ADMIN])
+
+  const tickedList = Object.values(ticked)
+  const toggleTicked = (p: MergeCandidate) => {
+    setTicked((prev) => {
+      const key = personKey(p)
+      if (prev[key]) { const { [key]: _drop, ...rest } = prev; return rest }
+      return { ...prev, [key]: p }
+    })
+  }
+  const clearTicked = () => setTicked({})
+  /** Tick the whole page, or clear it when the page is already ticked. */
+  const togglePage = () => {
+    const all = people.every((p) => ticked[personKey(p)])
+    setTicked((prev) => {
+      const next = { ...prev }
+      for (const p of people) {
+        if (all) delete next[personKey(p)]
+        else next[personKey(p)] = p
+      }
+      return next
+    })
+  }
 
   const openAdd = () => { setEditing(null); setForm(EMPTY_FORM); setFormOpen(true) }
   const openEdit = (p: PersonRow) => {
@@ -286,6 +334,33 @@ function PeoplePage() {
 
   const openReview = (issue: typeof reviewIssue = 'all') => {
     setReviewIssue(issue); setSelected({}); setReviewOpen(true)
+  }
+
+  /**
+   * A duplicate group, handed straight to the merge dialog.
+   *
+   * This is the shortest path there is between "these two rows are the same
+   * man" and it being true: the panel has already grouped them by number and
+   * shown the orders behind each, which is exactly the evidence the merge
+   * screen would otherwise ask the desk to go and find.
+   */
+  const mergeGroup = (records: HygieneRecord[]) => {
+    setTicked(Object.fromEntries(records.map((r) => {
+      const candidate: MergeCandidate = {
+        kind: r.kind,
+        customerId: r.kind === 'customer' ? r.id : null,
+        contactId: r.kind === 'contact' ? r.id : null,
+        name: r.name,
+        phone: r.phone,
+        companyName: r.companyName,
+        balance: r.balance,
+        orderCount: r.orderCount,
+        createdAt: r.createdAt,
+      }
+      return [personKey(candidate), candidate]
+    })))
+    setReviewOpen(false)
+    setMergeOpen(true)
   }
 
   // ── Export ──────────────────────────────────────────────────────────────
@@ -454,6 +529,25 @@ function PeoplePage() {
           <option value="duplicate">Duplicated numbers</option>
         </NativeSelect>
 
+        {/* The other half of the merge feature: without a way to FIND the
+            doubled rows, ticking two of them is a search-by-hand exercise.
+            Sorting by name comes with it, because the pairs are only useful
+            when they sit next to each other. */}
+        <NativeSelect
+          className="w-52"
+          value={duplicates}
+          onChange={(e) => {
+            const value = e.target.value as PeopleListParams['duplicates']
+            setDuplicates(value)
+            if (value && sort !== 'name') setSort('name')
+          }}
+        >
+          <option value="">Everyone, duplicate or not</option>
+          <option value="name">Same name as another</option>
+          <option value="number">Same number as another</option>
+          <option value="any">Any possible duplicate</option>
+        </NativeSelect>
+
         <NativeSelect className="w-48" value={sort} onChange={(e) => setSort(e.target.value as any)}>
           <option value="top">Top customers, then newest</option>
           <option value="active">Most recently active</option>
@@ -488,6 +582,30 @@ function PeoplePage() {
         </button>
       )}
 
+      {/* ── The merge tray ──────────────────────────────────────────────────
+          Appears only once something is ticked, and says what ticking is FOR.
+          A checkbox column with no visible purpose is just clutter on a page
+          whose main job is to be read. */}
+      {tickedList.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
+          <span className="text-sm">
+            <strong>{tickedList.length} record{tickedList.length === 1 ? '' : 's'}</strong> selected
+            {tickedList.length === 1 && ' — tick the duplicate to merge it with'}
+          </span>
+          <div className="ml-auto flex gap-2">
+            <Button variant="ghost" size="sm" onClick={clearTicked}>Clear</Button>
+            <Button
+              size="sm"
+              disabled={tickedList.length < 2}
+              onClick={() => setMergeOpen(true)}
+              title={tickedList.length < 2 ? 'Tick at least two records' : 'Fold these into one record'}
+            >
+              <Merge className="size-4 mr-2" />Merge into one
+            </Button>
+          </div>
+        </div>
+      )}
+
       <Card>
         <CardContent>
           {people.length === 0 ? (
@@ -508,6 +626,13 @@ function PeoplePage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          aria-label="Select every record on this page"
+                          checked={people.length > 0 && people.every((p) => ticked[personKey(p)])}
+                          onCheckedChange={togglePage}
+                        />
+                      </TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead className="hidden lg:table-cell">Location</TableHead>
@@ -519,7 +644,15 @@ function PeoplePage() {
                   </TableHeader>
                   <TableBody>
                     {people.map((p) => (
-                      <TableRow key={`${p.kind}-${p.customerId ?? p.contactId}`} className="hover:bg-muted/50 transition">
+                      <TableRow key={personKey(p)} className="hover:bg-muted/50 transition">
+                        <TableCell className="align-top pt-4">
+                          <Checkbox
+                            aria-label={`Select ${p.name}`}
+                            checked={Boolean(ticked[personKey(p)])}
+                            onCheckedChange={() => toggleTicked(p)}
+                          />
+                        </TableCell>
+
                         <TableCell>
                           <p className="font-medium uppercase">{p.name}</p>
                           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -977,6 +1110,19 @@ function PeoplePage() {
                       </Badge>
                     ))}
                     <span className="text-xs text-muted-foreground">{group.problems[0]?.reason}</span>
+                    {/* The repair, offered where the problem is described.
+                        Deleting one of two records that both carry orders is
+                        refused a few lines below, and rightly — merging is
+                        what the desk actually wants in that case, and it is
+                        the only action here that loses nothing. */}
+                    {group.records.length > 1 && (
+                      <Button
+                        variant="outline" size="sm" className="ml-auto h-7 px-2 text-xs"
+                        onClick={() => mergeGroup(group.records)}
+                      >
+                        <Merge className="size-3.5 mr-1" />Merge these
+                      </Button>
+                    )}
                   </div>
 
                   <div className="divide-y divide-border">
@@ -1112,6 +1258,15 @@ function PeoplePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Fold the ticked records into one ───────────────────────────────── */}
+      <MergePeopleDialog
+        open={mergeOpen}
+        onOpenChange={setMergeOpen}
+        people={tickedList}
+        canMerge={canMerge}
+        onMerged={clearTicked}
+      />
 
       <ConfirmDialog
         open={confirmPurge}

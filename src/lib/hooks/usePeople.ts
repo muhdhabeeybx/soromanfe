@@ -81,6 +81,8 @@ export interface PeopleListParams {
   activity?: string
   hasBalance?: 'yes' | 'no' | ''
   numberStatus?: 'all' | 'ok' | 'invalid' | 'unreachable' | 'duplicate' | ''
+  /** Rows that look like the same person twice — by name, by number, or either. */
+  duplicates?: 'name' | 'number' | 'any' | ''
   sort?: 'top' | 'active' | 'newest' | 'oldest' | 'name' | 'company' | 'value'
   page?: number
   limit?: number
@@ -235,6 +237,113 @@ export function usePreviewImport() {
     mutationFn: async (rows: ImportRow[]) => {
       const res = await api.post('/contacts/import/preview', { rows })
       return res.data.data as ImportPreview
+    },
+    onError: (err: unknown) => toast.error(getErrorMessage(err)),
+  })
+}
+
+// ─── Folding duplicates into one record ─────────────────────────────────────
+
+export interface MergeRef {
+  kind: 'customer' | 'contact'
+  id: number
+}
+
+/** A party to the merge, as the confirmation screen lists it. */
+export interface MergeParty extends MergeRef {
+  name: string
+  phone: string
+  companyName: string
+  email: string
+  /** Null for a lead, who has no wallet. */
+  balance: number | null
+  createdAt: string
+}
+
+/** What the losing records are carrying, counted before anything moves. */
+export interface MergeMoving {
+  orders: number
+  deposits: number
+  commissions: number
+  licenses: number
+  dangoteRequests: number
+  lpgRequests: number
+  walletHolds: number
+  expectedPayments: number
+  notifications: number
+  phones: number
+  sessions: number
+}
+
+export interface MergePlan {
+  target: MergeParty
+  sources: MergeParty[]
+  moving: MergeMoving
+  balance: { keeping: number; incoming: number; total: number }
+  /** Numbers that will reach the surviving record afterwards. */
+  phones: string[]
+  tags: string[]
+  /** Blank fields on the survivor that the merge fills in. */
+  fills: Array<{ field: string; label: string; value: string; from: string }>
+  warnings: string[]
+}
+
+/** The same shape back from the merge itself, with `moved` for `moving`. */
+export interface MergeResult extends Omit<MergePlan, 'moving' | 'fills' | 'tags'> {
+  moved: MergeMoving
+}
+
+/**
+ * What the merge would do, without doing it.
+ *
+ * A query rather than a mutation because it is a READ that happens to need a
+ * body: it re-runs whenever the survivor is changed on the dialog, and caching
+ * it per (survivor, losers) means flipping between two candidates and back
+ * does not re-ask the server the same question.
+ */
+export function useMergePlan(
+  target: MergeRef | null,
+  sources: MergeRef[],
+  options?: { enabled?: boolean },
+) {
+  const key = target ? `${target.kind}:${target.id}` : ''
+  const sourceKey = sources.map((s) => `${s.kind}:${s.id}`).sort().join(',')
+  return useQuery({
+    queryKey: ['people', 'merge-plan', key, sourceKey],
+    queryFn: async () => {
+      const res = await api.post('/people/merge/preview', { target, sources })
+      return res.data.data as MergePlan
+    },
+    enabled: (options?.enabled ?? true) && Boolean(target) && sources.length > 0,
+    retry: false,
+    staleTime: 0,
+  })
+}
+
+/**
+ * Fold the chosen records into one.
+ *
+ * Invalidates orders and deposits as well as the people lists: the orders
+ * behind the absorbed records now belong to a different customer, and a page
+ * still showing them under the old name would be showing a customer that no
+ * longer exists.
+ */
+export function useMergePeople() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ target, sources }: { target: MergeRef; sources: MergeRef[] }) => {
+      const res = await api.post('/people/merge', { target, sources })
+      return res.data as { message: string; data: MergeResult }
+    },
+    onSuccess: (res) => {
+      for (const key of [['people'], ['customers'], ['contacts'], ['orders'], ['deposits']]) {
+        queryClient.invalidateQueries({ queryKey: key })
+      }
+      // The server's own sentence — it is the one that knows how many orders
+      // actually moved.
+      toast.success(res.message)
     },
     onError: (err: unknown) => toast.error(getErrorMessage(err)),
   })
