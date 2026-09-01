@@ -70,6 +70,17 @@ export interface OrderPayment {
   counterpartOrderId: number | null
   counterpartOrderRef: string | null
   transferReason: string | null
+  /**
+   * What a transfer leg's money originally was, at the bank.
+   *
+   * A transfer leg has no statement line of its own, so its date, payer and
+   * reference columns were empty — which next to real statement rows read as
+   * corrupt data rather than as "this money arrived on the other order's bank
+   * line". These carry that line's payer and reference across, and are null
+   * where the source order had several payers and naming one would be a guess.
+   */
+  originDepositor: string | null
+  originBankRefs: string | null
 }
 
 export interface FinanceReportOrder {
@@ -221,6 +232,35 @@ export function paymentPayer(p: OrderPayment): string {
   return p.depositor || shortDepositor(p.narration)
 }
 
+/**
+ * The date to print against a payment, and whether it is a banking date.
+ *
+ * A statement payment has a real value date — when the money reached the
+ * account. A transfer leg has none, because no bank was involved; what it has
+ * is the day somebody moved it. Printing an empty cell there made a legitimate
+ * row look like missing data, and quietly printing `createdAt` under a column
+ * headed with a banking date would be worse — that is the exact substitution
+ * migration 0017 exists to prevent. So the caller is told which it got.
+ */
+export function paymentDate(p: OrderPayment): { date: string | null; banking: boolean } {
+  if (p.txnDate) return { date: p.txnDate, banking: true }
+  if (isTransferLeg(p) && p.createdAt) return { date: p.createdAt, banking: false }
+  return { date: null, banking: false }
+}
+
+/**
+ * What a transfer leg says in the reference column.
+ *
+ * Not blank, and not a bare order id. Where the source order has one payer,
+ * this names the bank payment the money actually arrived as — so an auditor
+ * following a transfer lands on a reference they can find on a statement,
+ * which is the entire question they will be asking.
+ */
+export function transferOrigin(p: OrderPayment): string {
+  const parts = [p.originDepositor, p.originBankRefs && `ref ${p.originBankRefs}`].filter(Boolean)
+  return parts.join(' · ')
+}
+
 /** The account the money landed in — "Zenith Bank · 1311924890". */
 export function paymentPaidInto(p: OrderPayment): string {
   return [p.bankName, p.accountNumber].filter(Boolean).join(' · ')
@@ -272,6 +312,27 @@ export function orderCompany(o: { companyName?: string | null; customerCompanyNa
 /** Net movement between orders on this one — negative if it gave money away. */
 export function orderTransfers(o: FinanceReportOrder): number {
   return o.payments.filter(isTransferLeg).reduce((sum, p) => sum + p.amount, 0)
+}
+
+/**
+ * The payments worth printing as their own row.
+ *
+ * Legacy rows are excluded. There are ~5,700 of them — every order confirmed
+ * before payments were recorded against orders — and each one says the same
+ * sentence: no bank record exists. Printed per row that is five thousand lines
+ * of noise shouting at somebody trying to read a day's trading; the fact
+ * belongs on the ORDER line instead, once, quietly, as a tag.
+ *
+ * Their money is not dropped. `legacyAmount` below puts it on the order row,
+ * so the Amount Paid column still sums to what the order received.
+ */
+export function visiblePayments(o: FinanceReportOrder): OrderPayment[] {
+  return o.payments.filter((p) => p.source !== 'legacy')
+}
+
+/** What an order was paid with no bank record behind it — 0 for most orders. */
+export function legacyAmount(o: FinanceReportOrder): number {
+  return o.payments.filter(isUnreconciled).reduce((sum, p) => sum + p.amount, 0)
 }
 
 // ── The summary ─────────────────────────────────────────────────────────────

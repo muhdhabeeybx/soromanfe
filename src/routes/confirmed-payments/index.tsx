@@ -28,7 +28,8 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto,
+  useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate,
+  transferOrigin, visiblePayments, legacyAmount,
   orderPaidInto, orderCompany, orderDifferential,
   paymentBreakdown, isTransferLeg, isUnreconciled,
   type FinanceReportOrder, type OrderPayment,
@@ -221,6 +222,17 @@ function PaymentCard({ payment }: { payment: OrderPayment }) {
             label={outgoing ? 'Where it went' : 'Where it came from'}
             value={payment.counterpartOrderRef || 'Another order'}
             icon={Repeat}
+          />
+          {/* The bank payment this money actually arrived as. A transfer leg
+              has no statement line of its own, and without this the row says
+              only that money moved — not which money, which is the first
+              thing anyone reconciling asks. */}
+          <Row label="Originally paid in by" value={payment.originDepositor || undefined} icon={User} />
+          <Row label="Original bank reference" value={payment.originBankRefs || undefined} icon={Hash} />
+          <Row
+            label="Moved on"
+            value={payment.createdAt ? format(new Date(payment.createdAt), 'd MMM yyyy') : undefined}
+            icon={Clock}
           />
           <Row label="Reason" value={payment.transferReason || payment.note} icon={FileText} />
           <Row label="Recorded by" value={recorder || undefined} icon={User} />
@@ -1042,60 +1054,70 @@ function FinanceReportPage() {
                     })(),
                     paidInto: <span className="block max-w-[16rem] truncate text-muted-foreground">{orderPaidInto(o) || '—'}</span>,
                   }
+
+                  /**
+                   * Money with no bank record behind it, carried on the ORDER
+                   * row instead of a sub-row of its own.
+                   *
+                   * Every order confirmed before payments were tracked has one
+                   * of these, and printing each as its own line put ~5,700
+                   * identical "no bank record" rows into the report. The fact
+                   * is worth stating once, quietly, on the order it belongs
+                   * to — and the amount has to stay in the Amount Paid column
+                   * either way, or that column stops summing to the total
+                   * printed above it.
+                   */
+                  const legacy = legacyAmount(o)
+                  const legacyCells: Record<string, React.ReactNode> = legacy > 0 ? {
+                    amount: <span className="whitespace-nowrap font-semibold text-muted-foreground">{naira(legacy)}</span>,
+                    depositRef: (
+                      <span className="text-xs whitespace-nowrap text-muted-foreground/70">
+                        No bank record
+                      </span>
+                    ),
+                  } : {}
+
                   return (
                     <Fragment key={o.id}>
                       <TableRow className="cursor-pointer" onClick={() => setViewing(o)}>
                         {REPORT_COLUMNS.map((c) => (
                           <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
-                            {c.scope === 'order' ? orderCells[c.key] : null}
+                            {c.scope === 'order' ? orderCells[c.key] : (legacyCells[c.key] ?? null)}
                           </TableCell>
                         ))}
                       </TableRow>
-                      {/* One sub-row per payment, and no second branch: the
-                          payments ARE what the order received, so the Amount
-                          Paid column adds down the page to the total at the
-                          top of it by construction. There used to be three
-                          kinds of sub-row here — allocations, traced wallet
-                          credits, and a "balancing" row invented to close the
-                          gap the other two left. */}
-                      {o.payments.map((p) => {
-                        // Money that moved inside the business rather than
-                        // arriving from a bank: no statement line and no
-                        // reference, because none exists. Indistinguishable
-                        // from missing data unless it is said out loud, so it
-                        // is said, in blue.
+                      {/* One sub-row per payment worth printing.
+                          Legacy rows are not printed — see visiblePayments;
+                          their amount rides on the order row above, so the
+                          Amount Paid column still sums to what came in. */}
+                      {visiblePayments(o).map((p) => {
+                        // Money that moved between orders rather than arriving
+                        // from a bank. It has no statement line of its own, so
+                        // it names the bank payment it came out of instead of
+                        // leaving three columns blank and reading as corrupt.
                         const internal = isTransferLeg(p)
-                        const legacy = isUnreconciled(p)
+                        const when = paymentDate(p)
+                        const origin = transferOrigin(p)
                         const paymentCells: Record<string, React.ReactNode> = {
                           depositDate: (
-                            <span className="whitespace-nowrap text-muted-foreground">
-                              {p.txnDate ? format(new Date(p.txnDate), 'd MMM yyyy') : '—'}
+                            <span className={cn('whitespace-nowrap text-muted-foreground', internal && TONE_CLASS.internal)}>
+                              {when.date ? format(new Date(when.date), 'd MMM yyyy') : '—'}
                             </span>
                           ),
                           depositor: (
                             <span className={cn('flex items-center gap-1.5', internal && TONE_CLASS.internal)}>
                               {internal && <Repeat className="size-3 shrink-0" />}
-                              <span
-                                className={cn('block max-w-[11rem] truncate', legacy && 'italic text-muted-foreground')}
-                                title={p.narration || undefined}
-                              >
-                                {legacy ? 'No payment record' : paymentPayer(p) || '—'}
+                              <span className="block max-w-[11rem] truncate" title={p.narration || p.transferReason || undefined}>
+                                {paymentPayer(p) || '—'}
                               </span>
                             </span>
                           ),
-                          depositRef: legacy ? (
-                            // Never blank. An empty cell cannot distinguish
-                            // "no reference exists" from "nobody filled it in",
-                            // and on the report an auditor is reading, that is
-                            // the whole question.
-                            <span className="text-xs text-muted-foreground/80">
-                              No bank record — confirmed before payments were tracked
-                            </span>
-                          ) : (
-                            <span className={cn('block max-w-[10rem] truncate', internal && TONE_CLASS.internal)}>
-                              {internal
-                                ? `${p.amount < 0 ? 'to' : 'from'} ${p.counterpartOrderRef || 'another order'}`
-                                : p.bankRef || '—'}
+                          depositRef: (
+                            <span
+                              className={cn('block max-w-[13rem] truncate', internal && TONE_CLASS.internal)}
+                              title={internal ? (origin || p.transferReason || undefined) : undefined}
+                            >
+                              {internal ? (origin || p.transferReason || 'moved between orders') : (p.bankRef || '—')}
                             </span>
                           ),
                           // Receipts only, always positive, so the column can
@@ -1117,9 +1139,7 @@ function FinanceReportPage() {
                             className={cn(
                               internal
                                 ? 'bg-blue-50/60 hover:bg-blue-50 dark:bg-blue-950/30 dark:hover:bg-blue-950/50'
-                                : legacy
-                                  ? 'bg-muted/50 hover:bg-muted/60'
-                                  : 'bg-muted/20 hover:bg-muted/30',
+                                : 'bg-muted/20 hover:bg-muted/30',
                             )}
                           >
                             {REPORT_COLUMNS.map((c) => (

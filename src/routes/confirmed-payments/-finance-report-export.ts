@@ -1,6 +1,7 @@
 import { format } from 'date-fns'
 import {
-  paymentRecorder, paymentPayer, isTransferLeg, isUnreconciled,
+  paymentRecorder, paymentPayer, paymentDate, transferOrigin,
+  visiblePayments, legacyAmount, isTransferLeg,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
   type FinanceReportOrder, type OrderPayment, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
@@ -174,6 +175,18 @@ function rowValues(o: FinanceReportOrder, i: number) {
     salesValue: orderSalesValue(o),
     differential: orderDifferential(o),
     paidInto: up(orderPaidInto(o) || '—'),
+    /**
+     * Money with no bank record behind it, carried on the ORDER line.
+     *
+     * Every order confirmed before payments were tracked has one, and printing
+     * each as its own sub-row put ~5,700 identical "no bank record" lines into
+     * the sheet. Stated once, on the order it belongs to. The amount stays in
+     * the Amount Paid column either way, or the column stops summing to the
+     * total printed above it — the first thing anyone checks.
+     */
+    ...(legacyAmount(o) > 0
+      ? { amount: legacyAmount(o), depositRef: 'NO BANK RECORD' }
+      : {}),
   }
 }
 
@@ -205,32 +218,30 @@ function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
  * description field, and a "balancing" row invented to make the column add up.
  */
 function paymentRowValues(p: OrderPayment) {
-  const outgoing = p.source === 'transfer_out'
-  const legacy = isUnreconciled(p)
+  const transfer = isTransferLeg(p)
+  const when = paymentDate(p)
+  const origin = transferOrigin(p)
   return {
-    // Receipts only. A movement OUT is a negative in the Transfers column, not
-    // a negative in a column of money received — that column has to stay
-    // something you can select and sum, which is the first thing anyone does
-    // with this sheet.
-    amount: isTransferLeg(p) ? null : p.amount,
-    transfers: isTransferLeg(p) ? p.amount : null,
-    depositor: up(paymentPayer(p) || (legacy ? 'NO PAYMENT RECORD' : '—')),
+    // Receipts only. A movement between orders is a signed figure in the
+    // Transfers column, not a negative in a column of money received — that
+    // column has to stay something you can select and sum, which is the first
+    // thing anyone does with this sheet.
+    amount: transfer ? null : p.amount,
+    transfers: transfer ? p.amount : null,
+    depositor: up(paymentPayer(p) || '—'),
     /**
-     * Named, never blank. An empty reference cell cannot distinguish "there is
-     * no bank reference because no bank was involved" from "somebody left it
-     * out", and on the sheet an auditor is holding, that distinction is the
-     * whole question.
+     * Never blank. A transfer leg has no statement line of its own, so it
+     * names the bank payment its money actually arrived as — an auditor
+     * following it lands on a reference they can find on a statement, which is
+     * the only question they will be asking. Blank cells here read as missing
+     * data and sent people hunting for a line that was never there.
      */
-    depositRef: legacy
-      ? 'NO BANK RECORD — CONFIRMED BEFORE PAYMENTS WERE TRACKED'
-      : outgoing
-        ? up(`MOVED TO ${p.counterpartOrderRef || 'ANOTHER ORDER'}`)
-        : p.source === 'transfer_in'
-          ? up(`MOVED FROM ${p.counterpartOrderRef || 'ANOTHER ORDER'}`)
-          : up(p.bankRef || '—'),
-    // The banking date — when the money reached the account — not when the row
-    // was keyed in. Those differ by days on a back-dated match.
-    depositDate: p.txnDate ? new Date(p.txnDate) : null,
+    depositRef: transfer
+      ? up(origin || p.transferReason || 'MOVED BETWEEN ORDERS')
+      : up(p.bankRef || '—'),
+    // The banking date on a statement row; on a transfer leg, the day it was
+    // moved — those are different facts and the column below says which.
+    depositDate: when.date ? new Date(when.date) : null,
     recordedBy: up(paymentRecorder(p) || '—'),
   }
 }
@@ -362,9 +373,9 @@ export function writeFinanceTable(
     // One sub-row per payment. There is no second branch and no balancing row:
     // the payments ARE what the order received, so the column sums to the
     // total above it by construction rather than by correction.
-    for (const p of o.payments) {
-      // Blue, matching the screen: money that moved inside the business, so
-      // its lack of a bank reference is a fact rather than an omission.
+    for (const p of visiblePayments(o)) {
+      // Blue, matching the screen: money that moved between orders, so it
+      // names where it came from rather than a bank line it never had.
       const internal = isTransferLeg(p)
       const subRow = ws.getRow(cursor)
       subRow.values = paymentRowValues(p)
@@ -637,26 +648,36 @@ export async function exportFinanceReportPdf(
   const body: (string | number)[][] = []
   rows.forEach((o, i) => {
     const v = rowValues(o, i)
-    body.push(
-      cellsFor('order', {
-        sn: v.sn,
-        date: v.date ? format(v.date, DATE_PATTERN) : '—',
-        ref: v.ref,
-        pfi: v.pfi,
-        customer: v.customer,
-        company: v.company,
-        qty: v.qty.toLocaleString(),
-        product: v.product,
-        rate: naira(v.rate),
-        salesValue: naira(v.salesValue),
-        differential: Math.abs(v.differential) < 0.005 ? '—' : naira(v.differential),
-        paidInto: v.paidInto,
-      }),
-    )
+    const orderRow = cellsFor('order', {
+      sn: v.sn,
+      date: v.date ? format(v.date, DATE_PATTERN) : '—',
+      ref: v.ref,
+      pfi: v.pfi,
+      customer: v.customer,
+      company: v.company,
+      qty: v.qty.toLocaleString(),
+      product: v.product,
+      rate: naira(v.rate),
+      salesValue: naira(v.salesValue),
+      differential: Math.abs(v.differential) < 0.005 ? '—' : naira(v.differential),
+      paidInto: v.paidInto,
+    })
+    // cellsFor() only fills the columns of the scope it was asked for, so the
+    // legacy amount — which lives in two funding-scope columns but belongs on
+    // the ORDER line — is written in by hand. Without it the Amount Paid
+    // column in the PDF would not sum to the total printed above it, while
+    // the workbook's would: the two documents disagreeing on the same figure.
+    const legacy = legacyAmount(o)
+    if (legacy > 0) {
+      const at = (key: string) => COLUMNS.findIndex((c) => c.key === key)
+      if (at('amount') >= 0) orderRow[at('amount')] = naira(legacy)
+      if (at('depositRef') >= 0) orderRow[at('depositRef')] = 'NO BANK RECORD'
+    }
+    body.push(orderRow)
 
     // The same rows as the workbook, built from the same function, so the two
     // documents cannot say different things.
-    for (const p of o.payments) {
+    for (const p of visiblePayments(o)) {
       const pv = paymentRowValues(p)
       body.push(
         cellsFor('funding', {

@@ -12,7 +12,7 @@ import { Textarea } from '#/components/ui/textarea'
 import { NumberInput } from '#/components/ui/number-input'
 import {
   useOrderPayments, useRemoveOrderPayment, useTransferOrderSurplus,
-  paymentRecorder, paymentPayer, paymentPaidInto, isTransferLeg, isUnreconciled,
+  paymentRecorder, paymentPayer, paymentPaidInto, transferOrigin, isTransferLeg, isUnreconciled,
   type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
 import { naira } from '#/routes/pfi/-pfi-utils'
@@ -173,11 +173,17 @@ export function OrderPaymentsDialog({
                       <p className={cn(MICRO, 'mt-1 text-muted-foreground')}>
                         {isUnreconciled(p)
                           ? 'No bank record — confirmed before payments were tracked'
-                          : [
-                              p.bankRef,
-                              p.txnDate ? format(new Date(p.txnDate), 'd MMM yyyy') : null,
-                              paymentPaidInto(p) || null,
-                            ].filter(Boolean).join(' · ')}
+                          : isTransferLeg(p)
+                            // Which money this is, not just that money moved.
+                            ? [
+                                transferOrigin(p) || null,
+                                p.createdAt ? `moved ${format(new Date(p.createdAt), 'd MMM yyyy')}` : null,
+                              ].filter(Boolean).join(' · ')
+                            : [
+                                p.bankRef,
+                                p.txnDate ? format(new Date(p.txnDate), 'd MMM yyyy') : null,
+                                paymentPaidInto(p) || null,
+                              ].filter(Boolean).join(' · ')}
                       </p>
                       {p.transferReason && (
                         <p className="mt-1 text-xs italic text-muted-foreground">{p.transferReason}</p>
