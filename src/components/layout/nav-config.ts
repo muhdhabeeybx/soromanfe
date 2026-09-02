@@ -27,12 +27,22 @@ import {
   Wallet,
   UserCircle,
   Pencil,
+  LayoutDashboard,
 } from "lucide-react";
 
 export type NavItem = {
   title: string;
   icon: React.ComponentType<{ size?: string | number; className?: string }>;
   path: string;
+  /**
+   * Role ids that may see this item, when it must NOT follow the usual rule.
+   *
+   * Access is open dashboard-wide by design (see canAccessRoute in rbac.ts) —
+   * scope narrows what people see, not roles. This is the deliberate exception
+   * for a page that is genuinely not everyone's business, and it hides the
+   * item only; the route guards itself separately.
+   */
+  roles?: number[];
 };
 
 export type NavCategory = {
@@ -48,7 +58,8 @@ export const navCategories: NavCategory[] = [
     category: "", // Top of nav — no header
     items: [
       // { title: "Home", icon: Home, path: "/home" },
-      { title: "Overview", icon: GaugeIcon, path: "/overview" },
+      // Everyone's landing page: what is waiting on them today.
+      { title: "My Work", icon: LayoutDashboard, path: "/overview" },
     ],
   },
   {
@@ -151,6 +162,9 @@ export const navCategories: NavCategory[] = [
   {
     category: "Admin",
     items: [
+      // The whole-company view. Not everyone's business, so unlike every other
+      // item this one names its audience — see NavItem.roles.
+      { title: "Company Dashboard", icon: GaugeIcon, path: "/company-dashboard", roles: [0, 1] },
       { title: "Reports Hub", icon: FileSpreadsheet, path: "/admin-reports" },
       { title: "Messaging", icon: FileText, path: "/messaging" },
       // { title: "Assign PFI", icon: FileText, path: "/orders-pfi" },

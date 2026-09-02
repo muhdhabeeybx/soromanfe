@@ -1,105 +1,154 @@
-import { useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { useMemo } from 'react'
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { ArrowRight, CheckCircle2, CircleAlert, LayoutDashboard } from 'lucide-react'
+
 import { PageHeader } from '#/components/PageHeader'
-import { PageError } from '#/components/PageError'
-import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
-import { StatusChip } from '#/components/ui/status-chip'
-import { HoverArrowLink } from '#/components/ui/hover-arrow-link'
 import { Skeleton } from '#/components/ui/skeleton'
-import { PanelRow, PanelRows } from '#/components/ui/panel-row'
-import { PeriodFilter, PERIOD_LABELS, type Period } from '#/components/overview/PeriodFilter'
-import { RevenueTrendChart } from '#/components/overview/RevenueTrendChart'
-import { ActivityFeed } from '#/components/overview/ActivityFeed'
-import { useDashboardOverview } from '#/lib/hooks/useDashboard'
+import { PageError } from '#/components/PageError'
+import { useWorkQueues, type WorkQueue } from '#/lib/hooks/useDashboard'
+import { useRoles } from '#/lib/hooks/useRoles'
 import { useAuthStore } from '#/modules/auth'
-import { formatCurrency, formatLitres, formatNumber, formatPercent } from '#/lib/format'
+import { canAccessRoute, isSuperAdmin, ROLE_STRING_TO_ID } from '#/lib/rbac'
+import { navCategories } from '#/components/layout/nav-config'
+import { formatNumber } from '#/lib/format'
 import { cn } from '#/lib/utils'
-import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY, PANEL_FOOTER } from '#/lib/panel'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '#/components/ui/table'
-import {
-  DollarSign,
-  ShoppingCart,
-  Users,
-  Truck,
-  Package,
-  Flame,
-} from 'lucide-react'
+import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { routeGuard } from '#/lib/route-guard'
 
+/**
+ * What is waiting on you — the landing page every role gets.
+ *
+ * This replaced the full company dashboard as the page login points at. That
+ * page showed revenue, PFI stock, fleet utilisation and a depot leaderboard to
+ * a gate-security officer whose entire job is on one other screen, and it was
+ * the first thing all forty-odd roles saw every morning.
+ *
+ * The company dashboard still exists, at /company-dashboard, for the people
+ * whose job is the company rather than a desk within it.
+ *
+ * Nothing here is role-specific by configuration. A queue shows if that person
+ * can open the page behind it, and the counts are scoped server-side to their
+ * own depots and PFIs — so a Warri ticketing clerk sees Warri's ticketing
+ * backlog and nothing else, without anybody maintaining a list of what each
+ * role should be shown.
+ */
 export const Route = createFileRoute('/overview/')({
   beforeLoad: () => routeGuard('/overview'),
-  component: OverviewDashboard,
+  component: MyWork,
 })
 
-function PanelSkeleton() {
+/** Morning / afternoon / evening, by the reader's own clock. */
+function greeting(): string {
+  const h = new Date().getHours()
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  return 'Good evening'
+}
+
+function QueueCard({ queue }: { queue: WorkQueue }) {
+  const waiting = queue.count > 0
   return (
-    <div className={cn(PANEL, 'p-6')}>
-      <Skeleton className="mb-4 h-4 w-32" />
-      <Skeleton className="h-48 w-full" />
-    </div>
+    <Link
+      to={queue.path as any}
+      className={cn(
+        'group flex items-start gap-3 rounded-lg border p-4 transition-colors',
+        waiting
+          ? 'border-foreground/15 bg-background hover:border-primary/40 hover:bg-accent/40'
+          : 'border-foreground/10 bg-muted/20 hover:bg-muted/40',
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className={cn('font-medium', !waiting && 'text-muted-foreground')}>
+          {waiting ? queue.label : queue.emptyLabel}
+        </p>
+        <p className={cn(MICRO, 'mt-1 text-muted-foreground')}>
+          {/* A failed count says so. Showing 0 would read as "all clear", which
+              is the one thing an uncomputable count must never claim. */}
+          {queue.failed ? 'Count unavailable right now' : waiting ? queue.action : 'Nothing to do here'}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {waiting ? (
+          <span className="rounded-full bg-primary px-2.5 py-1 text-sm font-semibold tabular-nums text-primary-foreground">
+            {formatNumber(queue.count)}
+          </span>
+        ) : (
+          <CheckCircle2 className="size-5 text-success" />
+        )}
+        <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </div>
+    </Link>
   )
 }
 
-/**
- * The skeleton mirrors the loaded page exactly — four tiles in the same two
- * columns, then the same run of panels. It used to show five tiles across four
- * columns and stop after the first panel row, so the whole page reflowed under
- * the reader the moment the request landed.
- *
- * The tiles carry no description line because none of the live cards do.
- */
-function OverviewSkeleton() {
-  return (
-    <>
-      <StatCardGrid count={2}>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className={cn(PANEL, 'p-4')}>
-            <Skeleton className="mb-2 h-10 w-10 rounded-2xl" />
-            <Skeleton className="mt-5 h-3 w-20" />
-            <Skeleton className="mt-2 h-8 w-28" />
-          </div>
-        ))}
-      </StatCardGrid>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <PanelSkeleton />
-        <PanelSkeleton />
-      </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <PanelSkeleton />
-        <PanelSkeleton />
-      </div>
-      <PanelSkeleton />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <PanelSkeleton />
-        <PanelSkeleton />
-      </div>
-      <PanelSkeleton />
-    </>
-  )
-}
-
-function OverviewDashboard() {
-  const [period, setPeriod] = useState<Period>('month')
-  const { data, isLoading, isError, error, refetch } = useDashboardOverview(period)
+function MyWork() {
   const user = useAuthStore((s) => s.user)
+  const { userRoles } = useRoles()
+  const { data, isLoading, isError, error, refetch } = useWorkQueues()
 
-  // Named off the filter rather than the response, so the sentence under the
-  // title is already right while the request is still in flight.
-  const periodLabel = PERIOD_LABELS[period].toLowerCase()
+  const pageOverrides = useMemo(() => {
+    const map: Record<string, boolean> = {}
+    for (const o of user?.pageOverrides || []) map[o.routePath] = o.allowed
+    return map
+  }, [user?.pageOverrides])
+
+  /**
+   * Only queues whose page this person can actually open.
+   *
+   * Sending someone to a page they will be bounced off is worse than not
+   * mentioning the work at all.
+   */
+  const queues = useMemo(
+    () => (data?.queues || []).filter((q) => canAccessRoute(userRoles, q.path, pageOverrides)),
+    [data?.queues, userRoles, pageOverrides],
+  )
+
+  const waiting = queues.filter((q) => q.count > 0)
+  const clear = queues.filter((q) => q.count === 0)
+
+  /** The company dashboard is for the people whose job is the whole company. */
+  const canSeeCompany =
+    isSuperAdmin(userRoles) || userRoles.includes(ROLE_STRING_TO_ID.admin)
+
+  /**
+   * A short list of the pages this person actually has, for getting somewhere
+   * on a morning with an empty queue. Taken from the same nav config the
+   * sidebar uses, so it cannot drift from what they can really reach.
+   */
+  const shortcuts = useMemo(() => {
+    const items: { title: string; path: string; icon: React.ComponentType<{ className?: string }> }[] = []
+    for (const group of navCategories) {
+      for (const item of group.items) {
+        if (item.path === '/overview') continue
+        if (!canAccessRoute(userRoles, item.path, pageOverrides)) continue
+        items.push(item)
+      }
+    }
+    return items.slice(0, 8)
+  }, [userRoles, pageOverrides])
 
   const header = (
     <PageHeader
-      eyebrow="Overview"
-      title="Dashboard"
-      description={`Welcome back, ${user?.firstName || 'Admin'}. Here's what's happening ${periodLabel}.`}
-      actions={<PeriodFilter value={period} onChange={setPeriod} />}
+      eyebrow="Your work"
+      title={`${greeting()}, ${user?.firstName || 'there'}`}
+      description={
+        isLoading
+          ? 'Checking what needs your attention…'
+          : waiting.length === 0
+            ? 'Nothing is waiting on you right now.'
+            : `${waiting.length === 1 ? 'One queue needs' : `${waiting.length} queues need`} your attention.`
+      }
+      actions={
+        canSeeCompany ? (
+          <Link
+            to={'/company-dashboard' as any}
+            className="inline-flex items-center gap-2 rounded-lg border border-foreground/15 px-3 py-2 text-sm transition-colors hover:bg-accent"
+          >
+            <LayoutDashboard className="size-4" />
+            Company dashboard
+          </Link>
+        ) : undefined
+      }
     />
   )
 
@@ -107,360 +156,80 @@ function OverviewDashboard() {
     return (
       <div className="animate-fade-in space-y-6">
         {header}
-        <OverviewSkeleton />
+        <section className={PANEL}>
+          <div className={PANEL_RAIL}><span className={MICRO}>Waiting on you</span></div>
+          <div className={cn(PANEL_BODY, 'grid gap-3 sm:grid-cols-2')}>
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
+          </div>
+        </section>
       </div>
     )
   }
 
-  // Every figure on this page falls back to zero, so without this a failed
-  // request renders as a calm dashboard reporting no revenue and no orders.
   if (isError) {
     return (
       <div className="animate-fade-in space-y-6">
         {header}
         <PageError
-          message={(error as Error)?.message || 'Could not load the dashboard.'}
+          message={(error as Error)?.message || 'Could not load your work queues.'}
           onRetry={() => refetch()}
         />
       </div>
     )
   }
 
-  const rev = data?.revenue || {}
-  const orders = data?.orders || { totals: {}, byStatus: [] }
-  const wallet = data?.wallet || { movement: {}, balances: {}, activeHolds: {} }
-  const pfi = data?.pfi || { byStatus: [] }
-  const outstanding = data?.outstanding || { totalOutstanding: 0, customers: [] }
-  const fleet = data?.fleet || { total: 0, inTransit: 0, idle: 0, maintenance: 0 }
-  const cust = data?.customers || { total: 0, newThisPeriod: 0 }
-  const trend = data?.revenueTrend || []
-  const activity = data?.recentActivity || []
-  const depotLeaderboard = data?.depotLeaderboard || []
-  const dangote = data?.dangote || { totalRequests: 0, totalValue: 0, paidValue: 0, byStatus: [] }
-  const lpg = data?.lpg || { totalOrders: 0, totalValue: 0, paidValue: 0, stations: { total: 0, active: 0 }, byStatus: [] }
-
-  const totalOrders = orders.totals?.orders || 0
-  const combinedRevenue = rev.combined || 0
-  const fleetUtilization = fleet.total > 0 ? Math.round(((fleet.inTransit || 0) / fleet.total) * 100) : 0
-  const totalOutstanding = outstanding.totalOutstanding || 0
-
-  const activePfis = pfi.byStatus?.filter((s: { status: string }) => s.status === 'active') || []
-  const totalRemainingLitres = activePfis.reduce((sum: number, p: { remainingLitres?: number }) => sum + (p.remainingLitres || 0), 0)
-  const totalPfiValue = activePfis.reduce((sum: number, p: { totalValue?: number }) => sum + Number(p.totalValue || 0), 0)
-
   return (
     <div className="animate-fade-in space-y-6">
       {header}
 
-      <StatCardGrid count={2}>
-        <StatCard
-          icon={<DollarSign />}
-          label="Revenue"
-          value={formatCurrency(combinedRevenue)}
-          tone="green"
-          // description={`${formatCurrency(rev.orders?.total || 0)} from orders`}
-        />
-        <StatCard
-          icon={<ShoppingCart />}
-          label="Orders"
-          value={formatNumber(totalOrders)}
-          tone="blue"
-          // description={`${formatCurrency(orders.totals?.paidValue || 0)} collected`}
-        />
-        <StatCard
-          icon={<Users />}
-          label="Total Customers"
-          value={formatNumber(cust.total)}
-          tone="green"
-          // description={`${cust.newThisPeriod || 0} new ${data?.period?.label?.toLowerCase() || 'this month'}`}
-        />
-        <StatCard
-          icon={<Truck />}
-          label="Trucks Utilization"
-          value={formatPercent(fleetUtilization)}
-          // With no trucks on the books there is nothing to be alarmed about,
-          // so an empty fleet reads neutral rather than red.
-          tone={
-            fleet.total === 0
-              ? 'neutral'
-              : fleetUtilization > 60
-                ? 'green'
-                : fleetUtilization > 30
-                  ? 'amber'
-                  : 'red'
-          }
-          // description={`${fleet.inTransit || 0} of ${fleet.total} in use`}
-        />
-        {/* <StatCard
-          icon={<AlertTriangle />}
-          label="Delivery Customers Outstanding"
-          value={formatCurrency(totalOutstanding)}
-          tone={totalOutstanding > 0 ? 'amber' : 'green'}
-          // description={`${outstanding.customers?.length || 0} customers owe`}
-        /> */}
-      </StatCardGrid>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={PANEL} aria-label="Revenue trend">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Revenue trend</span>
-            <StatusChip tone="accent" size="rail">
-              {data?.period?.label}
-            </StatusChip>
-          </div>
-          <div className={PANEL_BODY}>
-            <RevenueTrendChart data={trend} />
-          </div>
-          {/* <div className={cn(PANEL_FOOTER, 'gap-4')}>
-            <span className="text-xs text-muted-foreground">
-              Orders: <span className="font-semibold text-foreground">{formatCurrency(rev.orders?.total || 0)}</span>
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Offline: <span className="font-semibold text-foreground">{formatCurrency(rev.offlineSales?.total || 0)}</span>
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Delivery: <span className="font-semibold text-foreground">{formatCurrency(rev.deliverySales?.paymentAmount || 0)}</span>
-            </span>
-          </div> */}
-        </section>
-
-        {/* <section className={PANEL} aria-label="Orders by status">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Orders by status</span>
-          </div>
-          <div className={PANEL_BODY}>
-            <OrderStatusChart data={orderStatusData} total={totalOrders} />
-          </div>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
-            <HoverArrowLink to={'/orders' as any}>View all orders</HoverArrowLink>
-          </div>
-        </section> */}
-
-        <section className={PANEL} aria-label="Financial summary">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Financial summary</span>
-          </div>
-          <PanelRows>
-            {/* Total revenue is the headline — everything under it is a
-                component of it or a position alongside it. */}
-            <PanelRow lead label="Total revenue" value={formatCurrency(combinedRevenue)} />
-            <PanelRow label="Order revenue" value={formatCurrency(rev.orders?.total || 0)} />
-            {/* <PanelRow label="Offline sales" value={formatCurrency(rev.offlineSales?.total || 0)} /> */}
-            {/* <PanelRow label="Delivery payments" value={formatCurrency(rev.deliverySales?.paymentAmount || 0)} /> */}
-            <PanelRow label="Customer wallets" value={formatCurrency(Number(wallet.balances?.totalBalance || 0))} />
-            <PanelRow
-              label="Active holds"
-              hint="Committed against unreleased orders"
-              tone="warning"
-              value={formatCurrency(Number(wallet.activeHolds?.totalHeld || 0))}
-            />
-          </PanelRows>
-          <div className={cn(PANEL_FOOTER, 'justify-between')}>
-            <span className="text-xs text-muted-foreground">
-              Manual Deposits: <span className="font-semibold text-foreground">{formatCurrency(Number(wallet.movement?.credits || 0))}</span>
-            </span>
-            <HoverArrowLink to={'/deposits' as any}>View deposits</HoverArrowLink>
-          </div>
-        </section>
-
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={PANEL} aria-label="PFI and inventory">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>PFI &amp; Inventory</span>
-          </div>
-          <PanelRows>
-            {/* <PanelRow label="Active PFIs" value={formatNumber(activePfis.length)} /> */}
-            <PanelRow
-              lead
-              label="Total quantity remaining"
-              hint="Across active PFIs"
-              value={formatLitres(totalRemainingLitres)}
-            />
-            <PanelRow label="Inventory value" value={formatCurrency(totalPfiValue)} />
-            {(pfi.byStatus || []).map((s: { status: string; pfiCount: number; remainingLitres?: number }) => (
-              <PanelRow
-                key={s.status}
-                label={<span className="capitalize">{s.status} PFIs</span>}
-                hint={`${formatNumber(s.pfiCount)} batch${s.pfiCount === 1 ? '' : 'es'}`}
-                value={formatLitres(s.remainingLitres || 0)}
-              />
-            ))}
-          </PanelRows>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
-            <HoverArrowLink to={'/pfi' as any}>View PFIs</HoverArrowLink>
-          </div>
-        </section>
-
-        <section className={PANEL} aria-label="Outstanding payments">
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>Outstanding payments</span>
-            {totalOutstanding > 0 && (
-              <StatusChip tone="warning" size="rail">
-                {formatCurrency(totalOutstanding)}
-              </StatusChip>
-            )}
-          </div>
-          {outstanding.customers?.length > 0 ? (
-            <>
-              <PanelRows>
-                {outstanding.customers.slice(0, 5).map((c: { customerName: string; customerType?: string; outstanding?: number }, i: number) => (
-                  <PanelRow
-                    key={c.customerName || i}
-                    label={<span className="font-medium text-foreground">{c.customerName}</span>}
-                    hint={<span className="capitalize">{c.customerType?.replace(/_/g, ' ')}</span>}
-                    tone="warning"
-                    value={formatCurrency(Number(c.outstanding || 0))}
-                  />
-                ))}
-              </PanelRows>
-              <div className={cn(PANEL_FOOTER, 'justify-end')}>
-                {/* These figures are delivery sales netted off per customer, and
-                  the customer database is where they are carried. */}
-              <HoverArrowLink to={'/delivery-customer' as any}>View all</HoverArrowLink>
-              </div>
-            </>
+      <section className={PANEL} aria-label="Waiting on you">
+        <div className={PANEL_RAIL}>
+          <span className={MICRO}>Waiting on you</span>
+        </div>
+        <div className={cn(PANEL_BODY, 'space-y-3')}>
+          {queues.length === 0 ? (
+            // Not an error state: plenty of roles have no queue of their own,
+            // and telling them "nothing to do" would be wrong. Point them at
+            // their pages instead.
+            <p className="flex items-start gap-2 rounded-lg border border-foreground/15 bg-muted/20 p-4 text-sm text-muted-foreground">
+              <CircleAlert className="mt-0.5 size-4 shrink-0" />
+              None of the tracked queues belong to your role. Your pages are below.
+            </p>
           ) : (
-            <div className={PANEL_BODY}>
-              <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-                No outstanding payments
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {waiting.map((q) => <QueueCard key={q.key} queue={q} />)}
               </div>
-            </div>
+              {clear.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {clear.map((q) => <QueueCard key={q.key} queue={q} />)}
+                </div>
+              )}
+            </>
           )}
-        </section>
-      </div>
-
-      <section className={PANEL} aria-label="Depot leaderboard">
-        <div className={PANEL_RAIL}>
-          <span className={MICRO}>Depot Ranking</span>
-          <StatusChip tone="accent" size="rail">
-            By revenue
-          </StatusChip>
         </div>
-        {/* The table's own cells are p-2 while every rail and row in a PANEL
-            is px-6, so without the gutter classes below the first column
-            starts 16px left of the heading above it. First and last cells
-            take the panel's gutter; the rest keep the table's own rhythm. */}
-        {depotLeaderboard.length > 0 ? (
-          <Table className="[&_td:first-child]:pl-6 [&_th:first-child]:pl-6 [&_td:last-child]:pr-6 [&_th:last-child]:pr-6">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12">Rank</TableHead>
-                <TableHead>Depot</TableHead>
-                <TableHead className="text-right">Orders</TableHead>
-                <TableHead className="text-right">Volume</TableHead>
-                <TableHead className="text-right">Revenue</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {depotLeaderboard.map((d: { id: string; name: string; orderCount: number; volume: number; revenue: number }, i: number) => (
-                <TableRow key={d.id}>
-                  {/* Rank is an ordinal, not a figure — it recedes so the eye
-                      goes to the depot and its revenue. The leader is the one
-                      row worth carrying extra weight. */}
-                  <TableCell className="tabular-nums text-muted-foreground">{i + 1}</TableCell>
-                  <TableCell className={cn('font-medium', i === 0 && 'font-semibold')}>{d.name}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(d.orderCount)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatLitres(d.volume)}</TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(d.revenue)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <div className={PANEL_BODY}>
-            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-              No depot data for this period
-            </div>
-          </div>
-        )}
       </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={PANEL} aria-label="Dangote orders">
+      {shortcuts.length > 0 && (
+        <section className={PANEL} aria-label="Your pages">
           <div className={PANEL_RAIL}>
-            <span className="flex items-center gap-2">
-              <Package className="size-3.5" />
-              <span className={MICRO}>Dangote delivery</span>
-            </span>
-            {dangote.totalRequests > 0 && (
-              <StatusChip tone="accent" size="rail">
-                {formatNumber(dangote.totalRequests)} requests
-              </StatusChip>
-            )}
+            <span className={MICRO}>Your pages</span>
           </div>
-          <PanelRows>
-            <PanelRow lead label="Total value" value={formatCurrency(dangote.totalValue)} />
-            <PanelRow
-              label="Paid value"
-              hint={dangote.totalValue > 0 ? `${Math.round((dangote.paidValue / dangote.totalValue) * 100)}% collected` : undefined}
-              tone="positive"
-              value={formatCurrency(dangote.paidValue)}
-            />
-            <PanelRow label="Total requests" value={formatNumber(dangote.totalRequests)} />
-            {(dangote.byStatus || []).map((s: { status: string; count: number; total: number }) => (
-              <PanelRow
-                key={s.status}
-                label={s.status}
-                hint={`${formatNumber(s.count)} request${s.count === 1 ? '' : 's'}`}
-                value={formatCurrency(Number(s.total))}
-              />
+          <div className={cn(PANEL_BODY, 'grid gap-2 sm:grid-cols-2 lg:grid-cols-4')}>
+            {shortcuts.map((item) => (
+              <Link
+                key={item.path}
+                to={item.path as any}
+                className="group flex items-center gap-2.5 rounded-lg border border-foreground/10 px-3 py-2.5 text-sm transition-colors hover:border-primary/40 hover:bg-accent/40"
+              >
+                <item.icon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                <ArrowRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              </Link>
             ))}
-          </PanelRows>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
-            <HoverArrowLink to={'/dangote-orders' as any}>View orders</HoverArrowLink>
           </div>
         </section>
-
-        <section className={PANEL} aria-label="LPG cooking gas">
-          <div className={PANEL_RAIL}>
-            <span className="flex items-center gap-2">
-              <Flame className="size-3.5" />
-              <span className={MICRO}>LPG cooking gas</span>
-            </span>
-            {lpg.totalOrders > 0 && (
-              <StatusChip tone="accent" size="rail">
-                {formatNumber(lpg.totalOrders)} orders
-              </StatusChip>
-            )}
-          </div>
-          <PanelRows>
-            <PanelRow lead label="Total value" value={formatCurrency(lpg.totalValue)} />
-            <PanelRow
-              label="Paid value"
-              hint={lpg.totalValue > 0 ? `${Math.round((lpg.paidValue / lpg.totalValue) * 100)}% collected` : undefined}
-              tone="positive"
-              value={formatCurrency(lpg.paidValue)}
-            />
-            <PanelRow label="Total orders" value={formatNumber(lpg.totalOrders)} />
-            <PanelRow
-              label="Stations"
-              hint={`${formatNumber(lpg.stations?.total || 0)} on the books`}
-              value={`${formatNumber(lpg.stations?.active || 0)} active`}
-            />
-            {(lpg.byStatus || []).map((s: { status: string; count: number; total: number }) => (
-              <PanelRow
-                key={s.status}
-                label={s.status}
-                hint={`${formatNumber(s.count)} order${s.count === 1 ? '' : 's'}`}
-                value={formatCurrency(Number(s.total))}
-              />
-            ))}
-          </PanelRows>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
-            <HoverArrowLink to={'/lpg-orders' as any}>View orders</HoverArrowLink>
-          </div>
-        </section>
-      </div>
-
-      <section className={PANEL} aria-label="Recent activity">
-        <div className={PANEL_RAIL}>
-          <span className={MICRO}>Recent activity</span>
-          <HoverArrowLink to={'/orders' as any}>View all</HoverArrowLink>
-        </div>
-        <ActivityFeed data={activity} />
-      </section>
+      )}
     </div>
   )
 }

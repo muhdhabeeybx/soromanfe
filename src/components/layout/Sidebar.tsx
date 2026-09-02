@@ -6,8 +6,36 @@ import { useAuthStore, useAdminLogout } from "#/modules/auth";
 import { useLayoutStore } from "#/stores/layoutStore";
 import { Avatar, AvatarFallback } from "#/components/ui/avatar";
 import { useRoles } from "#/lib/hooks/useRoles";
+import { useWorkQueues } from "#/lib/hooks/useDashboard";
 import { canAccessRoute, isSuperAdmin } from "#/lib/rbac";
 import { navCategories, type NavItem } from "./nav-config";
+
+/**
+ * How much work is waiting behind a nav item.
+ *
+ * Capped in display at 99+ — past that the exact figure stops being a number
+ * somebody acts on and starts being a wall the badge has to fit. The real
+ * count is still on the landing page and in the title attribute.
+ */
+function NavBadge({ count, expanded }: { count: number; expanded: boolean }) {
+  const shown = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      title={`${count.toLocaleString()} waiting`}
+      className={cn(
+        "pointer-events-none flex shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-[10px] font-semibold tabular-nums text-sidebar",
+        // Expanded: a pill at the end of the row. Collapsed: a dot pinned to
+        // the icon's corner, since there is no room for a pill and the count
+        // is unreadable at that size anyway.
+        expanded
+          ? "ml-auto h-4 min-w-4 px-1"
+          : "absolute top-1 right-1 h-3.5 min-w-3.5 px-0.5 text-[9px]",
+      )}
+    >
+      {expanded ? shown : count > 9 ? "9+" : shown}
+    </span>
+  );
+}
 
 function NavGroup({
   label,
@@ -15,12 +43,14 @@ function NavGroup({
   expanded,
   location,
   onItemClick,
+  counts,
 }: {
   label: string;
   items: NavItem[];
   expanded: boolean;
   location: { pathname: string };
   onItemClick: () => void;
+  counts: Record<string, number>;
 }) {
   return (
     <div className="mb-2">
@@ -64,6 +94,10 @@ function NavGroup({
               <span className="min-w-0 flex-1 truncate">{item.title}</span>
             )}
 
+            {counts[item.path] > 0 && (
+              <NavBadge count={counts[item.path]} expanded={expanded} />
+            )}
+
             {/* Collapsed rail needs the label on hover; inverted, like the
                 Tooltip primitive. Also fires on keyboard focus. */}
             {!expanded && (
@@ -91,6 +125,10 @@ export default function Sidebar() {
   const user = useAuthStore((s) => s.user);
   const logoutMutation = useAdminLogout();
   const { userRoles } = useRoles();
+  // Badge counts, keyed by nav path. An in-flight or failed request simply
+  // means no badges — the nav must render regardless of whether this resolves.
+  const { data: workQueues } = useWorkQueues();
+  const queueCounts = workQueues?.counts ?? {};
 
   const pageOverrides = useMemo(() => {
     const map: Record<string, boolean> = {};
@@ -107,7 +145,10 @@ export default function Sidebar() {
       .map((category) => ({
         ...category,
         items: category.items.filter((item) =>
-          canAccessRoute(userRoles, item.path, pageOverrides)
+          canAccessRoute(userRoles, item.path, pageOverrides) &&
+          // An item that names its own audience is the deliberate exception to
+          // dashboard-wide open access — see NavItem.roles.
+          (!item.roles || item.roles.some((r) => userRoles.includes(r)))
         ),
       }))
       .filter((category) => category.items.length > 0);
@@ -186,6 +227,7 @@ export default function Sidebar() {
               expanded={expanded}
               location={location}
               onItemClick={() => setMobileOpen(false)}
+              counts={queueCounts}
             />
           ))}
         </nav>

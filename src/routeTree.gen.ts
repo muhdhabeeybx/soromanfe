@@ -27,6 +27,7 @@ import { Route as BankAccountsFormRouteImport } from './routes/bank-accounts/for
 import { Route as BankStatementsIndexRouteImport } from './routes/bank-statements/index'
 import { Route as CommissionRatesIndexRouteImport } from './routes/commission-rates/index'
 import { Route as CommissionsIndexRouteImport } from './routes/commissions/index'
+import { Route as CompanyDashboardIndexRouteImport } from './routes/company-dashboard/index'
 import { Route as ConfirmedPaymentsIndexRouteImport } from './routes/confirmed-payments/index'
 import { Route as ContactsIndexRouteImport } from './routes/contacts/index'
 import { Route as CustomerDeskIndexRouteImport } from './routes/customer-desk/index'
@@ -209,6 +210,11 @@ const CommissionRatesIndexRoute = CommissionRatesIndexRouteImport.update({
 const CommissionsIndexRoute = CommissionsIndexRouteImport.update({
   id: '/commissions/',
   path: '/commissions/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompanyDashboardIndexRoute = CompanyDashboardIndexRouteImport.update({
+  id: '/company-dashboard/',
+  path: '/company-dashboard/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfirmedPaymentsIndexRoute = ConfirmedPaymentsIndexRouteImport.update({
@@ -733,6 +739,7 @@ export interface FileRoutesByFullPath {
   '/bank-statements/': typeof BankStatementsIndexRoute
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
+  '/company-dashboard/': typeof CompanyDashboardIndexRoute
   '/confirmed-payments/': typeof ConfirmedPaymentsIndexRoute
   '/contacts/': typeof ContactsIndexRoute
   '/customer-desk/': typeof CustomerDeskIndexRoute
@@ -844,6 +851,7 @@ export interface FileRoutesByTo {
   '/bank-statements': typeof BankStatementsIndexRoute
   '/commission-rates': typeof CommissionRatesIndexRoute
   '/commissions': typeof CommissionsIndexRoute
+  '/company-dashboard': typeof CompanyDashboardIndexRoute
   '/confirmed-payments': typeof ConfirmedPaymentsIndexRoute
   '/contacts': typeof ContactsIndexRoute
   '/customer-desk': typeof CustomerDeskIndexRoute
@@ -956,6 +964,7 @@ export interface FileRoutesById {
   '/bank-statements/': typeof BankStatementsIndexRoute
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
+  '/company-dashboard/': typeof CompanyDashboardIndexRoute
   '/confirmed-payments/': typeof ConfirmedPaymentsIndexRoute
   '/contacts/': typeof ContactsIndexRoute
   '/customer-desk/': typeof CustomerDeskIndexRoute
@@ -1069,6 +1078,7 @@ export interface FileRouteTypes {
     | '/bank-statements/'
     | '/commission-rates/'
     | '/commissions/'
+    | '/company-dashboard/'
     | '/confirmed-payments/'
     | '/contacts/'
     | '/customer-desk/'
@@ -1180,6 +1190,7 @@ export interface FileRouteTypes {
     | '/bank-statements'
     | '/commission-rates'
     | '/commissions'
+    | '/company-dashboard'
     | '/confirmed-payments'
     | '/contacts'
     | '/customer-desk'
@@ -1291,6 +1302,7 @@ export interface FileRouteTypes {
     | '/bank-statements/'
     | '/commission-rates/'
     | '/commissions/'
+    | '/company-dashboard/'
     | '/confirmed-payments/'
     | '/contacts/'
     | '/customer-desk/'
@@ -1403,6 +1415,7 @@ export interface RootRouteChildren {
   BankStatementsIndexRoute: typeof BankStatementsIndexRoute
   CommissionRatesIndexRoute: typeof CommissionRatesIndexRoute
   CommissionsIndexRoute: typeof CommissionsIndexRoute
+  CompanyDashboardIndexRoute: typeof CompanyDashboardIndexRoute
   ConfirmedPaymentsIndexRoute: typeof ConfirmedPaymentsIndexRoute
   ContactsIndexRoute: typeof ContactsIndexRoute
   CustomerDeskIndexRoute: typeof CustomerDeskIndexRoute
@@ -1585,6 +1598,13 @@ declare module '@tanstack/react-router' {
       path: '/commissions'
       fullPath: '/commissions/'
       preLoaderRoute: typeof CommissionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/company-dashboard/': {
+      id: '/company-dashboard/'
+      path: '/company-dashboard'
+      fullPath: '/company-dashboard/'
+      preLoaderRoute: typeof CompanyDashboardIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/confirmed-payments/': {
@@ -2284,6 +2304,7 @@ const rootRouteChildren: RootRouteChildren = {
   BankStatementsIndexRoute: BankStatementsIndexRoute,
   CommissionRatesIndexRoute: CommissionRatesIndexRoute,
   CommissionsIndexRoute: CommissionsIndexRoute,
+  CompanyDashboardIndexRoute: CompanyDashboardIndexRoute,
   ConfirmedPaymentsIndexRoute: ConfirmedPaymentsIndexRoute,
   ContactsIndexRoute: ContactsIndexRoute,
   CustomerDeskIndexRoute: CustomerDeskIndexRoute,

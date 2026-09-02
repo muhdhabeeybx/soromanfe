@@ -164,6 +164,33 @@ export function routeGuard(routePath: string): void {
 }
 
 /**
+ * Guard a page that genuinely is not everyone's business.
+ *
+ * The ordinary `routeGuard` lets any signed-in staff member through by design
+ * — access is open dashboard-wide and location/PFI scope is what narrows what
+ * people see (see canAccessRoute in rbac.ts). A `view` list in
+ * ROUTE_PERMISSIONS would therefore read like a restriction while restricting
+ * nothing, which is worse than no guard at all.
+ *
+ * This is the explicit exception, for the whole-company dashboard. It names
+ * its roles in one place, next to the nav item that names the same ones.
+ *
+ * @throws redirect to /login when signed out, or to /overview — the landing
+ *   page everyone can reach — when signed in without the role.
+ */
+export function roleOnlyGuard(allowedRoles: number[]): void {
+  if (!isAuthenticatedFromStorage()) {
+    throw redirect({ to: '/login' })
+  }
+
+  const userRoles = getCurrentUserRolesFromStorage()
+  if (isSuperAdmin(userRoles)) return
+  if (allowedRoles.some((r) => userRoles.includes(r))) return
+
+  throw redirect({ to: '/overview' })
+}
+
+/**
  * Route guard that checks a specific action permission
  * 
  * @param routePath - The route path to check permissions for
