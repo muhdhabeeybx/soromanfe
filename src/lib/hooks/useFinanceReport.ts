@@ -120,6 +120,18 @@ export interface OrderPayment {
 
   /** How this payment came to be on this order. See ConfirmationBasis. */
   confirmationBasis: ConfirmationBasis
+  /**
+   * Who has since examined a system-made attribution and vouched for it.
+   *
+   * Deliberately alongside confirmationBasis rather than replacing it: how the
+   * payment got here and who signed it off afterwards are two different facts.
+   * Overwriting the first with the second is what migration 0021 did, and it is
+   * why nobody could tell a decision a person made from one the software made.
+   */
+  reviewedAt: string | null
+  reviewNote: string
+  reviewerFirstName: string | null
+  reviewerSurname: string | null
 
   note: string
   createdAt: string
@@ -225,6 +237,8 @@ export interface FinanceReportOrder {
   systemDecided: boolean
   /** Money on this order that an external auditor can check. */
   verifiableAmount: number
+  /** System-decided AND nobody has vouched for it yet — the work queue. */
+  needsReview: boolean
 
   /** The account(s) the money was actually paid into. */
   paidInto: string[]
@@ -281,6 +295,8 @@ export interface FinanceReportTotals {
    * still have had the order chosen for it by a migration.
    */
   systemDecidedCount: number
+  /** Of those, how many nobody has vouched for yet. Shrinks as work is done. */
+  needsReviewCount: number
   /** Naira backed by a bank statement line, whoever attributed it. */
   totalVerifiableAmount: number
   /** Naira with no bank line behind it at all. */
@@ -649,6 +665,59 @@ export function useRemoveOrderPayment() {
       qc.invalidateQueries({ queryKey: ['bank-statements'] })
       qc.invalidateQueries({ queryKey: ['orders-with-surplus'] })
       toast.success(data?.message || 'Payment removed')
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+}
+
+/**
+ * Vouch for an attribution the system made on its own.
+ *
+ * Not a correction and not a reversal — no money moves. Reversal was the first
+ * instinct and the data ruled it out: none of the auto-created transfers or
+ * inferred bank lines can be undone without dropping an already-released,
+ * already-ticketed order below its own value. What was actually missing was a
+ * person's name and a reason against the decision, which is what this records.
+ *
+ * The payment keeps its confirmationBasis. The report goes on saying the system
+ * made the original call, and adds who has since stood behind it.
+ */
+export function useReviewOrderPayment() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (vars: { orderId: number; paymentId: number; note: string }) => {
+      const res = await api.post(
+        `/orders/${vars.orderId}/payments/${vars.paymentId}/review`,
+        { note: vars.note },
+      )
+      return res.data
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['finance-report'] })
+      qc.invalidateQueries({ queryKey: ['order-payments'] })
+      toast.success(data?.message || 'Payment vouched for')
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+}
+
+/** Vouch for a movement between orders — both legs at once. */
+export function useReviewOrderTransfer() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (vars: { orderId: number; transferId: number; note: string }) => {
+      const res = await api.post(
+        `/orders/${vars.orderId}/payments/transfer/${vars.transferId}/review`,
+        { note: vars.note },
+      )
+      return res.data
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['finance-report'] })
+      qc.invalidateQueries({ queryKey: ['order-payments'] })
+      toast.success(data?.message || 'Movement vouched for')
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })

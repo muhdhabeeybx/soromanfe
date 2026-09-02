@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, AlertTriangle, ArrowRightLeft, Trash2, Landmark, FileWarning } from 'lucide-react'
+import { Loader2, AlertTriangle, ArrowRightLeft, Trash2, Landmark, FileWarning, ShieldCheck } from 'lucide-react'
 import { format } from 'date-fns'
 
 import {
@@ -12,6 +12,8 @@ import { Textarea } from '#/components/ui/textarea'
 import { NumberInput } from '#/components/ui/number-input'
 import {
   useOrderPayments, useRemoveOrderPayment, useTransferOrderSurplus,
+  useReviewOrderPayment, useReviewOrderTransfer,
+  CONFIRMATION_BASIS_LABEL, isSystemDecided,
   paymentRecorder, paymentPayer, paymentPaidInto, transferOrigin, isTransferLeg, isUnreconciled,
   type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
@@ -48,6 +50,11 @@ export function OrderPaymentsDialog({
 }) {
   const { data, isLoading } = useOrderPayments(open && order ? order.id : null)
   const removePayment = useRemoveOrderPayment()
+  const reviewPayment = useReviewOrderPayment()
+  const reviewTransfer = useReviewOrderTransfer()
+  /** The system-made attribution currently being vouched for, and the reason. */
+  const [reviewing, setReviewing] = useState<OrderPayment | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
   const transfer = useTransferOrderSurplus()
 
   const [removing, setRemoving] = useState<OrderPayment | null>(null)
@@ -193,11 +200,49 @@ export function OrderPaymentsDialog({
                           Recorded by {paymentRecorder(p)}
                         </p>
                       )}
+                      {/*
+                        How this payment came to be here, and — separately —
+                        whether anybody has since stood behind it. Two facts,
+                        shown as two lines, because collapsing them into one is
+                        exactly what made a movement nobody made look like a
+                        deliberate act by a named person.
+                      */}
+                      <p className={cn(
+                        MICRO, 'mt-1',
+                        isSystemDecided(p.confirmationBasis) && !p.reviewedAt
+                          ? 'text-warning' : 'text-muted-foreground',
+                      )}>
+                        {CONFIRMATION_BASIS_LABEL[p.confirmationBasis] ?? 'Unknown'}
+                      </p>
+                      {p.reviewedAt && (
+                        <p className={cn(MICRO, 'mt-1 text-success')}>
+                          Vouched for by {[p.reviewerFirstName, p.reviewerSurname].filter(Boolean).join(' ') || 'staff'}
+                          {` on ${format(new Date(p.reviewedAt), 'd MMM yyyy')}`}
+                          {p.reviewNote ? ` — ${p.reviewNote}` : ''}
+                        </p>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span className={cn('font-semibold tabular-nums', p.amount < 0 && 'text-info')}>
                         {naira(p.amount)}
                       </span>
+                      {/*
+                        Vouching for a system-made attribution. Offered instead
+                        of removal on these rows because removal is not
+                        available in practice — none of them can be undone
+                        without dropping an already-ticketed order below its
+                        own value. What is missing is a name, not a correction.
+                      */}
+                      {isSystemDecided(p.confirmationBasis) && !p.reviewedAt && (
+                        <Button
+                          type="button" variant="ghost" size="icon"
+                          aria-label="Vouch for this attribution"
+                          title="Vouch for this attribution"
+                          onClick={() => { setReviewing(p); setReviewNote('') }}
+                        >
+                          <ShieldCheck className="size-4" />
+                        </Button>
+                      )}
                       {/* A transfer leg has no standalone remove: the two legs
                           must move together or not at all. */}
                       {!isTransferLeg(p) && (
@@ -214,6 +259,58 @@ export function OrderPaymentsDialog({
                 </div>
               ))}
             </div>
+
+            {/* Vouching for a system-made attribution. Inline for the same
+                reason as removal below: the row it refers to stays visible. */}
+            {reviewing && (
+              <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3">
+                <p className="flex items-start gap-2 text-sm">
+                  <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <span>
+                    {isTransferLeg(reviewing)
+                      ? `This movement of ${naira(Math.abs(reviewing.amount))} was created by the system, not by anyone. Vouching for it records that you have checked it — both legs together. No money moves.`
+                      : `${naira(reviewing.amount)} was attached to this order by the system, not by anyone. Vouching for it records that you have checked it. No money moves.`}
+                  </span>
+                </p>
+                <Label className={cn(MICRO, 'text-muted-foreground')}>
+                  Why is this correct? (required — this is the record)
+                </Label>
+                <Input
+                  value={reviewNote}
+                  onChange={(e) => setReviewNote(e.target.value)}
+                  placeholder="Customer confirmed by phone; payment was for this order"
+                />
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setReviewing(null)}>Cancel</Button>
+                  <Button
+                    size="sm"
+                    disabled={reviewNote.trim().length < 3 || reviewPayment.isPending || reviewTransfer.isPending}
+                    onClick={async () => {
+                      try {
+                        if (isTransferLeg(reviewing) && reviewing.transferId) {
+                          await reviewTransfer.mutateAsync({
+                            orderId: order.id, transferId: reviewing.transferId, note: reviewNote.trim(),
+                          })
+                        } else {
+                          await reviewPayment.mutateAsync({
+                            orderId: order.id, paymentId: reviewing.id, note: reviewNote.trim(),
+                          })
+                        }
+                        setReviewing(null)
+                      } catch {
+                        // The mutation raises its own toast; the panel stays
+                        // open with the reason intact so it can be retried.
+                      }
+                    }}
+                  >
+                    {(reviewPayment.isPending || reviewTransfer.isPending) && (
+                      <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                    )}
+                    Vouch for this
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Removing one payment. Kept inline rather than in a second
                 dialog so the row it refers to stays on screen behind it. */}
