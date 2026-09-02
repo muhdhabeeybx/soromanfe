@@ -224,13 +224,13 @@ function rowValues(o: FinanceReportOrder, i: number) {
  * here rather than in the query: the two views want genuinely different
  * orders, and S/N then numbers 1..n down the page in payment sequence.
  *
- * COALESCE'd to the order date the same way the server's sort is, so an
- * unpaid order (no confirmation date, present when the filter is Unpaid/All)
- * still lands in a sensible place instead of at one end.
+ * By ORDER DATE, the same column the report is filtered and dated by, so the
+ * sheet runs in the order its own Date column shows. It used to lead with the
+ * confirmation date, which put an order placed on 24 August and confirmed on
+ * 1 September a week away from where its printed date says it belongs.
  */
 function chronological(rows: FinanceReportOrder[]): FinanceReportOrder[] {
-  const at = (o: FinanceReportOrder) =>
-    new Date(o.paymentConfirmedAt || o.createdAt || 0).getTime()
+  const at = (o: FinanceReportOrder) => new Date(o.createdAt || 0).getTime()
   return [...rows].sort((a, b) => at(a) - at(b) || a.id - b.id)
 }
 
