@@ -33,6 +33,14 @@ export interface WorkQueue {
   emptyLabel: string
   action: string
   count: number
+  /**
+   * Roles that personally clear this queue, or null where nobody owns it.
+   *
+   * Drives whether the landing page words a queue as the reader's own job or
+   * as something the business is waiting on. Only expenses has an owner —
+   * final approval rests with admin and super admin.
+   */
+  approverRoles: number[] | null
   /** The count could not be computed; shown as unavailable rather than as 0. */
   failed: boolean
 }

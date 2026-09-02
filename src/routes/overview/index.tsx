@@ -103,12 +103,33 @@ function MyDashboard() {
     [data?.queues, userRoles, pageOverrides],
   )
 
-  const waiting = queues.filter((q) => q.count > 0)
-  const clear = queues.filter((q) => q.count === 0)
-
-  /** The company dashboard is for the people whose job is the whole company. */
+  /** The company overview is for the people whose job is the whole company. */
   const canSeeCompany =
     isSuperAdmin(userRoles) || userRoles.includes(ROLE_STRING_TO_ID.admin)
+
+  /**
+   * Is this queue the reader's own job, or something they are watching?
+   *
+   * Admin and super admin hold general access — they can open every desk's
+   * page without any of that work being theirs to do. Telling them five
+   * queues are "waiting on you" reads as an accusation and, worse, as a claim
+   * that they are the bottleneck on work belonging to finance, ticketing and
+   * the gate.
+   *
+   * Expenses is the exception, and a real one: final approval rests with them
+   * and nobody else can clear it. So a queue is personal when it names roles
+   * the reader holds; for anyone who is not an admin, their queues are their
+   * own as before.
+   */
+  const isMine = (q: WorkQueue) =>
+    !canSeeCompany || Boolean(q.approverRoles?.some((r) => userRoles.includes(r)))
+
+  const mine = queues.filter(isMine)
+  const overseeing = queues.filter((q) => !isMine(q))
+
+  const waitingOnMe = mine.filter((q) => q.count > 0)
+  const waitingElsewhere = overseeing.filter((q) => q.count > 0)
+  const totalWaiting = waitingOnMe.length + waitingElsewhere.length
 
   /**
    * A short list of the pages this person actually has, for getting somewhere
@@ -134,10 +155,17 @@ function MyDashboard() {
       title={`${greeting()}, ${user?.firstName || 'there'}`}
       description={
         isLoading
-          ? 'Checking what needs your attention…'
-          : waiting.length === 0
-            ? 'Nothing is waiting on you right now.'
-            : `${waiting.length === 1 ? 'One queue needs' : `${waiting.length} queues need`} your attention.`
+          ? 'Checking what needs attention…'
+          : totalWaiting === 0
+            ? canSeeCompany
+              ? 'Every queue is clear.'
+              : 'Nothing is waiting on you right now.'
+            : canSeeCompany
+              // Impersonal for an admin: these are the desks' queues, not
+              // theirs, and only the approval one is actually on them.
+              ? `${totalWaiting === 1 ? 'One queue is' : `${totalWaiting} queues are`} awaiting action` +
+                (waitingOnMe.length > 0 ? ', including one that needs your approval.' : '.')
+              : `${totalWaiting === 1 ? 'One queue needs' : `${totalWaiting} queues need`} your attention.`
       }
       actions={
         canSeeCompany ? (
@@ -158,7 +186,7 @@ function MyDashboard() {
       <div className="animate-fade-in space-y-6">
         {header}
         <section className={PANEL}>
-          <div className={PANEL_RAIL}><span className={MICRO}>Waiting on you</span></div>
+          <div className={PANEL_RAIL}><span className={MICRO}>Work queues</span></div>
           <div className={cn(PANEL_BODY, 'grid gap-3 sm:grid-cols-2')}>
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
           </div>
@@ -183,33 +211,47 @@ function MyDashboard() {
     <div className="animate-fade-in space-y-6">
       {header}
 
-      <section className={PANEL} aria-label="Waiting on you">
-        <div className={PANEL_RAIL}>
-          <span className={MICRO}>Waiting on you</span>
-        </div>
-        <div className={cn(PANEL_BODY, 'space-y-3')}>
-          {queues.length === 0 ? (
-            // Not an error state: plenty of roles have no queue of their own,
-            // and telling them "nothing to do" would be wrong. Point them at
-            // their pages instead.
+      {/* Two sections for an admin — the one queue that is genuinely theirs,
+          then everything they are simply watching. One section for everyone
+          else, because all of their queues are their own. */}
+      {mine.length > 0 && (
+        <section className={PANEL} aria-label={canSeeCompany ? 'Needs your approval' : 'Waiting on you'}>
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>{canSeeCompany ? 'Needs your approval' : 'Waiting on you'}</span>
+          </div>
+          <div className={cn(PANEL_BODY, 'grid gap-3 sm:grid-cols-2')}>
+            {mine.map((q) => <QueueCard key={q.key} queue={q} />)}
+          </div>
+        </section>
+      )}
+
+      {overseeing.length > 0 && (
+        <section className={PANEL} aria-label="Awaiting action">
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>Awaiting action</span>
+            <span className="text-xs text-muted-foreground">
+              Across the desks you oversee
+            </span>
+          </div>
+          <div className={cn(PANEL_BODY, 'grid gap-3 sm:grid-cols-2')}>
+            {overseeing.map((q) => <QueueCard key={q.key} queue={q} />)}
+          </div>
+        </section>
+      )}
+
+      {queues.length === 0 && (
+        <section className={PANEL}>
+          <div className={PANEL_RAIL}><span className={MICRO}>Your work</span></div>
+          <div className={PANEL_BODY}>
+            {/* Not an error state: plenty of roles have no tracked queue, and
+                telling them "nothing to do" would be wrong. */}
             <p className="flex items-start gap-2 rounded-lg border border-foreground/15 bg-muted/20 p-4 text-sm text-muted-foreground">
               <CircleAlert className="mt-0.5 size-4 shrink-0" />
               None of the tracked queues belong to your role. Your pages are below.
             </p>
-          ) : (
-            <>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {waiting.map((q) => <QueueCard key={q.key} queue={q} />)}
-              </div>
-              {clear.length > 0 && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {clear.map((q) => <QueueCard key={q.key} queue={q} />)}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </section>
+          </div>
+        </section>
+      )}
 
       {shortcuts.length > 0 && (
         <section className={PANEL} aria-label="Your pages">
