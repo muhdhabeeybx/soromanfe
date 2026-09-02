@@ -330,13 +330,13 @@ function ProductPricingPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="min-w-[13rem]">Depot</TableHead>
-                  <TableHead>Status</TableHead>
+                  {/* <TableHead>Status</TableHead> */}
                   {allProducts.map((prod) => (
                     <TableHead key={prod.id} className="text-right whitespace-nowrap">
                       {prod.name}
                     </TableHead>
                   ))}
-                  {!isReadOnly && <TableHead className="text-right">Actions</TableHead>}
+                  {!isReadOnly && <TableHead className="text-center">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -368,7 +368,7 @@ function ProductPricingPage() {
                             .join(' · ') || '—'}
                         </div>
                       </TableCell>
-                      <TableCell>{getStatusBadge(depot.status)}</TableCell>
+                      {/* <TableCell>{getStatusBadge(depot.status)}</TableCell> */}
 
                       {allProducts.map((prod) => {
                         const raw = priceMap.get(prod.id) ?? priceMap.get(prod.name.toLowerCase())
@@ -424,7 +424,7 @@ function ProductPricingPage() {
                               onClick={() => handleToggleStatus(depot)}
                             >
                               <Power className="size-3.5" />
-                              {depot.status === 'Active' ? 'Suspend location' : 'Activate location'}
+                              {depot.status === 'Active' ? 'Suspend' : 'Activate'}
                             </Button>
                           </div>
                         </TableCell>
