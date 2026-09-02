@@ -59,7 +59,11 @@ export const navCategories: NavCategory[] = [
     items: [
       // { title: "Home", icon: Home, path: "/home" },
       // Everyone's landing page: what is waiting on them today.
-      { title: "My Work", icon: LayoutDashboard, path: "/overview" },
+      { title: "My Dashboard", icon: LayoutDashboard, path: "/overview" },
+      // The whole-company view, sitting beside the personal one so the two
+      // read as a pair. Not everyone's business, so unlike every other item
+      // this one names its audience — see NavItem.roles.
+      { title: "Company Overview", icon: GaugeIcon, path: "/company-dashboard", roles: [0, 1] },
     ],
   },
   {
@@ -162,9 +166,6 @@ export const navCategories: NavCategory[] = [
   {
     category: "Admin",
     items: [
-      // The whole-company view. Not everyone's business, so unlike every other
-      // item this one names its audience — see NavItem.roles.
-      { title: "Company Dashboard", icon: GaugeIcon, path: "/company-dashboard", roles: [0, 1] },
       { title: "Reports Hub", icon: FileSpreadsheet, path: "/admin-reports" },
       { title: "Messaging", icon: FileText, path: "/messaging" },
       // { title: "Assign PFI", icon: FileText, path: "/orders-pfi" },

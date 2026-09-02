@@ -35,10 +35,11 @@ import { roleOnlyGuard } from '#/lib/route-guard'
 import { ROLE_STRING_TO_ID } from '#/lib/rbac'
 
 /**
- * The whole company at a glance — revenue, orders, PFI, fleet, LPG, Dangote.
+ * Company Overview — the whole business at a glance: revenue, orders, PFI,
+ * fleet, LPG, Dangote.
  *
- * Moved off /overview, which is now the "what is waiting on me" landing page
- * everyone gets. This one answers a different question, for a smaller
+ * Moved off /overview, which is now My Dashboard, the "what is waiting on me"
+ * landing page everyone gets. This one answers a different question, for a smaller
  * audience: how is the business doing. Most people do not need it and were
  * being shown it because it happened to be the page login pointed at.
  *
@@ -111,8 +112,8 @@ function OverviewDashboard() {
 
   const header = (
     <PageHeader
-      eyebrow="Overview"
-      title="Dashboard"
+      eyebrow="Company"
+      title="Company Overview"
       description={`Welcome back, ${user?.firstName || 'Admin'}. Here's what's happening ${periodLabel}.`}
       actions={<PeriodFilter value={period} onChange={setPeriod} />}
     />

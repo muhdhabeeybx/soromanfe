@@ -16,14 +16,14 @@ import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { routeGuard } from '#/lib/route-guard'
 
 /**
- * What is waiting on you — the landing page every role gets.
+ * My Dashboard — what is waiting on you, the landing page every role gets.
  *
  * This replaced the full company dashboard as the page login points at. That
  * page showed revenue, PFI stock, fleet utilisation and a depot leaderboard to
  * a gate-security officer whose entire job is on one other screen, and it was
  * the first thing all forty-odd roles saw every morning.
  *
- * The company dashboard still exists, at /company-dashboard, for the people
+ * The company overview still exists, at /company-dashboard, for the people
  * whose job is the company rather than a desk within it.
  *
  * Nothing here is role-specific by configuration. A queue shows if that person
@@ -34,7 +34,7 @@ import { routeGuard } from '#/lib/route-guard'
  */
 export const Route = createFileRoute('/overview/')({
   beforeLoad: () => routeGuard('/overview'),
-  component: MyWork,
+  component: MyDashboard,
 })
 
 /** Morning / afternoon / evening, by the reader's own clock. */
@@ -81,7 +81,7 @@ function QueueCard({ queue }: { queue: WorkQueue }) {
   )
 }
 
-function MyWork() {
+function MyDashboard() {
   const user = useAuthStore((s) => s.user)
   const { userRoles } = useRoles()
   const { data, isLoading, isError, error, refetch } = useWorkQueues()
@@ -119,7 +119,8 @@ function MyWork() {
     const items: { title: string; path: string; icon: React.ComponentType<{ className?: string }> }[] = []
     for (const group of navCategories) {
       for (const item of group.items) {
-        if (item.path === '/overview') continue
+        // This page, and the one already offered as a button in the header.
+        if (item.path === '/overview' || item.path === '/company-dashboard') continue
         if (!canAccessRoute(userRoles, item.path, pageOverrides)) continue
         items.push(item)
       }
@@ -129,7 +130,7 @@ function MyWork() {
 
   const header = (
     <PageHeader
-      eyebrow="Your work"
+      eyebrow="My dashboard"
       title={`${greeting()}, ${user?.firstName || 'there'}`}
       description={
         isLoading
@@ -145,7 +146,7 @@ function MyWork() {
             className="inline-flex items-center gap-2 rounded-lg border border-foreground/15 px-3 py-2 text-sm transition-colors hover:bg-accent"
           >
             <LayoutDashboard className="size-4" />
-            Company dashboard
+            Company overview
           </Link>
         ) : undefined
       }
