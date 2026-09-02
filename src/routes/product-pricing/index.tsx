@@ -342,19 +342,27 @@ function ProductPricingPage() {
                         const raw = priceMap.get(prod.id) ?? priceMap.get(prod.name.toLowerCase())
                         const price = Number(raw)
                         const isSet = raw !== undefined && raw !== null && !isNaN(price)
-                        // Zero is not a missing price, it is a decision: this
-                        // depot does not sell this product. Said plainly, and
-                        // differently from "nobody has set one yet".
-                        const notSold = isSet && price === 0
 
                         return (
                           <TableCell key={prod.id} className="text-right whitespace-nowrap">
+                            {/*
+                              The figure, or "Not set" where there is none.
+                              Zero prints as ₦0 rather than as a phrase: it is
+                              a price somebody entered, and a column of prices
+                              reads better as numbers than as a mixture of
+                              numbers and sentences. It stays muted, because a
+                              depot on zero is not selling — what that means is
+                              spelled out in the editor.
+                            */}
                             {!isSet ? (
                               <span className="text-xs text-muted-foreground/50 italic">Not set</span>
-                            ) : notSold ? (
-                              <span className="text-xs text-muted-foreground">Not sold here</span>
                             ) : (
-                              <span className="font-mono text-sm font-semibold">
+                              <span
+                                className={cn(
+                                  'font-mono text-sm font-semibold',
+                                  price === 0 && 'font-normal text-muted-foreground',
+                                )}
+                              >
                                 ₦{price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                               </span>
                             )}
