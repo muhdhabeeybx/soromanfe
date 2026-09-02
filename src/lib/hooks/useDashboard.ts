@@ -12,13 +12,64 @@ export function useDashboardStats() {
   })
 }
 
-export function useDashboardOverview(period: string = 'month') {
+/**
+ * The company overview for a window.
+ *
+ * Takes the query params the period control produces — either `period=<preset>`
+ * or an explicit `from`/`to` — rather than a preset string, so a custom range
+ * needs no separate hook. The response carries the resolved window and its
+ * label back, which is what every panel on the page prints.
+ */
+export function useDashboardOverview(params: Record<string, string>) {
   return useQuery({
-    queryKey: ['dashboard', 'overview', period],
+    queryKey: ['dashboard', 'overview', params],
     staleTime: 30_000,
+    placeholderData: (prev) => prev,
     queryFn: async () => {
-      const res = await api.get(`/dashboard/overview?period=${period}`)
+      const res = await api.get('/dashboard/overview', { params })
       return res.data.data
+    },
+  })
+}
+
+/** One entry in the activity log. */
+export interface ActivityEntry {
+  id: number
+  action: string
+  entityType: string
+  entityId: string
+  prevState: string | null
+  newState: string | null
+  actorType: string
+  actorName: string | null
+  createdAt: string
+  metadata: Record<string, unknown> | null
+}
+
+/**
+ * The activity log, paginated.
+ *
+ * The overview shows the newest ten from the same endpoint, so the feed there
+ * and the full page can never tell different stories.
+ */
+export function useActivity(params: {
+  page?: number
+  limit?: number
+  entityType?: string
+  action?: string
+  from?: string
+  to?: string
+} = {}) {
+  return useQuery({
+    queryKey: ['dashboard', 'activity', params],
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+    queryFn: async () => {
+      const res = await api.get('/dashboard/activity', { params })
+      return res.data.data as {
+        activity: ActivityEntry[]
+        pagination: { page: number; limit: number; total: number; pages: number }
+      }
     },
   })
 }

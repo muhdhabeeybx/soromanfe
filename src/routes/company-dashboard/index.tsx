@@ -7,7 +7,7 @@ import { StatusChip } from '#/components/ui/status-chip'
 import { HoverArrowLink } from '#/components/ui/hover-arrow-link'
 import { Skeleton } from '#/components/ui/skeleton'
 import { PanelRow, PanelRows } from '#/components/ui/panel-row'
-import { PeriodFilter, PERIOD_LABELS, type Period } from '#/components/overview/PeriodFilter'
+import { PeriodFilter, periodParams, type PeriodValue } from '#/components/overview/PeriodFilter'
 import { RevenueTrendChart } from '#/components/overview/RevenueTrendChart'
 import { ActivityFeed } from '#/components/overview/ActivityFeed'
 import { useDashboardOverview } from '#/lib/hooks/useDashboard'
@@ -102,19 +102,26 @@ function OverviewSkeleton() {
 }
 
 function OverviewDashboard() {
-  const [period, setPeriod] = useState<Period>('month')
-  const { data, isLoading, isError, error, refetch } = useDashboardOverview(period)
+  const [period, setPeriod] = useState<PeriodValue>({ period: 'month' })
+  const { data, isLoading, isError, error, refetch } = useDashboardOverview(periodParams(period))
   const user = useAuthStore((s) => s.user)
 
-  // Named off the filter rather than the response, so the sentence under the
-  // title is already right while the request is still in flight.
-  const periodLabel = PERIOD_LABELS[period].toLowerCase()
+  /**
+   * The window the figures on this page describe, as the server named it.
+   *
+   * Taken from the response rather than derived here, so the heading, every
+   * panel rail and the export all say the same thing — and say it exactly:
+   * "August 2026", "3 Sep 2026 – 17 Sep 2026". The page used to lowercase a
+   * preset's own button label, which could only ever describe the four
+   * presets that existed.
+   */
+  const periodLabel: string = data?.period?.label || 'the selected period'
 
   const header = (
     <PageHeader
       eyebrow="Company"
       title="Company Overview"
-      description={`Welcome back, ${user?.firstName || 'Admin'}. Here's what's happening ${periodLabel}.`}
+      description={`Welcome back, ${user?.firstName || 'Admin'}. Showing ${periodLabel}.`}
       actions={<PeriodFilter value={period} onChange={setPeriod} />}
     />
   )
@@ -143,14 +150,26 @@ function OverviewDashboard() {
   }
 
   const rev = data?.revenue || {}
+  /** Rebuilt server-side on order_payments — see services/overview.service.js. */
+  const fin = data?.finance || {
+    orderCount: 0, partPaidCount: 0, billed: 0, received: 0, shortfall: 0, surplus: 0,
+    deliveryPayments: 0, deliveryEntries: 0, awaitingPayment: 0, awaitingPaymentValue: 0,
+  }
+  const inv = data?.inventory || { openPfis: 0, totalPfis: 0, remainingLitres: 0, startingLitres: 0, byProduct: [] }
   const orders = data?.orders || { totals: {}, byStatus: [] }
-  const wallet = data?.wallet || { movement: {}, balances: {}, activeHolds: {} }
-  const pfi = data?.pfi || { byStatus: [] }
   const outstanding = data?.outstanding || { totalOutstanding: 0, customers: [] }
   const fleet = data?.fleet || { total: 0, inTransit: 0, idle: 0, maintenance: 0 }
   const cust = data?.customers || { total: 0, newThisPeriod: 0 }
   const trend = data?.revenueTrend || []
-  const activity = data?.recentActivity || []
+  /**
+   * The newest ten, from audit_logs.
+   *
+   * `recentActivity` read audit_events — 182 rows against the 50,327 in
+   * audit_logs — so the feed looked empty because it was reading the wrong
+   * table. Same source as the full activity page now.
+   */
+  const activity = data?.activity?.rows || []
+  const activityTotal = data?.activity?.total || 0
   const depotLeaderboard = data?.depotLeaderboard || []
   const dangote = data?.dangote || { totalRequests: 0, totalValue: 0, paidValue: 0, byStatus: [] }
   const lpg = data?.lpg || { totalOrders: 0, totalValue: 0, paidValue: 0, stations: { total: 0, active: 0 }, byStatus: [] }
@@ -160,9 +179,6 @@ function OverviewDashboard() {
   const fleetUtilization = fleet.total > 0 ? Math.round(((fleet.inTransit || 0) / fleet.total) * 100) : 0
   const totalOutstanding = outstanding.totalOutstanding || 0
 
-  const activePfis = pfi.byStatus?.filter((s: { status: string }) => s.status === 'active') || []
-  const totalRemainingLitres = activePfis.reduce((sum: number, p: { remainingLitres?: number }) => sum + (p.remainingLitres || 0), 0)
-  const totalPfiValue = activePfis.reduce((sum: number, p: { totalValue?: number }) => sum + Number(p.totalValue || 0), 0)
 
   return (
     <div className="animate-fade-in space-y-6">
@@ -255,56 +271,120 @@ function OverviewDashboard() {
         <section className={PANEL} aria-label="Financial summary">
           <div className={PANEL_RAIL}>
             <span className={MICRO}>Financial summary</span>
+            <span className="text-xs text-muted-foreground">{periodLabel}</span>
           </div>
           <PanelRows>
-            {/* Total revenue is the headline — everything under it is a
-                component of it or a position alongside it. */}
-            <PanelRow lead label="Total revenue" value={formatCurrency(combinedRevenue)} />
-            <PanelRow label="Order revenue" value={formatCurrency(rev.orders?.total || 0)} />
-            {/* <PanelRow label="Offline sales" value={formatCurrency(rev.offlineSales?.total || 0)} /> */}
-            {/* <PanelRow label="Delivery payments" value={formatCurrency(rev.deliverySales?.paymentAmount || 0)} /> */}
-            <PanelRow label="Customer wallets" value={formatCurrency(Number(wallet.balances?.totalBalance || 0))} />
+            {/*
+              Billed and received, as two named figures — not one "Total
+              revenue" that quietly added the truck-sales ledger to order
+              revenue and then showed only the order half beneath it. For
+              August that headline read ₦77.68bn against a ₦73.78bn component,
+              with the ₦3.9bn difference nowhere on the page.
+
+              Both come from order_payments, the same table the finance report
+              reconciles against the bank statement, so the two screens cannot
+              disagree.
+            */}
             <PanelRow
-              label="Active holds"
-              hint="Committed against unreleased orders"
-              tone="warning"
-              value={formatCurrency(Number(wallet.activeHolds?.totalHeld || 0))}
+              lead
+              label="Received"
+              hint="Money in, at the bank's own figure"
+              value={formatCurrency(fin.received)}
+            />
+            <PanelRow label="Billed" hint={`${formatNumber(fin.orderCount)} orders`} value={formatCurrency(fin.billed)} />
+            {fin.shortfall > 0 && (
+              <PanelRow
+                label="Still owed on those orders"
+                tone="warning"
+                value={formatCurrency(fin.shortfall)}
+              />
+            )}
+            {fin.surplus > 0 && (
+              <PanelRow
+                label="Surplus held on orders"
+                hint="Received beyond the order's value"
+                value={formatCurrency(fin.surplus)}
+              />
+            )}
+            {/* A separate book, and labelled as one. Folding this into an
+                order figure is what made the old headline unexplainable. */}
+            <PanelRow
+              label="Truck sales ledger"
+              hint={`${formatNumber(fin.deliveryEntries)} entries · counted separately`}
+              value={formatCurrency(fin.deliveryPayments)}
             />
           </PanelRows>
           <div className={cn(PANEL_FOOTER, 'justify-between')}>
             <span className="text-xs text-muted-foreground">
-              Manual Deposits: <span className="font-semibold text-foreground">{formatCurrency(Number(wallet.movement?.credits || 0))}</span>
+              Awaiting payment:{' '}
+              <span className="font-semibold text-foreground">
+                {formatNumber(fin.awaitingPayment)} order{fin.awaitingPayment === 1 ? '' : 's'} ·{' '}
+                {formatCurrency(fin.awaitingPaymentValue)}
+              </span>
             </span>
-            <HoverArrowLink to={'/deposits' as any}>View deposits</HoverArrowLink>
+            <HoverArrowLink to={'/confirmed-payments' as any}>Finance report</HoverArrowLink>
           </div>
         </section>
 
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={PANEL} aria-label="PFI and inventory">
+        <section className={PANEL} aria-label="Inventory">
           <div className={PANEL_RAIL}>
-            <span className={MICRO}>PFI &amp; Inventory</span>
+            <span className={MICRO}>Inventory</span>
+            <span className="text-xs text-muted-foreground">
+              {formatNumber(inv.openPfis)} PFI{inv.openPfis === 1 ? '' : 's'} open of{' '}
+              {formatNumber(inv.totalPfis)}
+            </span>
           </div>
-          <PanelRows>
-            {/* <PanelRow label="Active PFIs" value={formatNumber(activePfis.length)} /> */}
-            <PanelRow
-              lead
-              label="Total quantity remaining"
-              hint="Across active PFIs"
-              value={formatLitres(totalRemainingLitres)}
-            />
-            <PanelRow label="Inventory value" value={formatCurrency(totalPfiValue)} />
-            {(pfi.byStatus || []).map((s: { status: string; pfiCount: number; remainingLitres?: number }) => (
-              <PanelRow
-                key={s.status}
-                label={<span className="capitalize">{s.status} PFIs</span>}
-                hint={`${formatNumber(s.pfiCount)} batch${s.pfiCount === 1 ? '' : 'es'}`}
-                value={formatLitres(s.remainingLitres || 0)}
-              />
-            ))}
-          </PanelRows>
-          <div className={cn(PANEL_FOOTER, 'justify-end')}>
+          <div className={cn(PANEL_BODY, 'space-y-3')}>
+            {/*
+              Stock, and nothing else. This panel led with a naira figure —
+              the value of remaining stock — so the one question it exists to
+              answer, "how much AGO have we got left", could not be answered
+              from it. Litres per product, with the names the desk uses.
+            */}
+            {inv.byProduct.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No open PFIs.</p>
+            ) : (
+              inv.byProduct.map((p: any) => (
+                <div key={p.product} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm font-medium">
+                      {p.shortName}
+                      {p.shortName !== p.product && (
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          {p.product}
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-mono text-sm font-semibold tabular-nums">
+                      {formatLitres(p.remainingLitres)}
+                    </span>
+                  </div>
+                  {/* How much of the intake has gone. A stock panel wants the
+                      proportion as much as the figure. */}
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.min(100, p.soldPct)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>
+                      {p.soldPct}% sold · {p.pfiCount} PFI{p.pfiCount === 1 ? '' : 's'}
+                    </span>
+                    <span>of {formatLitres(p.startingLitres)}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className={cn(PANEL_FOOTER, 'justify-between')}>
+            <span className="text-xs text-muted-foreground">
+              Total remaining:{' '}
+              <span className="font-semibold text-foreground">{formatLitres(inv.remainingLitres)}</span>
+            </span>
             <HoverArrowLink to={'/pfi' as any}>View PFIs</HoverArrowLink>
           </div>
         </section>
@@ -473,7 +553,9 @@ function OverviewDashboard() {
       <section className={PANEL} aria-label="Recent activity">
         <div className={PANEL_RAIL}>
           <span className={MICRO}>Recent activity</span>
-          <HoverArrowLink to={'/orders' as any}>View all</HoverArrowLink>
+          <HoverArrowLink to={'/activity' as any}>
+            View all {activityTotal ? formatNumber(activityTotal) : ''}
+          </HoverArrowLink>
         </div>
         <ActivityFeed data={activity} />
       </section>

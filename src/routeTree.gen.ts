@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetPasswordRouteImport } from './routes/set-password'
+import { Route as ActivityIndexRouteImport } from './routes/activity/index'
 import { Route as AdminOrderIndexRouteImport } from './routes/admin-order/index'
 import { Route as AdminOrderDangoteRequestFormRouteImport } from './routes/admin-order/dangote-request-form'
 import { Route as AdminOrderDepotRouteImport } from './routes/admin-order/depot'
@@ -133,6 +134,11 @@ const LoginRoute = LoginRouteImport.update({
 const SetPasswordRoute = SetPasswordRouteImport.update({
   id: '/set-password',
   path: '/set-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActivityIndexRoute = ActivityIndexRouteImport.update({
+  id: '/activity/',
+  path: '/activity/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminOrderIndexRoute = AdminOrderIndexRouteImport.update({
@@ -732,6 +738,7 @@ export interface FileRoutesByFullPath {
   '/ticket/generate': typeof TicketGenerateRoute
   '/vendors/details': typeof VendorsDetailsRoute
   '/vendors/form': typeof VendorsFormRoute
+  '/activity/': typeof ActivityIndexRoute
   '/admin-order/': typeof AdminOrderIndexRoute
   '/admin-reports/': typeof AdminReportsIndexRoute
   '/admin/': typeof AdminIndexRoute
@@ -844,6 +851,7 @@ export interface FileRoutesByTo {
   '/ticket/generate': typeof TicketGenerateRoute
   '/vendors/details': typeof VendorsDetailsRoute
   '/vendors/form': typeof VendorsFormRoute
+  '/activity': typeof ActivityIndexRoute
   '/admin-order': typeof AdminOrderIndexRoute
   '/admin-reports': typeof AdminReportsIndexRoute
   '/admin': typeof AdminIndexRoute
@@ -957,6 +965,7 @@ export interface FileRoutesById {
   '/ticket/generate': typeof TicketGenerateRoute
   '/vendors/details': typeof VendorsDetailsRoute
   '/vendors/form': typeof VendorsFormRoute
+  '/activity/': typeof ActivityIndexRoute
   '/admin-order/': typeof AdminOrderIndexRoute
   '/admin-reports/': typeof AdminReportsIndexRoute
   '/admin/': typeof AdminIndexRoute
@@ -1071,6 +1080,7 @@ export interface FileRouteTypes {
     | '/ticket/generate'
     | '/vendors/details'
     | '/vendors/form'
+    | '/activity/'
     | '/admin-order/'
     | '/admin-reports/'
     | '/admin/'
@@ -1183,6 +1193,7 @@ export interface FileRouteTypes {
     | '/ticket/generate'
     | '/vendors/details'
     | '/vendors/form'
+    | '/activity'
     | '/admin-order'
     | '/admin-reports'
     | '/admin'
@@ -1295,6 +1306,7 @@ export interface FileRouteTypes {
     | '/ticket/generate'
     | '/vendors/details'
     | '/vendors/form'
+    | '/activity/'
     | '/admin-order/'
     | '/admin-reports/'
     | '/admin/'
@@ -1408,6 +1420,7 @@ export interface RootRouteChildren {
   TicketGenerateRoute: typeof TicketGenerateRoute
   VendorsDetailsRoute: typeof VendorsDetailsRoute
   VendorsFormRoute: typeof VendorsFormRoute
+  ActivityIndexRoute: typeof ActivityIndexRoute
   AdminOrderIndexRoute: typeof AdminOrderIndexRoute
   AdminReportsIndexRoute: typeof AdminReportsIndexRoute
   AdminIndexRoute: typeof AdminIndexRoute
@@ -1493,6 +1506,13 @@ declare module '@tanstack/react-router' {
       path: '/set-password'
       fullPath: '/set-password'
       preLoaderRoute: typeof SetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/activity/': {
+      id: '/activity/'
+      path: '/activity'
+      fullPath: '/activity/'
+      preLoaderRoute: typeof ActivityIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin-order/': {
@@ -2297,6 +2317,7 @@ const rootRouteChildren: RootRouteChildren = {
   TicketGenerateRoute: TicketGenerateRoute,
   VendorsDetailsRoute: VendorsDetailsRoute,
   VendorsFormRoute: VendorsFormRoute,
+  ActivityIndexRoute: ActivityIndexRoute,
   AdminOrderIndexRoute: AdminOrderIndexRoute,
   AdminReportsIndexRoute: AdminReportsIndexRoute,
   AdminIndexRoute: AdminIndexRoute,

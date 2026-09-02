@@ -167,6 +167,7 @@ export const navCategories: NavCategory[] = [
     category: "Admin",
     items: [
       { title: "Reports Hub", icon: FileSpreadsheet, path: "/admin-reports" },
+      { title: "Activity Log", icon: ClipboardList, path: "/activity" },
       { title: "Messaging", icon: FileText, path: "/messaging" },
       // { title: "Assign PFI", icon: FileText, path: "/orders-pfi" },
       { title: "Product Pricing", icon: Fuel, path: "/product-pricing" },
