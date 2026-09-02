@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
-  orderPaidInto, orderCompany, orderSalesValue,
+  orderPaidInto, orderCompany, orderSalesValue, CONFIRMATION_BASIS_LABEL,
   type FinanceReportOrder, type OrderPayment, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -166,6 +166,17 @@ const COLUMNS: Array<{
   { header: 'Balance', key: 'balance', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
+  /**
+   * HOW this payment came to be attached to this order.
+   *
+   * "Recorded By" beside it answers a weaker question and was being read as
+   * though it answered this one: on a backfilled row it names whoever keyed in
+   * the underlying deposit, not whoever decided that deposit paid for this
+   * order — and on most rows nobody decided, the old oldest-credit-first walk
+   * did. An exported report that goes to an auditor has to carry the
+   * difference, so it is a column of its own.
+   */
+  { header: 'Confirmed By', key: 'confirmedBy', width: 34, scope: 'funding' },
 ]
 
 /** The columns, in order, with whether each is filled on an order row or a funding sub-row. */
@@ -268,6 +279,12 @@ function paymentRowValues(p: OrderPayment) {
     // moved — those are different facts and the column below says which.
     depositDate: when.date ? new Date(when.date) : null,
     recordedBy: up(paymentRecorder(p) || '—'),
+    /**
+     * The provenance of the attribution, spelled out rather than abbreviated:
+     * this column exists for somebody outside the business reading the sheet
+     * cold, and "AUTO" would mean nothing to them.
+     */
+    confirmedBy: up(CONFIRMATION_BASIS_LABEL[p.confirmationBasis] || 'UNKNOWN'),
   }
 }
 
@@ -721,6 +738,7 @@ export async function exportFinanceReportPdf(
           amount: pv.amount == null ? '' : naira(pv.amount),
           transfers: pv.transfers == null ? '' : naira(pv.transfers),
           recordedBy: pv.recordedBy,
+          confirmedBy: pv.confirmedBy,
         }),
       )
     }

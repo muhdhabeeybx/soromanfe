@@ -31,8 +31,9 @@ import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate,
   transferOrigin, visiblePayments, legacyAmount,
   orderPaidInto, orderCompany,
-  paymentBreakdown, isTransferLeg, isUnreconciled,
-  type FinanceReportOrder, type OrderPayment,
+  paymentBreakdown, isTransferLeg, isUnreconciled, isSystemDecided,
+  CONFIRMATION_BASIS_LABEL, CONFIRMATION_BASIS_SHORT,
+  type FinanceReportOrder, type OrderPayment, type ConfirmationBasis,
 } from '#/lib/hooks/useFinanceReport'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
@@ -205,6 +206,29 @@ function PaymentCard({ payment }: { payment: OrderPayment }) {
           {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
         </span>
       </div>
+
+      {/*
+        How this payment came to be on this order — stated on every card, not
+        only the awkward ones, so the clean case is visibly clean rather than
+        merely unmarked. A staff decision reads plainly; anything the software
+        decided on its own is called out, because that is the set somebody has
+        to go back through.
+      */}
+      <p className={cn(
+        'mb-2 flex items-start gap-1.5 text-xs',
+        isSystemDecided(payment.confirmationBasis) ? 'text-warning' : 'text-muted-foreground',
+      )}>
+        {isSystemDecided(payment.confirmationBasis) && <AlertTriangle className="mt-0.5 size-3 shrink-0" />}
+        <span>
+          {CONFIRMATION_BASIS_LABEL[payment.confirmationBasis] ?? 'Unknown'}
+          {payment.confirmationBasis === 'transfer_auto' &&
+            ' — converted from an old wallet draw by migration 0021, not made on the transfer screen.'}
+          {payment.confirmationBasis === 'bank_inferred' &&
+            ' — the statement line is real, but which order it settles was not recorded at the time.'}
+          {payment.confirmationBasis === 'auto_allocated' &&
+            ' — the oldest unspent credit was taken, for no recorded reason.'}
+        </span>
+      </p>
 
       {legacy ? (
         // Said plainly rather than left as empty cells. This order was
@@ -438,6 +462,18 @@ function FinanceReportPage() {
    * plausible-looking funding trail is what the old report did.
    */
   const [reconciliation, setReconciliation] = useState<'' | 'reconciled' | 'unreconciled'>('')
+  /**
+   * WHO decided this order was paid — a different question from whether a bank
+   * line exists, and the one behind most of the confusion on this page.
+   *
+   * An order can be "bank-matched" and still have had the order chosen for it
+   * by migration 0021's tiebreak rather than by a person; and every transfer
+   * currently on the report was converted out of an old wallet draw by that
+   * same migration, not made by anyone on the transfer screen. 'system' is the
+   * set nobody in the building can give an account of.
+   */
+  const [confirmationBasis, setConfirmationBasis] =
+    useState<'' | 'system' | 'staff' | ConfirmationBasis>('')
   const [locationId, setLocationId] = useState(ALL)
   const [pfiId, setPfiId] = useState(ALL)
   const [productId, setProductId] = useState(ALL)
@@ -477,6 +513,7 @@ function FinanceReportPage() {
     // Omitted on purpose for 'received' — see the state declaration above.
     paymentStatus: paymentStatus === 'received' ? undefined : paymentStatus,
     reconciliation: reconciliation || undefined,
+    confirmationBasis: confirmationBasis || undefined,
     depotId: locationId || undefined,
     pfiId: pfiId || undefined,
     productId: productId || undefined,
@@ -500,8 +537,8 @@ function FinanceReportPage() {
   const rows = useMemo(() => data?.orders || [], [data])
   const totals = data?.totals
   const hasFilters = !!(
-    search || paymentStatus !== 'received' || reconciliation || locationId || pfiId || productId ||
-    datePreset !== 'today'
+    search || paymentStatus !== 'received' || reconciliation || confirmationBasis ||
+    locationId || pfiId || productId || datePreset !== 'today'
   )
 
   const selectedDepot = useMemo(() => depots.find((d) => idOf(d) === locationId), [depots, locationId])
@@ -736,6 +773,25 @@ function FinanceReportPage() {
           <option value="reconciled">Bank-matched only</option>
           <option value="unreconciled">No bank record</option>
         </NativeSelect>
+        {/* Who decided, as against whether a bank line exists. These are
+            different questions and the page kept only being able to ask the
+            first one — which is why a transfer nobody made read exactly like
+            one somebody did. */}
+        <NativeSelect
+          className="w-56"
+          value={confirmationBasis}
+          onChange={(e) => setConfirmationBasis(e.target.value as any)}
+        >
+          <option value="">Confirmed by anyone</option>
+          <option value="staff">Staff decisions only</option>
+          <option value="system">System decided — needs review</option>
+          <option value="bank_matched">{CONFIRMATION_BASIS_SHORT.bank_matched}</option>
+          <option value="bank_inferred">{CONFIRMATION_BASIS_SHORT.bank_inferred}</option>
+          <option value="auto_allocated">{CONFIRMATION_BASIS_SHORT.auto_allocated}</option>
+          <option value="no_record">{CONFIRMATION_BASIS_SHORT.no_record}</option>
+          <option value="transfer_auto">{CONFIRMATION_BASIS_SHORT.transfer_auto}</option>
+          <option value="transfer_desk">{CONFIRMATION_BASIS_SHORT.transfer_desk}</option>
+        </NativeSelect>
         <NativeSelect
           className="w-44"
           value={locationId}
@@ -891,6 +947,24 @@ function FinanceReportPage() {
               breakdown.unreconciledCount > 0
                 ? `${breakdown.unreconciledCount.toLocaleString()} with no statement line behind them`
                 : 'Every order matches a bank statement line'
+            }
+          />
+          {/*
+            The question "who decided this?", which the report could not answer
+            at all until migration 0023 recorded it. It is deliberately next to
+            Bank-verifiable and deliberately not the same figure: an order can
+            have a real statement line behind it AND have had that line
+            attributed to it by a migration's tiebreak rather than by a person.
+          */}
+          <SummaryItem
+            icon={AlertTriangle}
+            tone={(totals?.systemDecidedCount ?? 0) > 0 ? 'owed' : 'plain'}
+            label="System-decided orders"
+            value={`${(totals?.systemDecidedCount ?? 0).toLocaleString()} of ${summary.count.toLocaleString()}`}
+            hint={
+              (totals?.systemDecidedCount ?? 0) > 0
+                ? 'Nobody chose how these were funded — the software did. Filter to them above.'
+                : 'Every payment here was a recorded staff decision'
             }
           />
           <SummaryItem

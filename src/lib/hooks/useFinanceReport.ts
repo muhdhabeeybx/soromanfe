@@ -38,6 +38,64 @@ import { getErrorMessage } from '#/lib/utils'
  */
 export type PaymentSource = 'statement' | 'transfer_in' | 'transfer_out' | 'legacy'
 
+/**
+ * HOW a payment came to be attached to its order — the provenance question,
+ * which is not the same as whether a bank line exists.
+ *
+ * Until this was recorded (Sman-Backend migration 0023), a line a colleague
+ * matched by hand and one the old oldest-credit-first wallet walk picked on
+ * its own rendered identically on this report. They are not the same fact and
+ * the page no longer pretends they are.
+ */
+export type ConfirmationBasis =
+  /** A person named this bank line for this order. Checkable against a statement. */
+  | 'bank_matched'
+  /** The bank line is real; a migration chose which order it settles. */
+  | 'bank_inferred'
+  /** The old wallet walk picked a deposit. No bank line at all. */
+  | 'auto_allocated'
+  /** No funding record ever existed; the amount is the order's own figure. */
+  | 'no_record'
+  /** A person moved surplus between orders deliberately. */
+  | 'transfer_desk'
+  /** A migration converted an old wallet draw into a transfer. Nobody chose it. */
+  | 'transfer_auto'
+  | 'unknown'
+
+/** What the report prints for each basis. Mirrors the server's own labels. */
+export const CONFIRMATION_BASIS_LABEL: Record<ConfirmationBasis, string> = {
+  bank_matched: 'Matched to bank statement by staff',
+  bank_inferred: 'Bank line real — order chosen by the system',
+  auto_allocated: 'Auto-allocated from wallet — no bank line',
+  no_record: 'No payment record exists',
+  transfer_desk: 'Transfer recorded by staff',
+  transfer_auto: 'Transfer auto-created by the system',
+  unknown: 'Unknown',
+}
+
+/** Short form, for a chip in a table cell where the full label will not fit. */
+export const CONFIRMATION_BASIS_SHORT: Record<ConfirmationBasis, string> = {
+  bank_matched: 'Bank · staff',
+  bank_inferred: 'Bank · system chose order',
+  auto_allocated: 'Auto-allocated',
+  no_record: 'No record',
+  transfer_desk: 'Transfer · staff',
+  transfer_auto: 'Transfer · system',
+  unknown: 'Unknown',
+}
+
+/** The two an external auditor can tie to a statement line. */
+export const VERIFIABLE_BASES: ConfirmationBasis[] = ['bank_matched', 'bank_inferred']
+
+/** Bases where no person chose the attribution — software did. */
+export const SYSTEM_DECIDED_BASES: ConfirmationBasis[] = [
+  'bank_inferred', 'auto_allocated', 'no_record', 'transfer_auto', 'unknown',
+]
+
+export function isSystemDecided(basis: ConfirmationBasis | null | undefined): boolean {
+  return !!basis && SYSTEM_DECIDED_BASES.includes(basis)
+}
+
 /** One payment recorded against an order. */
 export interface OrderPayment {
   id: number
@@ -59,6 +117,9 @@ export interface OrderPayment {
   bankName: string
   accountName: string
   accountNumber: string
+
+  /** How this payment came to be on this order. See ConfirmationBasis. */
+  confirmationBasis: ConfirmationBasis
 
   note: string
   createdAt: string
@@ -147,6 +208,24 @@ export interface FinanceReportOrder {
    * external auditor can verify from what they cannot.
    */
   reconciled: boolean
+
+  /**
+   * The WEAKEST basis on the order — an order is only as auditable as its
+   * least defensible payment, so one unaccountable row is not allowed to hide
+   * behind a clean one.
+   */
+  confirmationBasis: ConfirmationBasis | null
+  confirmationBasisLabel: string | null
+  /** Every distinct basis on the order, so a mixed order can say so. */
+  confirmationBases: ConfirmationBasis[]
+  /**
+   * No person chose how this order was funded — the system did. This is the
+   * set of orders whose story nobody in the building can tell.
+   */
+  systemDecided: boolean
+  /** Money on this order that an external auditor can check. */
+  verifiableAmount: number
+
   /** The account(s) the money was actually paid into. */
   paidInto: string[]
 }
@@ -161,6 +240,11 @@ export interface FinanceReportParams {
   paymentStatus?: 'Paid' | 'Part Paid' | 'Unpaid' | 'all'
   /** Narrow to what an audit can check, or to what it cannot. */
   reconciliation?: 'reconciled' | 'unreconciled'
+  /**
+   * Narrow by who decided the attribution. 'system' is every order carrying a
+   * payment nobody chose; 'staff' is the complement; a bare basis is exact.
+   */
+  confirmationBasis?: 'system' | 'staff' | ConfirmationBasis
   dateFrom?: string
   dateTo?: string
   depotId?: string | number
@@ -191,6 +275,16 @@ export interface FinanceReportTotals {
   reconciledCount: number
   unreconciledCount: number
   partPaidCount: number
+  /**
+   * Orders holding at least one payment the system attributed on its own.
+   * Distinct from unreconciledCount: an order can have a genuine bank line and
+   * still have had the order chosen for it by a migration.
+   */
+  systemDecidedCount: number
+  /** Naira backed by a bank statement line, whoever attributed it. */
+  totalVerifiableAmount: number
+  /** Naira with no bank line behind it at all. */
+  totalUnverifiableAmount: number
 }
 
 /**
