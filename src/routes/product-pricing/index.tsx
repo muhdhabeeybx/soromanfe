@@ -17,7 +17,7 @@ import {
 } from '#/components/ui/dialog'
 import { Pencil, Power, Loader2, CheckCircle, Fuel, Warehouse, Eye, EyeOff, CircleSlash } from 'lucide-react'
 import { cn } from '#/lib/utils'
-import { useDepots, useUpdateDepotProductPrices, useToggleDepotStatus } from '#/lib/hooks/useDepots'
+import { useDepots, useUpdateDepotProductPrices, useToggleDepotStatus, useZeroAllDepotPrices } from '#/lib/hooks/useDepots'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
@@ -102,6 +102,9 @@ function ProductPricingPage() {
    * places actually trading a minority of the page.
    */
   const [showSuspended, setShowSuspended] = useState(false)
+  /** Confirming the one action here that touches every depot at once. */
+  const [zeroingAll, setZeroingAll] = useState(false)
+  const zeroAll = useZeroAllDepotPrices()
 
   const updatePricesMutation = useUpdateDepotProductPrices()
   const toggleStatusMutation = useToggleDepotStatus()
@@ -165,6 +168,23 @@ function ProductPricingPage() {
 
   const suspendedCount = useMemo(
     () => depots.filter((d: any) => isSuspended(d.status)).length,
+    [depots],
+  )
+
+  /**
+   * How many prices "Set all to 0" would actually move.
+   *
+   * Counted across every depot, not just the ones on screen — the action is
+   * global, so a confirmation that quoted the visible rows would understate
+   * it whenever suspended depots are hidden, which is by default.
+   */
+  const pricedCount = useMemo(
+    () =>
+      depots.reduce(
+        (n: number, d: any) =>
+          n + (d.productPrices || []).filter((pp: any) => Number(pp.currentPrice) > 0).length,
+        0,
+      ),
     [depots],
   )
 
@@ -252,6 +272,18 @@ function ProductPricingPage() {
         eyebrow="Operations"
         title="Depot Product Pricing"
         description="Current selling price per product at each depot hub."
+        actions={
+          !isReadOnly && pricedCount > 0 ? (
+            <Button
+              variant="outline"
+              className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setZeroingAll(true)}
+            >
+              <CircleSlash className="size-4" />
+              Set all prices to 0
+            </Button>
+          ) : undefined
+        }
       />
 
       {isLoading ? (
@@ -406,6 +438,56 @@ function ProductPricingPage() {
         </div>
       )}
 
+      {/*
+        The one action on this page that touches every depot at once, so it
+        asks first — and says exactly how many prices it will move and what
+        the consequence is, rather than "are you sure?".
+      */}
+      <Dialog open={zeroingAll} onOpenChange={(o) => !o && setZeroingAll(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set every price to 0?</DialogTitle>
+            <DialogDescription>
+              This takes <strong>{pricedCount}</strong> price
+              {pricedCount === 1 ? '' : 's'} across{' '}
+              <strong>{depots.length}</strong> depot{depots.length === 1 ? '' : 's'} down to 0 —
+              including suspended ones, which are hidden from the table above.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm">
+            <p className="text-warning">
+              Every product will come off sale everywhere. Nothing will appear in the catalogue and
+              no new order can be placed until a price is set again.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Existing orders are unaffected. Each price is kept in the depot price history, so
+              what it was before this can still be looked up.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setZeroingAll(false)} disabled={zeroAll.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={zeroAll.isPending}
+              onClick={async () => {
+                try {
+                  await zeroAll.mutateAsync()
+                  setZeroingAll(false)
+                } catch {
+                  // The hook raises its own toast; the dialog stays open so
+                  // the reason sits next to the action it explains.
+                }
+              }}
+            >
+              {zeroAll.isPending && <Loader2 className="animate-spin" />}
+              Set all {pricedCount} to 0
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Prices Modal Dialog */}
       <Dialog
         open={!!editingDepot}
@@ -431,29 +513,6 @@ function ProductPricingPage() {
 
           {editingDepot && (
             <div className="space-y-4 py-3 max-h-[60svh] overflow-y-auto pr-1">
-              {/* Taking a whole depot off sale in one action. Thirteen products
-                  typed to 0 by hand is thirteen chances to miss one, and a
-                  missed one leaves the depot quietly still selling it. Fills
-                  the boxes rather than saving — nothing moves until Save, so a
-                  mis-click is undone by closing the dialog. */}
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-foreground/20 px-3 py-2">
-                <span className="text-xs text-muted-foreground">
-                  Not selling anything at this depot?
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 whitespace-nowrap"
-                  onClick={() =>
-                    setTempPrices(Object.fromEntries(allProducts.map((p) => [p.id, '0'])))
-                  }
-                >
-                  <CircleSlash className="size-3.5" />
-                  Set all to 0
-                </Button>
-              </div>
-
               {allProducts.map((product) => (
                 <div key={product.id} className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-muted/20">
                   <div>

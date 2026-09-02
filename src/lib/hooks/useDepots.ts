@@ -127,6 +127,34 @@ export function useUpdateDepotProductPrices() {
   })
 }
 
+/**
+ * Take every product off sale at every depot — all prices to 0.
+ *
+ * One request, not a loop over depots: thirteen separate calls can
+ * half-succeed, and half the depots closed is a worse state than either end of
+ * the operation. Every row keeps its previous price in the depot price
+ * history, so this is undoable by hand.
+ */
+export function useZeroAllDepotPrices() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async () => {
+      const res = await api.post('/depots/product-prices/zero-all')
+      return res.data
+    },
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ['depots'] })
+      toast.success(res?.message || 'All prices set to 0')
+    },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err))
+    },
+  })
+}
+
 export function useToggleDepotStatus() {
   const queryClient = useQueryClient()
   const toast = useToast()
