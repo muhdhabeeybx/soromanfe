@@ -310,6 +310,27 @@ export function useFinanceReport(params: FinanceReportParams) {
 
 /** The staff member who recorded this payment, blank if unknown. */
 export function paymentRecorder(p: OrderPayment): string {
+  /**
+   * A name here has to mean "this person did this". On the rows migration 0021
+   * created, it did not.
+   *
+   * The backfill copied `recorded_by` off the underlying DEPOSIT, so all 17
+   * auto-created transfers carry a staff name — 12 read as Oladaride Bilkis,
+   * five as Abdulrasheed Zakari — for movements between orders that neither of
+   * them made, and that nobody made: the migration converted them out of the
+   * old oldest-credit-first wallet draws. Printing those names next to a
+   * transfer is not a small inaccuracy, it is the report attributing a
+   * money-movement decision to a person who never took it, and it is the
+   * specific thing that made these rows impossible to account for.
+   *
+   * The same applies to an auto-allocated row: the name belongs to whoever
+   * keyed the deposit in, not to anyone who chose which order it settled.
+   *
+   * So for anything the system decided, this returns nothing and the
+   * confirmation basis speaks instead. A real staff decision still names its
+   * author, which is the whole point of keeping the column.
+   */
+  if (isSystemDecided(p.confirmationBasis)) return ''
   return p.recorderFirstName ? `${p.recorderFirstName} ${p.recorderSurname || ''}`.trim() : ''
 }
 
