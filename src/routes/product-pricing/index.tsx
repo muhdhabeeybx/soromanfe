@@ -5,7 +5,8 @@ import { Button } from '#/components/ui/button'
 import { CommaInput } from '#/components/ui/comma-input'
 import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '#/components/ui/card'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
+import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
 import {
   Dialog,
   DialogContent,
@@ -96,7 +97,10 @@ function ProductPricingPage() {
         return ppId === prod.id || pp.productName?.toLowerCase() === prod.name.toLowerCase()
       })
       if (existingPrice) {
-        prices[prod.id] = String(existingPrice.currentPrice ?? '')
+        // A stored 0 must come back as "0", not as blank — blank means "leave
+        // alone" on save, so rendering it that way would quietly make an
+        // un-priced product un-editable back to un-priced.
+        prices[prod.id] = existingPrice.currentPrice == null ? '' : String(existingPrice.currentPrice)
       } else {
         prices[prod.id] = ''
       }
@@ -111,16 +115,25 @@ function ProductPricingPage() {
     if (!editingDepot) return
     setSaving(true)
     try {
-      // A blank or zero price means "not priced at this location" — the
-      // backend rejects a price of 0 (it would make orders free there), so
-      // those products are simply left out of the payload rather than sent
-      // as 0. Only products with an actual price greater than zero are saved.
+      /**
+       * Zero is a real, savable value: it is how this system records "we do
+       * not sell this product at this depot", and it is what 40 of the 48
+       * rows in the live table already hold.
+       *
+       * This used to filter zeros OUT of the payload, because the backend
+       * rejected them. Combined with prices being upserted and never deleted,
+       * that made taking a product off sale impossible — blank left the old
+       * price untouched, and 0 was refused. Both of the things the dialog told
+       * people to do did nothing.
+       *
+       * Blank still means "leave alone", which is the only sense it can have
+       * against an upsert. Zero is the way to un-price.
+       */
       const productPricesPayload = allProducts
         .filter((p) => {
           const raw = tempPrices[p.id]
           if (raw === undefined || raw.trim() === '') return false
-          const num = parseFloat(raw)
-          return !isNaN(num) && num > 0
+          return Number.isFinite(parseFloat(raw))
         })
         .map((p) => ({
           product: p.id,
@@ -171,95 +184,117 @@ function ProductPricingPage() {
           description="Create depots in the Depots module first."
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {depots.map((depot: any) => {
-            // Create lookup map for depot's prices
-            const priceMap = new Map<string, number>()
-            ;(depot.productPrices || []).forEach((pp: any) => {
-              const pid = String(pp.productId || pp.product?._id || pp.product?.id)
-              priceMap.set(pid, pp.currentPrice)
-              if (pp.productName) {
-                priceMap.set(pp.productName.toLowerCase(), pp.currentPrice)
-              }
-            })
+        /**
+         * A matrix: one row per depot, one column per product.
+         *
+         * This was a grid of cards, each repeating the product list down its
+         * own body. The question this page exists to answer — what does PMS
+         * cost across our depots, and where is it not sold — could not be read
+         * off it at all: you had to open every card and hold the numbers in
+         * your head. A row per depot puts the comparison on one axis and the
+         * products on the other, which is the shape of the data.
+         */
+        <div className={PANEL}>
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>
+              {depots.length} depot{depots.length === 1 ? '' : 's'} · {allProducts.length} product
+              {allProducts.length === 1 ? '' : 's'}
+            </span>
+            <span className="text-xs text-muted-foreground">Price per unit</span>
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[13rem]">Depot</TableHead>
+                  <TableHead>Status</TableHead>
+                  {allProducts.map((prod) => (
+                    <TableHead key={prod.id} className="text-right whitespace-nowrap">
+                      {prod.name}
+                    </TableHead>
+                  ))}
+                  {!isReadOnly && <TableHead className="text-right">Actions</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {depots.map((depot: any) => {
+                  // Lookup by product id, falling back to name for rows that
+                  // predate the id being carried on the price record.
+                  const priceMap = new Map<string, number>()
+                  ;(depot.productPrices || []).forEach((pp: any) => {
+                    const pid = String(pp.productId || pp.product?._id || pp.product?.id)
+                    priceMap.set(pid, pp.currentPrice)
+                    if (pp.productName) priceMap.set(pp.productName.toLowerCase(), pp.currentPrice)
+                  })
 
-            return (
-              <Card key={depot.id} className="flex flex-col">
-                <CardHeader className="border-b border-border pb-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <CardTitle className="font-semibold text-foreground">{depot.name}</CardTitle>
-                      <CardDescription className="mt-0.5 flex flex-wrap items-center gap-x-1.5">
-                        {depot.code && <span className="font-mono">{depot.code}</span>}
-                        {(depot.city || depot.state) && (
-                          <span>
-                            {depot.code && '·'} {depot.city}
-                            {depot.city && depot.state ? `, ${depot.state}` : depot.state}
-                          </span>
-                        )}
-                      </CardDescription>
-                    </div>
-                    {getStatusBadge(depot.status)}
-                  </div>
-                </CardHeader>
+                  return (
+                    <TableRow key={depot.id}>
+                      <TableCell>
+                        <div className="font-medium">{depot.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {[depot.code, [depot.city, depot.state].filter(Boolean).join(', ')]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </div>
+                      </TableCell>
+                      <TableCell>{getStatusBadge(depot.status)}</TableCell>
 
-                <CardContent className="flex-1">
-                  {allProducts.length === 0 ? (
-                    <p className="py-2 text-sm text-muted-foreground">No products configured yet.</p>
-                  ) : (
-                    <div className="divide-y divide-border">
                       {allProducts.map((prod) => {
-                        const price = priceMap.get(prod.id) ?? priceMap.get(prod.name.toLowerCase())
-                        const hasPrice = price !== undefined && price !== null && !isNaN(price) && Number(price) > 0
+                        const raw = priceMap.get(prod.id) ?? priceMap.get(prod.name.toLowerCase())
+                        const price = Number(raw)
+                        const isSet = raw !== undefined && raw !== null && !isNaN(price)
+                        // Zero is not a missing price, it is a decision: this
+                        // depot does not sell this product. Said plainly, and
+                        // differently from "nobody has set one yet".
+                        const notSold = isSet && price === 0
 
                         return (
-                          <div key={prod.id} className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0">
-                            <div>
-                              <span className="text-sm text-foreground">{prod.name}</span>
-                              {prod.sku && <span className="block text-xs text-muted-foreground font-mono">SKU: {prod.sku}</span>}
-                            </div>
-                            {hasPrice ? (
-                              <span className="font-semibold text-foreground font-mono text-sm whitespace-nowrap">
-                                ₦{Number(price).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                              </span>
+                          <TableCell key={prod.id} className="text-right whitespace-nowrap">
+                            {!isSet ? (
+                              <span className="text-xs text-muted-foreground/50 italic">Not set</span>
+                            ) : notSold ? (
+                              <span className="text-xs text-muted-foreground">Not sold here</span>
                             ) : (
-                              <span className="text-xs text-muted-foreground/50 italic whitespace-nowrap">Not priced</span>
+                              <span className="font-mono text-sm font-semibold">
+                                ₦{price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                              </span>
                             )}
-                          </div>
+                          </TableCell>
                         )
                       })}
-                    </div>
-                  )}
-                </CardContent>
 
-                {!isReadOnly && (
-                  <CardFooter className="gap-2 border-t border-border pt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1 gap-1.5"
-                      onClick={() => openEdit(depot)}
-                    >
-                      <Pencil className="size-3.5" /> Edit prices
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className={`gap-1.5 ${
-                        depot.status === 'Active'
-                          ? 'text-destructive hover:text-destructive/80 hover:bg-destructive/10'
-                          : 'text-accent hover:text-accent/80 hover:bg-accent/10'
-                      }`}
-                      onClick={() => handleToggleStatus(depot)}
-                    >
-                      <Power className="size-3.5" />
-                      {depot.status === 'Active' ? 'Suspend' : 'Activate'}
-                    </Button>
-                  </CardFooter>
-                )}
-              </Card>
-            )
-          })}
+                      {!isReadOnly && (
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(depot)}>
+                              <Pencil data-icon="inline-start" />
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              title={depot.status === 'Active' ? 'Suspend this depot' : 'Activate this depot'}
+                              className={
+                                depot.status === 'Active'
+                                  ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+                                  : 'text-accent hover:bg-accent/10 hover:text-accent'
+                              }
+                              onClick={() => handleToggleStatus(depot)}
+                            >
+                              <Power />
+                              <span className="sr-only">
+                                {depot.status === 'Active' ? 'Suspend' : 'Activate'} {depot.name}
+                              </span>
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
 
@@ -280,7 +315,9 @@ function ProductPricingPage() {
               Edit Depot Prices — {editingDepot?.name}
             </DialogTitle>
             <DialogDescription>
-              Set current selling price per unit for each product at this depot location. Leave a product blank or at 0 if it isn't priced here.
+              Set the selling price per unit at this depot. Enter <strong>0</strong> for a
+              product you do not sell here — it will not appear in the catalogue and cannot be
+              ordered. Leaving a box blank keeps whatever price is already set.
             </DialogDescription>
           </DialogHeader>
 
