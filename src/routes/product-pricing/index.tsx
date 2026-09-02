@@ -15,7 +15,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '#/components/ui/dialog'
-import { Pencil, Power, Loader2, CheckCircle, Fuel, Warehouse } from 'lucide-react'
+import { Pencil, Power, Loader2, CheckCircle, Fuel, Warehouse, Eye, EyeOff, CircleSlash } from 'lucide-react'
+import { cn } from '#/lib/utils'
 import { useDepots, useUpdateDepotProductPrices, useToggleDepotStatus } from '#/lib/hooks/useDepots'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { PageLoader } from '#/components/PageLoader'
@@ -33,6 +34,44 @@ interface ProductItem {
   name: string
   sku?: string
   category?: string
+}
+
+/**
+ * Which part of the country a depot belongs to.
+ *
+ * Resolved rather than read off `state`, because that column does not hold
+ * one: the Warri depot's state is "Warri", Keonamex's is "Delta" and Oghara's
+ * is "Oghara" — three spellings of one place. Sorting on the raw column would
+ * scatter the Delta depots across three groups.
+ */
+const REGIONS = [
+  { key: 'calabar', label: 'Calabar', match: /cross river|calabar/i },
+  { key: 'lagos', label: 'Lagos', match: /lagos|apapa|ibeju|lekki/i },
+  { key: 'rivers', label: 'Rivers', match: /rivers|port harcourt/i },
+  { key: 'warri', label: 'Warri & Delta', match: /warri|delta|oghara/i },
+] as const
+
+/**
+ * The order the desk reads these in: Calabar first, then Lagos led by Dangote
+ * Refinery and AIPEC, then Rivers, then Warri. Anything that matches no region
+ * falls to the end rather than being hidden.
+ *
+ * Both lists are here, in order, so changing the arrangement is a matter of
+ * moving a line rather than unpicking a comparator.
+ */
+const REGION_ORDER = REGIONS.map((r) => r.key)
+
+/** Depots that lead their region, by code. Everything else sorts by name. */
+const DEPOT_PRIORITY = ['CLB', 'DRF', 'APC']
+
+function regionOf(depot: { state?: string; city?: string }) {
+  const haystack = `${depot.state ?? ''} ${depot.city ?? ''}`
+  return REGIONS.find((r) => r.match.test(haystack))
+}
+
+/** Suspended depots sort below active ones, whatever their region. */
+function isSuspended(status: string) {
+  return status !== 'Active' && status !== 'High Capacity'
 }
 
 function getStatusBadge(status: string) {
@@ -55,6 +94,14 @@ function ProductPricingPage() {
 
   const { data: depots = [], isLoading: isLoadingDepots, isError, error, refetch } = useDepots()
   const { data: productsResponse, isLoading: isLoadingProducts } = useProductList({ productType: 'soroman' })
+
+  /**
+   * Suspended depots are hidden by default.
+   *
+   * Nine of the thirteen are suspended, so showing everything made the four
+   * places actually trading a minority of the page.
+   */
+  const [showSuspended, setShowSuspended] = useState(false)
 
   const updatePricesMutation = useUpdateDepotProductPrices()
   const toggleStatusMutation = useToggleDepotStatus()
@@ -86,6 +133,40 @@ function ProductPricingPage() {
       return nameA.localeCompare(nameB)
     })
   }, [productsResponse])
+
+  /**
+   * Active first, then by region in reading order, then the region's lead
+   * depots, then alphabetically. Suspended depots keep the same arrangement
+   * but sit below everything active.
+   */
+  const orderedDepots = useMemo(() => {
+    const rank = (d: any) => {
+      const region = regionOf(d)
+      const priority = DEPOT_PRIORITY.indexOf(d.code)
+      return [
+        isSuspended(d.status) ? 1 : 0,
+        region ? REGION_ORDER.indexOf(region.key) : REGION_ORDER.length,
+        priority === -1 ? DEPOT_PRIORITY.length : priority,
+        String(d.name || '').toLowerCase(),
+      ] as const
+    }
+    return [...depots]
+      .filter((d: any) => showSuspended || !isSuspended(d.status))
+      .sort((a: any, b: any) => {
+        const ra = rank(a)
+        const rb = rank(b)
+        for (let i = 0; i < ra.length; i++) {
+          if (ra[i] < rb[i]) return -1
+          if (ra[i] > rb[i]) return 1
+        }
+        return 0
+      })
+  }, [depots, showSuspended])
+
+  const suspendedCount = useMemo(
+    () => depots.filter((d: any) => isSuspended(d.status)).length,
+    [depots],
+  )
 
   // Open Edit Dialog for a depot
   const openEdit = (depot: any) => {
@@ -197,10 +278,20 @@ function ProductPricingPage() {
         <div className={PANEL}>
           <div className={PANEL_RAIL}>
             <span className={MICRO}>
-              {depots.length} depot{depots.length === 1 ? '' : 's'} · {allProducts.length} product
-              {allProducts.length === 1 ? '' : 's'}
+              {orderedDepots.length} depot{orderedDepots.length === 1 ? '' : 's'} ·{' '}
+              {allProducts.length} product{allProducts.length === 1 ? '' : 's'} · price per unit
             </span>
-            <span className="text-xs text-muted-foreground">Price per unit</span>
+            {suspendedCount > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-xs text-muted-foreground"
+                onClick={() => setShowSuspended((v) => !v)}
+              >
+                {showSuspended ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                {showSuspended ? 'Hide' : 'Show'} {suspendedCount} suspended
+              </Button>
+            )}
           </div>
           <div className="overflow-x-auto">
             <Table>
@@ -217,7 +308,7 @@ function ProductPricingPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {depots.map((depot: any) => {
+                {orderedDepots.map((depot: any) => {
                   // Lookup by product id, falling back to name for rows that
                   // predate the id being carried on the price record.
                   const priceMap = new Map<string, number>()
@@ -228,7 +319,15 @@ function ProductPricingPage() {
                   })
 
                   return (
-                    <TableRow key={depot.id}>
+                    <TableRow
+                      key={depot.id}
+                      // The whole row opens the editor — the Edit button is
+                      // still there for anyone looking for one, and the
+                      // actions cell stops the click so Suspend never fires
+                      // the dialog behind it.
+                      className={cn(!isReadOnly && 'cursor-pointer')}
+                      onClick={!isReadOnly ? () => openEdit(depot) : undefined}
+                    >
                       <TableCell>
                         <div className="font-medium">{depot.name}</div>
                         <div className="text-xs text-muted-foreground">
@@ -264,27 +363,28 @@ function ProductPricingPage() {
                       })}
 
                       {!isReadOnly && (
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-2">
                             <Button variant="outline" size="sm" onClick={() => openEdit(depot)}>
                               <Pencil data-icon="inline-start" />
-                              Edit
+                              Edit prices
                             </Button>
+                            {/* Spelled out, both states. It was a bare power
+                                icon, so what it would do — and to what — was
+                                a guess until you clicked it. */}
                             <Button
                               variant="ghost"
-                              size="icon-sm"
-                              title={depot.status === 'Active' ? 'Suspend this depot' : 'Activate this depot'}
-                              className={
+                              size="sm"
+                              className={cn(
+                                'gap-1.5 whitespace-nowrap',
                                 depot.status === 'Active'
                                   ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
-                                  : 'text-accent hover:bg-accent/10 hover:text-accent'
-                              }
+                                  : 'text-accent hover:bg-accent/10 hover:text-accent',
+                              )}
                               onClick={() => handleToggleStatus(depot)}
                             >
-                              <Power />
-                              <span className="sr-only">
-                                {depot.status === 'Active' ? 'Suspend' : 'Activate'} {depot.name}
-                              </span>
+                              <Power className="size-3.5" />
+                              {depot.status === 'Active' ? 'Suspend location' : 'Activate location'}
                             </Button>
                           </div>
                         </TableCell>
@@ -323,6 +423,29 @@ function ProductPricingPage() {
 
           {editingDepot && (
             <div className="space-y-4 py-3 max-h-[60svh] overflow-y-auto pr-1">
+              {/* Taking a whole depot off sale in one action. Thirteen products
+                  typed to 0 by hand is thirteen chances to miss one, and a
+                  missed one leaves the depot quietly still selling it. Fills
+                  the boxes rather than saving — nothing moves until Save, so a
+                  mis-click is undone by closing the dialog. */}
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-foreground/20 px-3 py-2">
+                <span className="text-xs text-muted-foreground">
+                  Not selling anything at this depot?
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 whitespace-nowrap"
+                  onClick={() =>
+                    setTempPrices(Object.fromEntries(allProducts.map((p) => [p.id, '0'])))
+                  }
+                >
+                  <CircleSlash className="size-3.5" />
+                  Set all to 0
+                </Button>
+              </div>
+
               {allProducts.map((product) => (
                 <div key={product.id} className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-muted/20">
                   <div>
