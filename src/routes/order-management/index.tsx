@@ -237,6 +237,7 @@ function OrderManagementPage() {
                     <TableHead>PFI</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead className="text-right">Qty (L)</TableHead>
+                    <TableHead className="text-right">Rate</TableHead>
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -255,14 +256,21 @@ function OrderManagementPage() {
                           {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
                         </TableCell>
                         <TableCell className="max-w-[12rem] truncate font-medium">{o.customerName || '—'}</TableCell>
+                        {/* The company on the ORDER first — one customer can
+                            order under several, and their saved company is
+                            only the fallback. Same precedence as All Orders,
+                            which these two pages were showing differently. */}
                         <TableCell className="max-w-[11rem] truncate text-muted-foreground">
-                          {o.customerCompanyName || ''}
+                          {o.companyName || o.customerCompanyName || ''}
                         </TableCell>
                         <TableCell className="text-muted-foreground">{o.depotName || o.state || '—'}</TableCell>
                         <TableCell className="text-muted-foreground">{o.pfiNumber || '—'}</TableCell>
                         <TableCell className="text-muted-foreground">{o.productName || '—'}</TableCell>
                         <TableCell className="text-right font-medium whitespace-nowrap">
                           {formatQty(toNumber(o.quantity))}
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap text-muted-foreground">
+                          {formatNaira(toNumber(o.price))}
                         </TableCell>
                         <TableCell className="text-right font-semibold whitespace-nowrap">
                           {formatNaira(toNumber(o.totalAmount))}
