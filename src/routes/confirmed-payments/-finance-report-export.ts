@@ -2,11 +2,11 @@ import { format } from 'date-fns'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
-  orderPaidInto, orderCompany, orderSalesValue, CONFIRMATION_BASIS_LABEL,
+  orderPaidInto, orderCompany, orderSalesValue,
   type FinanceReportOrder, type OrderPayment, type PaymentBreakdown,
 } from '#/lib/hooks/useFinanceReport'
 import {
-  XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
+  XL, PDF, NGN, QTY, DATE_FMT, DATE_PATTERN,
   ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   writeTitleBlock, writeSectionHeading,
@@ -30,6 +30,20 @@ import {
  * or a loss to anybody, and the screen has always shown it in the same blue
  * this uses.
  */
+/**
+ * Signed money, printed plain: no brackets, no minus, no colour code.
+ *
+ * NGN_SIGNED — which these columns used — carries `[Color10]` for positives
+ * and `[Red](...)` for negatives INSIDE the number format. An Excel format's
+ * own colour beats the cell font, so it painted every positive green and every
+ * negative red whatever paintOwed set. That is the inversion itself, and the
+ * reason correcting the font alone would never have shown up in the workbook.
+ *
+ * With the colour code gone the font wins and paintOwed decides. The brackets
+ * go with it: colour carries the sign now, on screen and in both exports.
+ */
+const NGN_PLAIN = '₦#,##0.00;₦#,##0.00;₦0.00'
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function paintOwed(cell: any, value: number, key?: string) {
   const ink =
@@ -181,32 +195,21 @@ const COLUMNS: Array<{
    * money match what we billed" has one answer, and moving the surplus
    * elsewhere afterwards does not change it.
    */
-  { header: 'Differential', key: 'differential', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
+  { header: 'Differential', key: 'differential', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
   /**
    * Movement between orders, on its own. Negative where money left, positive
    * where it landed, so it nets to zero across a window holding both ends —
    * and the sub-row beneath names the order at the other end.
    */
-  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED, scope: 'funding', signed: true },
+  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_PLAIN, scope: 'funding', signed: true },
   /**
    * What is left once the bank figure and the transfers are both accounted
    * for. A dash all the way down a clean day; anything else is a real gap
    * somebody has to close.
    */
-  { header: 'Balance', key: 'balance', width: 16, fmt: NGN_SIGNED, scope: 'order', signed: true },
+  { header: 'Balance', key: 'balance', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
-  /**
-   * HOW this payment came to be attached to this order.
-   *
-   * "Recorded By" beside it answers a weaker question and was being read as
-   * though it answered this one: on a backfilled row it names whoever keyed in
-   * the underlying deposit, not whoever decided that deposit paid for this
-   * order — and on most rows nobody decided, the old oldest-credit-first walk
-   * did. An exported report that goes to an auditor has to carry the
-   * difference, so it is a column of its own.
-   */
-  { header: 'Confirmed By', key: 'confirmedBy', width: 34, scope: 'funding' },
 ]
 
 /** The columns, in order, with whether each is filled on an order row or a funding sub-row. */
@@ -309,12 +312,6 @@ function paymentRowValues(p: OrderPayment) {
     // moved — those are different facts and the column below says which.
     depositDate: when.date ? new Date(when.date) : null,
     recordedBy: up(paymentRecorder(p) || '—'),
-    /**
-     * The provenance of the attribution, spelled out rather than abbreviated:
-     * this column exists for somebody outside the business reading the sheet
-     * cold, and "AUTO" would mean nothing to them.
-     */
-    confirmedBy: up(CONFIRMATION_BASIS_LABEL[p.confirmationBasis] || 'UNKNOWN'),
   }
 }
 
@@ -350,9 +347,9 @@ function summaryColumns(
     { header: 'Total Quantity', value: summary.totalQuantity, fmt: QTY },
     { header: 'Total Sales Value', value: summary.totalSalesValue, fmt: NGN },
     { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
-    { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_SIGNED, signed: true },
-    { header: 'Total Transferred', value: summary.totalTransferred, fmt: NGN_SIGNED, signed: true },
-    { header: 'Balance', value: summary.totalBalance, fmt: NGN_SIGNED, signed: true },
+    { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
+    { header: 'Total Transferred', value: summary.totalTransferred, fmt: NGN_PLAIN, signed: true },
+    { header: 'Balance', value: summary.totalBalance, fmt: NGN_PLAIN, signed: true },
   ]
   // Shortfall and the exact-reconciliation count, so a differential on a
   // printed sheet can be checked rather than just read.
@@ -463,7 +460,7 @@ export function writeFinanceTable(
         cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
         if (internal) cell.font = { color: { argb: XL.internal } }
         if (c.key === 'amount') cell.numFmt = NGN
-        if (c.key === 'transfers') cell.numFmt = NGN_SIGNED
+        if (c.key === 'transfers') cell.numFmt = NGN_PLAIN
       }
       if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
@@ -495,7 +492,7 @@ export function writeFinanceTable(
     cell.fill = GRAND_TOTAL_FILL
     cell.font = TOTAL_FONT
   }
-  totalRow.getCell('differential').numFmt = NGN_SIGNED
+  totalRow.getCell('differential').numFmt = NGN_PLAIN
   paintOwed(totalRow.getCell('differential'), summary.totalDifferential, 'differential')
   paintOwed(totalRow.getCell('transfers'), summary.totalTransferred ?? 0, 'transfers')
   paintOwed(totalRow.getCell('balance'), summary.totalBalance ?? summary.totalDifferential, 'balance')
@@ -679,10 +676,17 @@ export async function exportFinanceReportPdf(
   )
 
   const naira = pdfNaira
+  /**
+   * Signed money without the brackets — colour carries the sign, matching the
+   * screen and the workbook. Every other money column here is positive by
+   * construction, so they stay on pdfNaira.
+   */
+  const plain = (n: number) => pdfNaira(Math.abs(n))
   const summaryCols = summaryColumns(summary, filters)
   const displayValue = (c: { value: string | number; fmt?: string }) => {
     if (typeof c.value !== 'number') return c.value
     if (c.fmt === NGN) return naira(c.value)
+    if (c.fmt === NGN_PLAIN) return plain(c.value)
     if (c.fmt === QTY) return `${c.value.toLocaleString()} L`
     return c.value.toLocaleString()
   }
@@ -706,17 +710,16 @@ export async function exportFinanceReportPdf(
     didParseCell: (data: any) => {
       if (data.section !== 'body') return
       if (!signedSummaryIndexes.includes(data.column.index)) return
-      const text = String(data.cell.raw).trim()
-      if (!text) return
-      // Parenthesised is negative — pdfNaira writes it that way so the sign
-      // survives a monochrome print. Negative here means MORE money arrived
-      // than was billed, so it is the green one; a bare positive is a
-      // shortfall. See paintOwed for why sign alone gets this backwards.
+      // Off the value, never the printed text. These cells used to be tested
+      // for a leading bracket, which `toLocaleString` never wrote — so the
+      // test never matched and every figure took one colour regardless.
+      const value = summaryCols[data.column.index]?.value
+      if (typeof value !== 'number' || Math.abs(value) < 0.005) return
       if (transferSummaryIndexes.includes(data.column.index)) {
         data.cell.styles.textColor = PDF.internal
         return
       }
-      data.cell.styles.textColor = text.startsWith('(') ? PDF.gain : PDF.loss
+      data.cell.styles.textColor = value > 0 ? PDF.loss : PDF.gain
     },
   })
 
@@ -739,6 +742,19 @@ export async function exportFinanceReportPdf(
     COLUMNS.map((c) => (c.scope === scope ? (values[c.key] ?? '') : ''))
 
   const body: (string | number)[][] = []
+  /**
+   * The signed value behind a printed cell, keyed by body row then column.
+   *
+   * With the brackets gone there is no sign left in the string to read, so
+   * colour comes off the number itself. Written in lockstep with `body`, so a
+   * row's figures are found by that row's own index.
+   */
+  const signedAt: Array<Record<number, number>> = []
+  const indexOfCol = (key: string) => COLUMNS.findIndex((c) => c.key === key)
+  const diffCol = indexOfCol('differential')
+  const transfersCol = indexOfCol('transfers')
+  const balanceCol = indexOfCol('balance')
+
   rows.forEach((o, i) => {
     const v = rowValues(o, i)
     const orderRow = cellsFor('order', {
@@ -752,7 +768,7 @@ export async function exportFinanceReportPdf(
       product: v.product,
       rate: naira(v.rate),
       salesValue: naira(v.salesValue),
-      differential: Math.abs(v.differential) < 0.005 ? '—' : naira(v.differential),
+      differential: Math.abs(v.differential) < 0.005 ? '—' : plain(v.differential),
       paidInto: v.paidInto,
     })
     // cellsFor() only fills the columns of the scope it was asked for, so the
@@ -767,6 +783,7 @@ export async function exportFinanceReportPdf(
       if (at('depositRef') >= 0) orderRow[at('depositRef')] = 'NO BANK RECORD'
     }
     body.push(orderRow)
+    signedAt[body.length - 1] = { [diffCol]: v.differential }
 
     // The same rows as the workbook, built from the same function, so the two
     // documents cannot say different things.
@@ -778,11 +795,11 @@ export async function exportFinanceReportPdf(
           depositor: pv.depositor,
           depositRef: pv.depositRef,
           amount: pv.amount == null ? '' : naira(pv.amount),
-          transfers: pv.transfers == null ? '' : naira(pv.transfers),
+          transfers: pv.transfers == null ? '' : plain(pv.transfers),
           recordedBy: pv.recordedBy,
-          confirmedBy: pv.confirmedBy,
         }),
       )
+      if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
     }
   })
 
@@ -797,12 +814,11 @@ export async function exportFinanceReportPdf(
   footAt('qty', summary.totalQuantity.toLocaleString())
   footAt('salesValue', naira(summary.totalSalesValue))
   footAt('amount', naira(summary.totalAmountPaid))
-  footAt('differential', naira(summary.totalDifferential))
-  footAt('transfers', naira(summary.totalTransferred))
-  footAt('balance', naira(summary.totalBalance))
+  footAt('differential', plain(summary.totalDifferential))
+  footAt('transfers', plain(summary.totalTransferred))
+  footAt('balance', plain(summary.totalBalance))
 
   const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
-  const differentialIndex = COLUMNS.findIndex((c) => c.key === 'differential')
   const depositRefIndex = COLUMNS.findIndex((c) => c.key === 'depositRef')
 
   autoTable(doc, {
@@ -844,15 +860,27 @@ export async function exportFinanceReportPdf(
       if (data.section === 'body' && data.column.index === refColumnIndex) {
         data.cell.styles.fontStyle = 'bold'
       }
-      // Signed money reads green or red in the body and in the totals bar
-      // alike — the one place in these documents where colour means anything.
-      // Parenthesised is negative, which on this column means the order took
-      // MORE than it was billed: green. A bare figure is still owed: red.
-      if (data.column.index === differentialIndex) {
-        const text = String(data.cell.raw).trim()
-        if (text && text !== '—') {
-          data.cell.styles.textColor = text.startsWith('(') ? PDF.gain : PDF.loss
-        }
+      /**
+       * Signed money reads green or red in the body and in the totals bar
+       * alike — the one place in these documents where colour means anything.
+       *
+       * Positive is order value MINUS money received, so it is a shortfall and
+       * reads red; negative means more arrived than was billed and reads
+       * green. Transfers take neither: money moving between two orders is not
+       * a gain or a loss to anybody. See paintOwed.
+       */
+      const signed =
+        data.section === 'foot'
+          ? ({
+              [diffCol]: summary.totalDifferential,
+              [transfersCol]: summary.totalTransferred,
+              [balanceCol]: summary.totalBalance,
+            } as Record<number, number>)
+          : signedAt[data.row.index]
+      const value = signed?.[data.column.index]
+      if (typeof value === 'number' && Math.abs(value) >= 0.005) {
+        data.cell.styles.textColor =
+          data.column.index === transfersCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
       }
     },
   })

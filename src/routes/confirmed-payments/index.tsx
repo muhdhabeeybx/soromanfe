@@ -1042,13 +1042,7 @@ function FinanceReportPage() {
           <SummaryItem
             icon={Scale}
             label="Net differential"
-            value={
-              Math.abs(summary.totalDifferential) < 0.005
-                ? naira(0)
-                : summary.totalDifferential > 0
-                  ? naira(summary.totalDifferential)
-                  : `(${naira(Math.abs(summary.totalDifferential))})`
-            }
+            value={naira(Math.abs(summary.totalDifferential))}
             tone={
               Math.abs(summary.totalDifferential) < 0.005
                 ? 'plain'
@@ -1187,15 +1181,17 @@ function FinanceReportPage() {
                     rate: <span className="whitespace-nowrap">{naira(Number(o.price))}</span>,
                     salesValue: <span className="whitespace-nowrap font-semibold">{naira(salesValue)}</span>,
                     // Sales value against the BANK figure, before any transfer
-                    // — see orderDifferential. Positive is still owed, negative
-                    // is more received than the order was worth, and a clean
-                    // order reads as a quiet dash rather than a loud zero.
+                    // — see orderDifferential. Still owed reads red, more
+                    // received than the order was worth reads green, and a
+                    // clean order reads as a quiet dash rather than a loud
+                    // zero. The figure itself is unsigned: colour carries the
+                    // direction, here and in both exports.
                     differential: (() => {
                       const d = o.differential
                       if (Math.abs(d) < 0.005) return <span className="text-muted-foreground">—</span>
                       return (
                         <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
-                          {d > 0 ? naira(d) : `(${naira(Math.abs(d))})`}
+                          {naira(Math.abs(d))}
                         </span>
                       )
                     })(),
@@ -1211,7 +1207,7 @@ function FinanceReportPage() {
                       if (Math.abs(b) < 0.005) return <span className="text-muted-foreground">—</span>
                       return (
                         <span className={cn('whitespace-nowrap font-semibold', b > 0 ? 'text-destructive' : 'text-accent')}>
-                          {b > 0 ? naira(b) : `(${naira(Math.abs(b))})`}
+                          {naira(Math.abs(b))}
                         </span>
                       )
                     })(),
