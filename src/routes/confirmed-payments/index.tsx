@@ -24,7 +24,7 @@ import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
-import { cn, toNum } from '#/lib/utils'
+import { cn } from '#/lib/utils'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
@@ -349,8 +349,20 @@ function OrderDetailDialog({ order, open, onOpenChange, onManagePayments, onAddP
               <p className="mt-0.5 text-lg font-semibold text-blue-700 tabular-nums dark:text-blue-300">
                 {naira(outstanding)}
               </p>
+              {/*
+                `received`, not `amountPaid`. Both are on the row and they do
+                not always agree: `received` is summed from the payment rows —
+                the same rows "still owed" is derived from — while amountPaid
+                is a cache the pre-0021 wallet wrote as the order's own total
+                the moment finance clicked confirm, whatever had actually
+                arrived.
+
+                Reading one from each source put a flat contradiction inside a
+                single box: VG11105 printed "₦139,896,000 of ₦139,896,000
+                received so far" directly under "still owed ₦25,326,000".
+              */}
               <p className="mt-0.5 text-xs text-blue-700/80 dark:text-blue-300/80">
-                {naira(toNum(order.amountPaid))} of {naira(Number(order.totalAmount))} received so far
+                {naira(order.received)} of {naira(Number(order.totalAmount))} received so far
               </p>
             </div>
             {onAddPayment && (
