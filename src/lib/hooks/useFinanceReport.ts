@@ -765,6 +765,41 @@ export function useTransferOrderSurplus() {
   })
 }
 
+/**
+ * Undo a movement between orders — both legs together.
+ *
+ * The counterpart of unmatching a bank line, for money that never came from a
+ * bank line at all. A transfer has no statement line to return to the pool, so
+ * what comes back is the surplus itself: it goes off the destination order and
+ * back onto the one it was taken from.
+ *
+ * Both legs go or neither does — a single leg removed on its own would leave
+ * money that exists on one order and not the other. The server refuses the
+ * reversal outright when the destination has since spent it, rather than
+ * quietly pushing that order into shortfall.
+ */
+export function useReverseOrderTransfer() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (vars: { orderId: number; transferId: number; reason: string }) => {
+      const res = await api.delete(
+        `/orders/${vars.orderId}/payments/transfer/${vars.transferId}`,
+        { data: { reason: vars.reason } },
+      )
+      return res.data
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['finance-report'] })
+      qc.invalidateQueries({ queryKey: ['order-payments'] })
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      qc.invalidateQueries({ queryKey: ['orders-with-surplus'] })
+      toast.success(data?.message || 'Transfer reversed')
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+}
+
 export interface OrderWithSurplus {
   id: number
   orderNumber: string

@@ -12,7 +12,7 @@ import { Textarea } from '#/components/ui/textarea'
 import { NumberInput } from '#/components/ui/number-input'
 import {
   useOrderPayments, useRemoveOrderPayment, useTransferOrderSurplus,
-  useReviewOrderPayment, useReviewOrderTransfer,
+  useReviewOrderPayment, useReviewOrderTransfer, useReverseOrderTransfer,
   CONFIRMATION_BASIS_LABEL, isSystemDecided,
   paymentRecorder, paymentPayer, paymentPaidInto, transferOrigin, isTransferLeg, isUnreconciled,
   narrationText,
@@ -41,6 +41,9 @@ import { cn } from '#/lib/utils'
  *   Move     surplus goes from this order to another, as two recorded legs
  *            with a reason attached — replacing a wallet transfer whose only
  *            record of the destination was a sentence typed in a description.
+ *   Reverse  a move made in error goes back, both legs together. Removing one
+ *            leg alone would leave the money on one order and not the other,
+ *            so the bin on a transfer row undoes the whole movement.
  */
 export function OrderPaymentsDialog({
   order, open, onOpenChange,
@@ -57,6 +60,7 @@ export function OrderPaymentsDialog({
   const [reviewing, setReviewing] = useState<OrderPayment | null>(null)
   const [reviewNote, setReviewNote] = useState('')
   const transfer = useTransferOrderSurplus()
+  const reverseTransfer = useReverseOrderTransfer()
 
   const [removing, setRemoving] = useState<OrderPayment | null>(null)
   const [removeReason, setRemoveReason] = useState('')
@@ -93,11 +97,21 @@ export function OrderPaymentsDialog({
   const handleRemove = async () => {
     if (!removing || removeReason.trim().length < 3) return
     try {
-      await removePayment.mutateAsync({
-        orderId: order.id,
-        paymentId: removing.id,
-        reason: removeReason.trim(),
-      })
+      // A transfer leg is not removed on its own — the movement is reversed as
+      // a whole, keyed by its transfer id, so both orders change together.
+      if (isTransferLeg(removing) && removing.transferId != null) {
+        await reverseTransfer.mutateAsync({
+          orderId: order.id,
+          transferId: removing.transferId,
+          reason: removeReason.trim(),
+        })
+      } else {
+        await removePayment.mutateAsync({
+          orderId: order.id,
+          paymentId: removing.id,
+          reason: removeReason.trim(),
+        })
+      }
       setRemoving(null); setRemoveReason('')
     } catch { /* the mutation raises its own toast */ }
   }
@@ -269,16 +283,21 @@ export function OrderPaymentsDialog({
                           <ShieldCheck className="size-4" />
                         </Button>
                       )}
-                      {/* A transfer leg has no standalone remove: the two legs
-                          must move together or not at all. */}
-                      {!isTransferLeg(p) && (
+                      {/* One bin, two meanings. On a bank row it unmatches
+                          and the line returns to the pool; on a transfer leg
+                          it reverses the whole movement, because the two legs
+                          must go together or not at all — which is why the
+                          transferId, not the payment id, is what gets sent. */}
+                      {(!isTransferLeg(p) || p.transferId != null) && (
                         <Button
                           type="button" variant="ghost" size="icon"
                           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          aria-label="Unmatch this payment"
-                          title={p.statementLineId
-                            ? 'Unmatch — returns the bank line to the pool'
-                            : 'Remove this payment'}
+                          aria-label={isTransferLeg(p) ? 'Reverse this transfer' : 'Unmatch this payment'}
+                          title={isTransferLeg(p)
+                            ? 'Reverse — takes the surplus back to where it came from'
+                            : p.statementLineId
+                              ? 'Unmatch — returns the bank line to the pool'
+                              : 'Remove this payment'}
                           onClick={() => { setRemoving(p); setRemoveReason('') }}
                         >
                           <Trash2 className="size-4" />
@@ -349,27 +368,41 @@ export function OrderPaymentsDialog({
                 <p className="flex items-start gap-2 text-sm text-destructive">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                   <span>
-                    Remove {naira(removing.amount)} from this order?
-                    {removing.statementLineId
-                      ? ' Its bank statement line goes back to the unmatched pool, so it can be recorded against the right order.'
-                      : ' There is no statement line behind this one to release.'}
+                    {isTransferLeg(removing) ? (
+                      <>
+                        Reverse this movement of {naira(Math.abs(removing.amount))}
+                        {removing.counterpartOrderRef ? ` between this order and ${removing.counterpartOrderRef}` : ''}?
+                        {' '}Both legs go, and the surplus returns to the order it was taken from.
+                        {' '}If that other order is relying on this money to cover its own
+                        value, the reversal will be refused rather than leaving it short.
+                      </>
+                    ) : (
+                      <>
+                        Remove {naira(removing.amount)} from this order?
+                        {removing.statementLineId
+                          ? ' Its bank statement line goes back to the unmatched pool, so it can be recorded against the right order.'
+                          : ' There is no statement line behind this one to release.'}
+                      </>
+                    )}
                   </span>
                 </p>
                 <Label className={cn(MICRO, 'text-muted-foreground')}>Why (required)</Label>
                 <Input
                   value={removeReason}
                   onChange={(e) => setRemoveReason(e.target.value)}
-                  placeholder="Matched to the wrong order"
+                  placeholder={isTransferLeg(removing)
+                    ? 'Moved to the wrong order'
+                    : 'Matched to the wrong order'}
                 />
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" size="sm" onClick={() => setRemoving(null)}>Cancel</Button>
                   <Button
                     variant="destructive" size="sm"
-                    disabled={removeReason.trim().length < 3 || removePayment.isPending}
+                    disabled={removeReason.trim().length < 3 || removePayment.isPending || reverseTransfer.isPending}
                     onClick={handleRemove}
                   >
-                    {removePayment.isPending && <Loader2 className="animate-spin" />}
-                    Remove payment
+                    {(removePayment.isPending || reverseTransfer.isPending) && <Loader2 className="animate-spin" />}
+                    {isTransferLeg(removing) ? 'Reverse transfer' : 'Remove payment'}
                   </Button>
                 </div>
               </div>
@@ -389,6 +422,12 @@ export function OrderPaymentsDialog({
                 <Trash2 className="mr-1 inline size-3 text-destructive" />
                 Matched to the wrong order? Use the red bin on the payment above — its
                 bank line goes back to the pool, then confirm it against the right order.
+              </p>
+
+              <p className="text-xs text-muted-foreground">
+                <ArrowRightLeft className="mr-1 inline size-3" />
+                Moved surplus to the wrong order? The same bin on a movement row reverses
+                it — both legs together, and the surplus comes back here.
               </p>
 
               {/* Moving surplus. Offered only when there is surplus to move —

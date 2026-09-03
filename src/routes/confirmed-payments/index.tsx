@@ -34,6 +34,7 @@ import {
   orderPaidInto, orderCompany,
   paymentBreakdown, isTransferLeg, isUnreconciled, isSystemDecided,
   useRemoveOrderPayment,
+  useReverseOrderTransfer,
   CONFIRMATION_BASIS_LABEL, CONFIRMATION_BASIS_SHORT,
   type FinanceReportOrder, type OrderPayment, type ConfirmationBasis,
 } from '#/lib/hooks/useFinanceReport'
@@ -209,18 +210,21 @@ function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?
             {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
           </span>
           {/*
-            Unmatching lives here rather than on the report row itself: the
-            table is scanned all day and a destructive control sitting in it is
-            more hazard than help. Offered only where there is a statement line
-            to give back — a legacy row has none, and a transfer leg has to be
-            reversed as a whole movement so its two halves cannot come apart.
+            Undoing lives here rather than on the report row itself: the table
+            is scanned all day and a destructive control sitting in it is more
+            hazard than help. What the bin undoes depends on the row — a bank
+            row is unmatched and its line returns to the pool; a movement is
+            reversed whole, both legs at once, so its two halves cannot come
+            apart. A legacy row has neither, so it gets no bin.
           */}
-          {onUnmatch && payment.statementLineId != null && !isTransferLeg(payment) && (
+          {onUnmatch && (transfer ? payment.transferId != null : payment.statementLineId != null) && (
             <Button
               type="button" variant="ghost" size="icon"
               className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-              aria-label="Unmatch this payment"
-              title="Unmatch — returns the bank line to the pool"
+              aria-label={transfer ? 'Reverse this transfer' : 'Unmatch this payment'}
+              title={transfer
+                ? 'Reverse — takes the surplus back to where it came from'
+                : 'Unmatch — returns the bank line to the pool'}
               onClick={onUnmatch}
             >
               <Trash2 className="size-4" />
@@ -547,6 +551,9 @@ function FinanceReportPage() {
   const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; payment: OrderPayment } | null>(null)
   const [unmatchReason, setUnmatchReason] = useState('')
   const removePayment = useRemoveOrderPayment()
+  const reverseTransfer = useReverseOrderTransfer()
+  /** True when the bin was pressed on a movement rather than a bank row. */
+  const undoingTransfer = unmatching != null && isTransferLeg(unmatching.payment)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
   // A range, not a day. resolveRange already understood `to` — only the UI
@@ -1352,13 +1359,21 @@ function FinanceReportPage() {
       />
 
       {/*
-        Unmatching a statement line straight from the report.
+        Undoing an attribution straight from the report — one dialog, two
+        corrections, because from the desk's point of view they are the same
+        act: this money is not on the right order.
 
-        The line goes back to the unmatched pool and the order is recomputed, so
-        the correction is: unmatch here, then open the RIGHT order and confirm it
-        against the same line. Nothing about the line itself changes — it keeps
-        its date, payer, reference and amount, because it is the bank's record
-        and not ours to edit.
+        Unmatch  a bank line goes back to the unmatched pool and the order is
+                 recomputed. The correction is: unmatch here, then open the
+                 RIGHT order and confirm it against the same line. Nothing
+                 about the line itself changes — it keeps its date, payer,
+                 reference and amount, because it is the bank's record and not
+                 ours to edit.
+        Reverse  a movement of surplus goes back where it came from, both legs
+                 together. There is no line to return to any pool; what moves
+                 is the surplus, off the destination order and back onto the
+                 source. The server refuses it if the destination has since
+                 spent the money, rather than leaving that order short.
       */}
       <Dialog
         open={unmatching !== null}
@@ -1366,35 +1381,62 @@ function FinanceReportPage() {
       >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Unmatch this payment from {unmatching?.order.reference}?</DialogTitle>
+            <DialogTitle>
+              {undoingTransfer
+                ? `Reverse this transfer on ${unmatching?.order.reference}?`
+                : `Unmatch this payment from ${unmatching?.order.reference}?`}
+            </DialogTitle>
             <DialogDescription>
-              {unmatching && (
+              {unmatching && (undoingTransfer ? (
+                <>
+                  {naira(Math.abs(unmatching.payment.amount))}
+                  {unmatching.payment.counterpartOrderRef
+                    ? ` · ${unmatching.payment.source === 'transfer_out' ? 'moved to' : 'received from'} ${unmatching.payment.counterpartOrderRef}`
+                    : ''}
+                  {unmatching.payment.transferReason ? ` · ${unmatching.payment.transferReason}` : ''}
+                </>
+              ) : (
                 <>
                   {naira(unmatching.payment.amount)}
                   {unmatching.payment.bankRef ? ` · ${unmatching.payment.bankRef}` : ''}
                   {paymentPayer(unmatching.payment) ? ` · ${paymentPayer(unmatching.payment)}` : ''}
                 </>
-              )}
+              ))}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             <p className="rounded-lg border border-foreground/15 bg-muted/30 p-3 text-sm text-muted-foreground">
-              The bank line goes back to the unmatched pool, and this order is
-              recalculated without it. Open the order it really belongs to and
-              confirm it there — the line keeps its date, payer, reference and
-              amount, so it will be exactly where you left it.
+              {undoingTransfer ? (
+                <>
+                  Both legs of the movement go, and the surplus returns to the order
+                  it was taken from. Both orders are recalculated. If{' '}
+                  {unmatching?.payment.counterpartOrderRef || 'the other order'} is relying
+                  on this money to cover its own value, the reversal will be refused
+                  rather than leaving it short.
+                </>
+              ) : (
+                <>
+                  The bank line goes back to the unmatched pool, and this order is
+                  recalculated without it. Open the order it really belongs to and
+                  confirm it there — the line keeps its date, payer, reference and
+                  amount, so it will be exactly where you left it.
+                </>
+              )}
             </p>
 
             {/* An order mid-pipeline is the case worth stopping on: the money
-                coming off may be what released it. */}
-            {unmatching && ['Released', 'Loading', 'Completed'].includes(unmatching.order.status) && (
+                coming off may be what released it. Only shown when money
+                actually leaves THIS order — reversing an outgoing leg brings
+                surplus back here, so warning about it would be a lie. */}
+            {unmatching && unmatching.payment.amount > 0 &&
+              ['Released', 'Loading', 'Completed'].includes(unmatching.order.status) && (
               <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <span>
                   This order is <strong>{unmatching.order.status}</strong> — tickets may already
-                  have been issued against it. Taking this payment off may leave it short of its
-                  own value.
+                  have been issued against it. Taking this {undoingTransfer ? 'surplus' : 'payment'} off
+                  may leave it short of its own value.
                 </span>
               </p>
             )}
@@ -1405,7 +1447,7 @@ function FinanceReportPage() {
                 autoFocus
                 value={unmatchReason}
                 onChange={(e) => setUnmatchReason(e.target.value)}
-                placeholder="Matched to the wrong order"
+                placeholder={undoingTransfer ? 'Moved to the wrong order' : 'Matched to the wrong order'}
                 onKeyDown={(e) => { if (e.key === 'Enter' && unmatchReason.trim().length >= 3) e.currentTarget.blur() }}
               />
             </div>
@@ -1417,15 +1459,25 @@ function FinanceReportPage() {
             </Button>
             <Button
               variant="destructive"
-              disabled={unmatchReason.trim().length < 3 || removePayment.isPending}
+              disabled={unmatchReason.trim().length < 3 || removePayment.isPending || reverseTransfer.isPending}
               onClick={async () => {
                 if (!unmatching) return
                 try {
-                  await removePayment.mutateAsync({
-                    orderId: unmatching.order.id,
-                    paymentId: unmatching.payment.id,
-                    reason: unmatchReason.trim(),
-                  })
+                  // A movement is keyed by its transfer id, not the leg's own
+                  // payment id: the server undoes both halves in one go.
+                  if (undoingTransfer && unmatching.payment.transferId != null) {
+                    await reverseTransfer.mutateAsync({
+                      orderId: unmatching.order.id,
+                      transferId: unmatching.payment.transferId,
+                      reason: unmatchReason.trim(),
+                    })
+                  } else {
+                    await removePayment.mutateAsync({
+                      orderId: unmatching.order.id,
+                      paymentId: unmatching.payment.id,
+                      reason: unmatchReason.trim(),
+                    })
+                  }
                   setUnmatching(null)
                   setUnmatchReason('')
                 } catch {
@@ -1434,8 +1486,10 @@ function FinanceReportPage() {
                 }
               }}
             >
-              {removePayment.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
-              Unmatch and return to pool
+              {(removePayment.isPending || reverseTransfer.isPending) && (
+                <Loader2 className="mr-1.5 size-4 animate-spin" />
+              )}
+              {undoingTransfer ? 'Reverse transfer' : 'Unmatch and return to pool'}
             </Button>
           </DialogFooter>
         </DialogContent>
