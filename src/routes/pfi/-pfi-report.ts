@@ -172,9 +172,7 @@ function financeTotals(orders: FinanceReportOrder[]) {
     totalQuantity: orders.reduce((s, o) => s + Number(o.quantity || 0), 0),
     totalSalesValue: orders.reduce((s, o) => s + orderSalesValue(o), 0),
     totalAmountPaid,
-    totalDifferential: orders.reduce((s, o) => s + o.differential, 0),
-    totalTransferred: orders.reduce((s, o) => s + o.netTransfers, 0),
-    totalBalance: orders.reduce((s, o) => s + o.balance, 0),
+    totalDifferential: orders.reduce((s, o) => s + o.balance, 0),
   }
 }
 
@@ -745,7 +743,6 @@ export async function downloadPfiReportPdf(pfiId: number) {
           rate: pdfNaira(Number(ord.price || 0)),
           salesValue: pdfNaira(orderSalesValue(ord)),
           differential: Math.abs(d) < 0.005 ? '—' : pdfNaira(d),
-          balance: Math.abs(ord.balance) < 0.005 ? '—' : pdfNaira(ord.balance),
           paidInto: up(orderPaidInto(ord) || '—'),
         }),
       )
@@ -761,8 +758,9 @@ export async function downloadPfiReportPdf(pfiId: number) {
               : isTransferLeg(pay)
                 ? up(`${pay.amount < 0 ? 'MOVED TO' : 'MOVED FROM'} ${pay.counterpartOrderRef || 'ANOTHER ORDER'}`)
                 : up(pay.bankRef || '—'),
-            amount: isTransferLeg(pay) ? '' : pdfNaira(pay.amount),
-            transfers: isTransferLeg(pay) ? pdfNaira(pay.amount) : '',
+            // Transfers included and bracketed when outgoing, so the column
+            // adds down to the order's Amount Paid.
+            amount: pay.amount < 0 ? `(${pdfNaira(Math.abs(pay.amount))})` : pdfNaira(pay.amount),
             recordedBy: up(paymentRecorder(pay) || '—'),
           }),
         )
@@ -779,8 +777,6 @@ export async function downloadPfiReportPdf(pfiId: number) {
     footAt('salesValue', pdfNaira(totals.totalSalesValue))
     footAt('amount', pdfNaira(totals.totalAmountPaid))
     footAt('differential', pdfNaira(totals.totalDifferential))
-    footAt('transfers', pdfNaira(totals.totalTransferred))
-    footAt('balance', pdfNaira(totals.totalBalance))
 
     const refIdx = REPORT_COLUMNS.findIndex((c) => c.key === 'ref')
     const diffIdx = REPORT_COLUMNS.findIndex((c) => c.key === 'differential')

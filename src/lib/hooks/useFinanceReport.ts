@@ -476,19 +476,35 @@ export function orderSalesValue(o: FinanceReportOrder): number {
 }
 
 /**
- * Sales value against the BANK figure. Positive is still owed, negative is
- * more received than the order was worth.
+ * What the order has been paid, by every route money reaches it: a bank line
+ * matched to it, a pre-ledger record, and surplus transferred onto it from
+ * another order.
  *
- * Deliberately unaffected by a transfer made afterwards — "does the bank money
- * match what we billed" has one answer, and moving a surplus elsewhere later
- * does not change it. What is left after transfers is `balance`, which is a
- * different question and has its own column.
+ * This used to be `amountPaidIn`, which excluded transfers so the column would
+ * tie line-by-line to a bank statement. It made the report say an order
+ * settled entirely by a transfer had been paid nothing — true of the bank, and
+ * useless to anybody asking whether the order is paid. A transfer is money on
+ * the order; the report now says so. `amountPaidIn` stays on the row for
+ * anyone reconciling against a statement.
+ */
+export function orderAmountPaid(o: FinanceReportOrder): number {
+  return o.received
+}
+
+/**
+ * Sales value against what the order has been paid. Positive is still owed,
+ * negative is more received than the order was worth.
+ *
+ * The one signed gap on the report. It used to be measured against the bank
+ * figure alone, with a separate Balance column measuring it again after
+ * transfers — two columns answering what the desk asks as one question. This
+ * is the second of those: sales value less everything on the order.
  *
  * Computed server-side so the screen, the workbook and the PDF cannot each
  * arrive at their own version of it.
  */
 export function orderDifferential(o: FinanceReportOrder): number {
-  return o.differential
+  return o.balance
 }
 
 /** The account(s) this order's money was paid into. */
@@ -527,72 +543,6 @@ export function legacyAmount(o: FinanceReportOrder): number {
 }
 
 // ── The summary ─────────────────────────────────────────────────────────────
-
-/**
- * Where a filtered set stands, in the four states an order can be in.
- *
- * Deliberately simpler than what it replaced. The old breakdown had to split
- * every surplus into "still held" and "unaccounted", because a surplus was
- * derived from an inferred funding trail and most of it turned out to be an
- * artefact — ₦961m of apparent overpayment against ₦17.7m actually held.
- *
- * A surplus is now `received − order value`, where received is the sum of
- * payments actually recorded against the order. There is nothing to split: it
- * is money that arrived, it is on this order, and it is either moved to another
- * order or refunded.
- */
-export interface PaymentBreakdown {
-  /** Orders whose payment matches their value to the kobo. */
-  exactCount: number
-  /** Orders holding money beyond their value. */
-  surplusCount: number
-  surplusTotal: number
-  /** Orders still owed money. */
-  shortCount: number
-  shortTotal: number
-  /** Orders with at least one bank statement line behind them. */
-  reconciledCount: number
-  /** Orders with none — nothing an external audit can verify. */
-  unreconciledCount: number
-  /** Legs of money moved between orders. */
-  transferCount: number
-  transferTotal: number
-  /** Positive is owed, negative is surplus — the sum of the column. */
-  netDifferential: number
-}
-
-export function paymentBreakdown(orders: FinanceReportOrder[]): PaymentBreakdown {
-  const b: PaymentBreakdown = {
-    exactCount: 0,
-    surplusCount: 0, surplusTotal: 0,
-    shortCount: 0, shortTotal: 0,
-    reconciledCount: 0, unreconciledCount: 0,
-    transferCount: 0, transferTotal: 0,
-    netDifferential: 0,
-  }
-
-  for (const o of orders) {
-    const d = orderDifferential(o)
-    b.netDifferential += d
-    // Half a kobo, so a rounding artefact never reports as a shortfall.
-    if (Math.abs(d) < 0.005) b.exactCount += 1
-    else if (d > 0) { b.shortCount += 1; b.shortTotal += d }
-    else { b.surplusCount += 1; b.surplusTotal += -d }
-
-    if (o.reconciled) b.reconciledCount += 1
-    else b.unreconciledCount += 1
-
-    for (const p of o.payments) {
-      if (!isTransferLeg(p)) continue
-      b.transferCount += 1
-      // Absolute value: an outgoing leg adds to the total moved rather than
-      // cancelling an incoming one.
-      b.transferTotal += Math.abs(p.amount)
-    }
-  }
-
-  return b
-}
 
 // ── Writes ──────────────────────────────────────────────────────────────────
 

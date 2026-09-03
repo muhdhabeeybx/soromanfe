@@ -5,7 +5,7 @@ import {
   Search, X, Loader2, Landmark, User,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
   FileSpreadsheet, Wallet,
-  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle, Trash2,
+  Repeat, Scale, AlertTriangle, Trash2,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -31,8 +31,8 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate, narrationText,
   transferOrigin, visiblePayments, legacyAmount,
-  orderPaidInto, orderCompany,
-  paymentBreakdown, isTransferLeg, isUnreconciled, isSystemDecided,
+  orderPaidInto, orderCompany, orderAmountPaid, orderDifferential,
+  isTransferLeg, isUnreconciled, isSystemDecided,
   useRemoveOrderPayment,
   useReverseOrderTransfer,
   CONFIRMATION_BASIS_LABEL, CONFIRMATION_BASIS_SHORT,
@@ -50,7 +50,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential', 'balance'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'differential'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -631,8 +631,8 @@ function FinanceReportPage() {
   )
 
   /**
-   * What the orders in view actually received — one sum over the payment rows
-   * shown underneath them.
+   * What the orders in view have been paid — one sum over the payment rows
+   * shown underneath them, transfers included.
    *
    * There is nothing to deduplicate and no second basis to reconcile against.
    * A bank statement line belongs to exactly one order, and the Differential
@@ -640,58 +640,30 @@ function FinanceReportPage() {
    * attempts at this number each totalled something subtly different —
    * deposits, wallet traces, stored amounts — and disagreed with the column
    * beside them.
-   *
-   * Transfer legs are excluded. This is the figure the report is checked
-   * against a bank statement with, so it has to be what the bank paid in, not
-   * what an order was left holding after money moved between orders later.
    */
   const totalAmountPaid = useMemo(
-    () => rows.reduce((sum, o) => sum + o.amountPaidIn, 0),
+    () => rows.reduce((sum, o) => sum + orderAmountPaid(o), 0),
     [rows],
   )
 
-  /** Sales value against the bank figure, before any transfer. */
+  /** Sales value against that. Positive is owed, negative is overpaid. */
   const totalDifferential = useMemo(
-    () => rows.reduce((sum, o) => sum + o.differential, 0),
+    () => rows.reduce((sum, o) => sum + orderDifferential(o), 0),
     [rows],
   )
-
-  /** Money that moved between orders, netted, and what is left after it. */
-  const totalTransferred = useMemo(
-    () => rows.reduce((sum, o) => sum + o.netTransfers, 0),
-    [rows],
-  )
-  const totalBalance = useMemo(() => rows.reduce((sum, o) => sum + o.balance, 0), [rows])
-
-  /**
-   * Where the difference between billed and received actually is.
-   *
-   * A net differential alone cannot be checked: on PFI 39/26 it was six
-   * overpaid orders totalling 169,552.50 against 11bn billed, and nothing on
-   * the page said so. Every figure below is derived from the same
-   * orderDifferential the column uses, so it always adds back to the totals
-   * beside it.
-   */
-  const breakdown = useMemo(() => paymentBreakdown(rows), [rows])
 
   const summary: FinanceReportSummary = {
-    // The breakdown rides along so the exports print the same three figures
-    // the screen shows, rather than a bare differential nobody can check.
-    breakdown,
     count: totals?.count ?? 0,
     totalQuantity: totals?.totalQuantity ?? 0,
     totalSalesValue,
     totalAmountPaid,
     totalDifferential,
-    totalTransferred,
-    totalBalance,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
   }
-  // What is still genuinely outstanding once transfers are counted — the
-  // Balance column, totalled. Distinct from totalDifferential, which is the
-  // gap against the BANK before any transfer.
-  const totalOutstanding = summary.totalBalance
+  // The Differential column, totalled. Positive is money still owed across the
+  // orders in view; negative means more arrived than was billed.
+  const totalOutstanding = summary.totalDifferential
 
   // Which PFIs the Stock Summary block covers.
   //
@@ -728,30 +700,6 @@ function FinanceReportPage() {
       revenue: p.financials?.revenue ?? 0,
     }))
   }, [listedPfis, rows])
-
-  // Reconciles the Stock Summary block against the Total Quantity card: the
-  // period-sold column only covers the PFIs listed, so litres sold on any
-  // other one have to be added back separately to land on the same number.
-  const reconciliationNote = useMemo(() => {
-    const listedPfiIds = new Set(listedPfis.map((p) => Number(p.id ?? p._id)))
-    const qtyOnUnlistedPfis = rows.reduce((sum, o) => {
-      if (o.pfiId == null || listedPfiIds.has(o.pfiId)) return sum
-      return sum + Number(o.quantity || 0)
-    }, 0)
-    const periodSoldOnListed = pfiStock.reduce((sum, p) => sum + p.volumeSoldPeriod, 0)
-    if (search || productId) {
-      return 'A search or product filter is active, so the period-sold total above and the Total Quantity card are not expected to match right now.'
-    }
-    // Filtered to one PFI, the block is about that PFI and the old wording —
-    // "every PFI listed", "still active" — describes a list that is no longer
-    // there. Both figures are stated so they can be read against each other.
-    if (selectedPfi) {
-      return `Filtered to ${selectedPfi.pfiNumber}, so this block covers that PFI alone — ${periodSoldOnListed.toLocaleString()} L sold this period, against the ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card.`
-    }
-    return qtyOnUnlistedPfis > 0
-      ? `Period sold on the PFIs listed (${periodSoldOnListed.toLocaleString()} L) plus ${qtyOnUnlistedPfis.toLocaleString()} L on PFIs no longer active accounts for the ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card.`
-      : `Period sold across every PFI listed accounts for the full ${summary.totalQuantity.toLocaleString()} L on the Total Quantity card — every order in view this period belongs to a PFI still active.`
-  }, [listedPfis, selectedPfi, rows, pfiStock, search, productId, summary.totalQuantity])
 
   const exportFilters: FinanceReportFilters = {
     periodLabel,
@@ -965,87 +913,6 @@ function FinanceReportPage() {
           <SummaryItem icon={Banknote} label="Total sales value" value={naira(summary.totalSalesValue)} />
           <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
 
-          {/*
-            Surplus, Transfers and Shortfall are all worth a card again.
-
-            They were commented down to Net Differential alone because the old
-            breakdown could not tell real money from a bookkeeping artefact: it
-            once claimed ₦234.9m was owed back to customers when ₦13,975,500
-            was actually held, the rest being pre-ledger credits whose
-            remainder had long since paid for other orders. Three figures
-            nobody could act on is worse than one.
-
-            Surplus is now `received − order value`, where received is the sum
-            of the payment rows printed underneath the order. There is no
-            artefact left in it: it is money that arrived, it is on that order,
-            and it is either moved to another order or refunded. So it is
-            something the desk can work through, and it gets a card.
-          */}
-          <SummaryItem
-            icon={ArrowUpCircle}
-            tone={breakdown.surplusTotal > 0 ? 'over' : 'plain'}
-            label="Surplus held on orders"
-            value={naira(breakdown.surplusTotal)}
-            hint={
-              breakdown.surplusCount > 0
-                ? `${breakdown.surplusCount} order${breakdown.surplusCount === 1 ? '' : 's'} · move or refund`
-                : undefined
-            }
-          />
-          <SummaryItem
-            icon={Repeat}
-            tone={breakdown.transferCount > 0 ? 'internal' : 'plain'}
-            label="Moved between orders"
-            value={naira(breakdown.transferTotal)}
-            hint={
-              breakdown.transferCount > 0
-                ? `${breakdown.transferCount} leg${breakdown.transferCount === 1 ? '' : 's'}`
-                : undefined
-            }
-          />
-          {/*
-            The figure an external audit actually turns on: how much of what is
-            on this page can be checked against a bank statement at all. An
-            order with no statement line behind it was confirmed before
-            payments were recorded against orders, and the report says so
-            rather than filling its bank columns with a plausible guess.
-          */}
-          <SummaryItem
-            icon={Landmark}
-            tone={breakdown.unreconciledCount > 0 ? 'owed' : 'plain'}
-            label="Bank-verifiable orders"
-            value={`${breakdown.reconciledCount.toLocaleString()} of ${summary.count.toLocaleString()}`}
-            hint={
-              breakdown.unreconciledCount > 0
-                ? `${breakdown.unreconciledCount.toLocaleString()} with no statement line behind them`
-                : 'Every order matches a bank statement line'
-            }
-          />
-          {/*
-            The question "who decided this?", which the report could not answer
-            at all until migration 0023 recorded it. It is deliberately next to
-            Bank-verifiable and deliberately not the same figure: an order can
-            have a real statement line behind it AND have had that line
-            attributed to it by a migration's tiebreak rather than by a person.
-          */}
-          <SummaryItem
-            icon={AlertTriangle}
-            tone={(totals?.systemDecidedCount ?? 0) > 0 ? 'owed' : 'plain'}
-            label="System-decided orders"
-            value={`${(totals?.systemDecidedCount ?? 0).toLocaleString()} of ${summary.count.toLocaleString()}`}
-            hint={
-              (totals?.systemDecidedCount ?? 0) > 0
-                ? 'Nobody chose how these were funded — the software did. Filter to them above.'
-                : 'Every payment here was a recorded staff decision'
-            }
-          />
-          <SummaryItem
-            icon={ArrowDownCircle}
-            tone={breakdown.shortTotal > 0 ? 'owed' : 'plain'}
-            label="Shortfall"
-            value={naira(breakdown.shortTotal)}
-            // hint={`${breakdown.shortCount} order${breakdown.shortCount === 1 ? '' : 's'} still owing`}
-          />
           <SummaryItem
             icon={Scale}
             label="Net differential"
@@ -1057,11 +924,6 @@ function FinanceReportPage() {
                   ? 'owed'
                   : 'over'
             }
-            // hint={
-            //   Math.abs(summary.totalDifferential) < 0.005
-            //     ? `All ${breakdown.exactCount.toLocaleString()} orders reconcile exactly`
-            //     : `Shortfall less overpaid · ${breakdown.exactCount.toLocaleString()} of ${summary.count.toLocaleString()} exact`
-            // }
           />
           {selectedPfi && (
             <>
@@ -1078,10 +940,6 @@ function FinanceReportPage() {
             <span className={MICRO}>PFI Stock Summary</span>
           </div>
           <div className={cn(PANEL_BODY, 'space-y-3')}>
-            <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-              <Info className="mt-0.5 size-3.5 shrink-0" />
-              Sold counts confirmed customer orders only. {reconciliationNote}
-            </p>
             <div className="overflow-x-auto rounded-lg border border-foreground/15">
               <Table>
                 <TableHeader>
@@ -1187,34 +1045,18 @@ function FinanceReportPage() {
                     product: <span className="text-muted-foreground">{o.productName || '—'}</span>,
                     rate: <span className="whitespace-nowrap">{naira(Number(o.price))}</span>,
                     salesValue: <span className="whitespace-nowrap font-semibold">{naira(salesValue)}</span>,
-                    // Sales value against the BANK figure, before any transfer
+                    // Sales value against everything the order has been paid
                     // — see orderDifferential. Still owed reads red, more
                     // received than the order was worth reads green, and a
                     // clean order reads as a quiet dash rather than a loud
                     // zero. The figure itself is unsigned: colour carries the
                     // direction, here and in both exports.
                     differential: (() => {
-                      const d = o.differential
+                      const d = orderDifferential(o)
                       if (Math.abs(d) < 0.005) return <span className="text-muted-foreground">—</span>
                       return (
                         <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
                           {naira(Math.abs(d))}
-                        </span>
-                      )
-                    })(),
-                    /**
-                     * What is left once the bank figure and the transfers are
-                     * both accounted for. On a settled order this is a dash
-                     * whichever route its money took — so a clean day reads as
-                     * a column of dashes, and anything that is not a dash is a
-                     * real gap somebody has to close.
-                     */
-                    balance: (() => {
-                      const b = o.balance
-                      if (Math.abs(b) < 0.005) return <span className="text-muted-foreground">—</span>
-                      return (
-                        <span className={cn('whitespace-nowrap font-semibold', b > 0 ? 'text-destructive' : 'text-accent')}>
-                          {naira(Math.abs(b))}
                         </span>
                       )
                     })(),
@@ -1286,17 +1128,16 @@ function FinanceReportPage() {
                               {internal ? origin : (p.bankRef || '—')}
                             </span>
                           ),
-                          // Receipts only, always positive, so the column can
-                          // be added straight down the page. A transfer leg
-                          // leaves it empty and lands in Transfers instead.
-                          amount: internal ? null : (
-                            <span className="whitespace-nowrap font-semibold">{naira(p.amount)}</span>
-                          ),
-                          transfers: internal ? (
-                            <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
+                          // Every payment, transfers included. A leg that took
+                          // money off the order is bracketed and blue, so the
+                          // column adds straight down to the order's Amount
+                          // Paid — one column instead of the two it took to
+                          // say the same thing.
+                          amount: (
+                            <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
                               {p.amount < 0 ? `(${naira(Math.abs(p.amount))})` : naira(p.amount)}
                             </span>
-                          ) : null,
+                          ),
                           recordedBy: <span className="block max-w-[10rem] truncate">{paymentRecorder(p) || '—'}</span>,
                         }
                         return (
