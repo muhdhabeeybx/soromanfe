@@ -29,7 +29,7 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
-  useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate,
+  useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate, narrationText,
   transferOrigin, visiblePayments, legacyAmount,
   orderPaidInto, orderCompany,
   paymentBreakdown, isTransferLeg, isUnreconciled, isSystemDecided,
@@ -298,10 +298,24 @@ function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?
         </div>
       )}
 
-      {/* The raw narration, unabridged: it is what someone scanning the bank
-          statement matches against by eye. */}
-      {payment.narration && !transfer && !legacy && (
-        <p className="mt-2 text-xs break-words text-muted-foreground">{payment.narration}</p>
+      {/*
+        The narration, unabridged and labelled: it is what someone scanning the
+        bank statement matches against by eye, and — printed next to the amount
+        above — it is the only place the payer's own words survive.
+
+        Those words are how the desk reads money in while it is still pending:
+        who sent it and what they said it was for. Unlabelled, this line read
+        as leftover data; the amount and the sentence together are the note.
+      */}
+      {narrationText(payment.narration) && !transfer && !legacy && (
+        <p className="mt-2 text-xs break-words text-muted-foreground">
+          <span className={cn(MICRO, 'mr-1.5 opacity-70')}>Narration</span>
+          {narrationText(payment.narration)}
+        </p>
+      )}
+      {/* And anything a person typed against the payment itself. */}
+      {payment.note && !transfer && (
+        <p className="mt-1 text-xs italic break-words text-muted-foreground">{payment.note}</p>
       )}
     </div>
   )

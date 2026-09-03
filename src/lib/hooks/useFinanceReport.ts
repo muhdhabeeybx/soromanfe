@@ -365,16 +365,29 @@ export function paymentRecorder(p: OrderPayment): string {
  * keeps its full text rather than being sliced into nonsense.
  */
 export function shortDepositor(narration: string | null | undefined): string {
-  // "&" arrives HTML-escaped and then stripped to a bare "amp" by whatever
-  // wrote the statement; put it back before anyone reads it.
-  const clean = (v: string) => v.replace(/\s+amp\s+/gi, ' & ').replace(/\s+/g, ' ').trim()
-
   const raw = (narration || '').trim()
   if (!raw) return ''
   const parts = raw.split('/')
-  if (parts.length >= 3 && /^NIP\b/i.test(parts[0])) return clean(parts[2]) || clean(raw)
-  if (parts.length >= 2 && /^(CIP|NISS)\b/i.test(parts[0])) return clean(parts[1]) || clean(raw)
-  return clean(raw)
+  if (parts.length >= 3 && /^NIP\b/i.test(parts[0])) return narrationText(parts[2]) || narrationText(raw)
+  if (parts.length >= 2 && /^(CIP|NISS)\b/i.test(parts[0])) return narrationText(parts[1]) || narrationText(raw)
+  return narrationText(raw)
+}
+
+/**
+ * A bank narration as it should be read on screen, whole.
+ *
+ * shortDepositor slices this down to a name, which is the right thing in a
+ * Depositor column and the wrong thing everywhere else: the rest of the
+ * narration is where the payer says what the money is for — "PMS payment
+ * SOROMAN WARRI", "balance", a truck number — and that sentence is the only
+ * record of it anywhere in the system.
+ *
+ * Two artefacts of the statement file are cleaned off, and nothing else:
+ * "&" arrives HTML-escaped and then stripped to a bare "amp", and runs of
+ * whitespace mark where the bank's own columns were concatenated.
+ */
+export function narrationText(narration: string | null | undefined): string {
+  return (narration || '').replace(/\s+amp\s+/gi, ' & ').replace(/\s+/g, ' ').trim()
 }
 
 /**

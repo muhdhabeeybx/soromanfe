@@ -15,6 +15,7 @@ import {
   useReviewOrderPayment, useReviewOrderTransfer,
   CONFIRMATION_BASIS_LABEL, isSystemDecided,
   paymentRecorder, paymentPayer, paymentPaidInto, transferOrigin, isTransferLeg, isUnreconciled,
+  narrationText,
   type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
 import { naira } from '#/routes/pfi/-pfi-utils'
@@ -193,6 +194,30 @@ export function OrderPaymentsDialog({
                                 paymentPaidInto(p) || null,
                               ].filter(Boolean).join(' · ')}
                       </p>
+                      {/*
+                        The bank's own narration, whole and verbatim.
+
+                        The line above prints the payer's name, which is all
+                        shortDepositor keeps of this sentence — and the part it
+                        drops is the part that says what the money was FOR:
+                        "PMS payment SOROMAN WARRI", "balance", a truck number.
+                        Finance reads that while a payment is pending and then
+                        loses it the moment the order goes green, which is
+                        precisely when somebody starts asking which of six
+                        transfers on the same day this one was.
+                      */}
+                      {!isTransferLeg(p) && narrationText(p.narration) && (
+                        <p className="mt-1 break-words text-xs leading-snug text-muted-foreground">
+                          <span className={cn(MICRO, 'mr-1 opacity-70')}>Narration</span>
+                          {narrationText(p.narration)}
+                        </p>
+                      )}
+                      {/* Anything a person typed against this payment itself. */}
+                      {p.note && (
+                        <p className="mt-1 break-words text-xs italic leading-snug text-muted-foreground">
+                          {p.note}
+                        </p>
+                      )}
                       {p.transferReason && (
                         <p className="mt-1 text-xs italic text-muted-foreground">{p.transferReason}</p>
                       )}
