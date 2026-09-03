@@ -5,7 +5,7 @@ import {
   Search, X, Loader2, Landmark, User,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
   FileSpreadsheet, Wallet,
-  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle, Unlink,
+  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle, Trash2,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -180,7 +180,7 @@ function SummaryItem({
  * decided by inspecting a free-text description and a JSON blob. Those
  * distinctions are now recorded, so the card reads them.
  */
-function PaymentCard({ payment }: { payment: OrderPayment }) {
+function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?: () => void }) {
   const transfer = isTransferLeg(payment)
   const outgoing = payment.source === 'transfer_out'
   const legacy = isUnreconciled(payment)
@@ -204,9 +204,29 @@ function PaymentCard({ payment }: { payment: OrderPayment }) {
               : legacy ? 'No bank record'
                 : 'Bank statement match'}
         </Badge>
-        <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
-          {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
-        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
+            {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
+          </span>
+          {/*
+            Unmatching lives here rather than on the report row itself: the
+            table is scanned all day and a destructive control sitting in it is
+            more hazard than help. Offered only where there is a statement line
+            to give back — a legacy row has none, and a transfer leg has to be
+            reversed as a whole movement so its two halves cannot come apart.
+          */}
+          {onUnmatch && payment.statementLineId != null && !isTransferLeg(payment) && (
+            <Button
+              type="button" variant="ghost" size="icon"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              aria-label="Unmatch this payment"
+              title="Unmatch — returns the bank line to the pool"
+              onClick={onUnmatch}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/*
@@ -287,7 +307,7 @@ function PaymentCard({ payment }: { payment: OrderPayment }) {
   )
 }
 
-function OrderDetailDialog({ order, open, onOpenChange, onManagePayments, onAddPayment }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onManagePayments?: () => void; onAddPayment?: () => void }) {
+function OrderDetailDialog({ order, open, onOpenChange, onManagePayments, onAddPayment, onUnmatch }: { order: FinanceReportOrder | null; open: boolean; onOpenChange: (o: boolean) => void; onManagePayments?: () => void; onAddPayment?: () => void; onUnmatch?: (p: OrderPayment) => void }) {
   if (!order) return null
 
   // Straight off the server, which derives both from the order's payment rows.
@@ -401,7 +421,13 @@ function OrderDetailDialog({ order, open, onOpenChange, onManagePayments, onAddP
                 No payment has been recorded against this order.
               </p>
             ) : (
-              order.payments.map((p) => <PaymentCard key={p.id} payment={p} />)
+              order.payments.map((p) => (
+                <PaymentCard
+                  key={p.id}
+                  payment={p}
+                  onUnmatch={onUnmatch ? () => onUnmatch(p) : undefined}
+                />
+              ))
             )}
 
             {/* Money still owed. Distinct from a gap in the paperwork, which
@@ -1104,10 +1130,6 @@ function FinanceReportPage() {
                       {c.header}
                     </TableHead>
                   ))}
-                  {/* Not part of REPORT_COLUMNS on purpose: that list is
-                      shared with the Excel and PDF exports, and an action
-                      button has no meaning in a spreadsheet. */}
-                  <TableHead className="w-12" />
                   {/* Delete column commented out. Deleting an order is still
                       available from the Orders page; a destructive control in
                       a report people scan all day is more hazard than help.
@@ -1200,7 +1222,6 @@ function FinanceReportPage() {
                             {c.scope === 'order' ? orderCells[c.key] : (legacyCells[c.key] ?? null)}
                           </TableCell>
                         ))}
-                        <TableCell />
                       </TableRow>
                       {/* One sub-row per payment worth printing.
                           Legacy rows are not printed — see visiblePayments;
@@ -1263,29 +1284,6 @@ function FinanceReportPage() {
                                 {c.scope === 'funding' ? paymentCells[c.key] : null}
                               </TableCell>
                             ))}
-                            <TableCell className="text-right">
-                              {/*
-                                Only where there is a statement line to give
-                                back. A legacy row has none, and a transfer leg
-                                must be reversed as a movement so its two halves
-                                cannot come apart — both are handled in the
-                                payments dialog instead.
-                              */}
-                              {p.statementLineId != null && !internal && (
-                                <Button
-                                  type="button" variant="ghost" size="icon"
-                                  aria-label={`Unmatch this payment from ${o.reference}`}
-                                  title="Unmatch — returns the line to the pool"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setUnmatching({ order: o, payment: p })
-                                    setUnmatchReason('')
-                                  }}
-                                >
-                                  <Unlink className="size-3.5" />
-                                </Button>
-                              )}
-                            </TableCell>
                           </TableRow>
                         )
                       })}
@@ -1304,6 +1302,11 @@ function FinanceReportPage() {
         onOpenChange={(o) => !o && setViewing(null)}
         onManagePayments={() => { setManaging(viewing); setViewing(null) }}
         onAddPayment={() => { setPayingBalance(viewing); setViewing(null) }}
+        onUnmatch={(p) => {
+          if (!viewing) return
+          setUnmatching({ order: viewing, payment: p })
+          setUnmatchReason('')
+        }}
       />
 
       {/* The same dialog the payable-orders desk uses — match the statement

@@ -76,6 +76,7 @@ export function OrderPaymentsDialog({
   const summary = data?.summary
   const payments = data?.payments || []
   const surplus = summary?.surplus ?? order.surplus
+  const shortfall = summary?.shortfall ?? order.shortfall
 
   // The destination is given as an order id. A reference would be friendlier,
   // but resolving one to an id client-side means guessing at a lookup the
@@ -248,7 +249,11 @@ export function OrderPaymentsDialog({
                       {!isTransferLeg(p) && (
                         <Button
                           type="button" variant="ghost" size="icon"
-                          aria-label="Remove this payment"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          aria-label="Unmatch this payment"
+                          title={p.statementLineId
+                            ? 'Unmatch — returns the bank line to the pool'
+                            : 'Remove this payment'}
                           onClick={() => { setRemoving(p); setRemoveReason('') }}
                         >
                           <Trash2 className="size-4" />
@@ -345,15 +350,45 @@ export function OrderPaymentsDialog({
               </div>
             )}
 
-            {/* Moving surplus. Offered only when there is surplus to move —
-                an order cannot give away money it needs for its own value,
-                and the server refuses it outright if asked. */}
-            {surplus > 0 && !moveOpen && (
-              <Button variant="outline" className="w-full" onClick={() => setMoveOpen(true)}>
-                <ArrowRightLeft className="size-4" />
-                Move {naira(surplus)} surplus to another order
-              </Button>
-            )}
+            {/*
+              What can be done to this order's money, stated rather than left
+              to be discovered. Each action says why it is unavailable when it
+              is, because "the button is missing" and "the button is disabled
+              for this reason" are very different experiences for somebody
+              trying to correct a mistake in a hurry.
+            */}
+            <div className="space-y-2 rounded-lg border border-foreground/15 bg-muted/20 p-3">
+              <p className={cn(MICRO, 'text-muted-foreground')}>Corrections</p>
+
+              <p className="text-xs text-muted-foreground">
+                <Trash2 className="mr-1 inline size-3 text-destructive" />
+                Matched to the wrong order? Use the red bin on the payment above — its
+                bank line goes back to the pool, then confirm it against the right order.
+              </p>
+
+              {/* Moving surplus. Offered only when there is surplus to move —
+                  an order cannot give away money it needs for its own value,
+                  and the server refuses it outright if asked. */}
+              {surplus > 0 && !moveOpen ? (
+                <Button variant="outline" className="w-full" onClick={() => setMoveOpen(true)}>
+                  <ArrowRightLeft className="size-4" />
+                  Move {naira(surplus)} surplus to another order
+                </Button>
+              ) : !moveOpen && (
+                <p className="text-xs text-muted-foreground">
+                  <ArrowRightLeft className="mr-1 inline size-3" />
+                  No surplus to move — this order holds nothing beyond its own value.
+                </p>
+              )}
+
+              {shortfall > 0 && (
+                <p className="text-xs text-destructive">
+                  <AlertTriangle className="mr-1 inline size-3" />
+                  {naira(shortfall)} still owed. Confirm the bank line that covers it from
+                  the order's own Add payment action.
+                </p>
+              )}
+            </div>
 
             {moveOpen && (
               <div className="space-y-3 rounded-lg border border-foreground/15 p-3">
