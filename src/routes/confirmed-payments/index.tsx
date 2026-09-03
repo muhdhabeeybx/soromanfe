@@ -5,7 +5,7 @@ import {
   Search, X, Loader2, Landmark, User,
   Hash, Clock, FileText, Info, Banknote, Droplets, TrendingUp,
   FileSpreadsheet, Wallet,
-  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle,
+  ArrowUpCircle, ArrowDownCircle, Repeat, Scale, AlertTriangle, Unlink,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -16,8 +16,9 @@ import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
+import { Label } from '#/components/ui/label'
 import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -32,6 +33,7 @@ import {
   transferOrigin, visiblePayments, legacyAmount,
   orderPaidInto, orderCompany,
   paymentBreakdown, isTransferLeg, isUnreconciled, isSystemDecided,
+  useRemoveOrderPayment,
   CONFIRMATION_BASIS_LABEL, CONFIRMATION_BASIS_SHORT,
   type FinanceReportOrder, type OrderPayment, type ConfirmationBasis,
 } from '#/lib/hooks/useFinanceReport'
@@ -482,6 +484,17 @@ function FinanceReportPage() {
   const [payingBalance, setPayingBalance] = useState<FinanceReportOrder | null>(null)
   /** The order whose payments are being inspected or corrected. */
   const [managing, setManaging] = useState<FinanceReportOrder | null>(null)
+  /**
+   * A statement line being taken back off the order it was matched to.
+   *
+   * This was reachable only four clicks deep — row, detail dialog, Manage
+   * payments, bin icon — which for the one thing people need in a hurry (they
+   * matched a payment to the wrong order and can see it on this very page) is
+   * three clicks too many. It is now on the payment row itself.
+   */
+  const [unmatching, setUnmatching] = useState<{ order: FinanceReportOrder; payment: OrderPayment } | null>(null)
+  const [unmatchReason, setUnmatchReason] = useState('')
+  const removePayment = useRemoveOrderPayment()
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
   // A range, not a day. resolveRange already understood `to` — only the UI
@@ -1091,6 +1104,10 @@ function FinanceReportPage() {
                       {c.header}
                     </TableHead>
                   ))}
+                  {/* Not part of REPORT_COLUMNS on purpose: that list is
+                      shared with the Excel and PDF exports, and an action
+                      button has no meaning in a spreadsheet. */}
+                  <TableHead className="w-12" />
                   {/* Delete column commented out. Deleting an order is still
                       available from the Orders page; a destructive control in
                       a report people scan all day is more hazard than help.
@@ -1183,6 +1200,7 @@ function FinanceReportPage() {
                             {c.scope === 'order' ? orderCells[c.key] : (legacyCells[c.key] ?? null)}
                           </TableCell>
                         ))}
+                        <TableCell />
                       </TableRow>
                       {/* One sub-row per payment worth printing.
                           Legacy rows are not printed — see visiblePayments;
@@ -1245,6 +1263,29 @@ function FinanceReportPage() {
                                 {c.scope === 'funding' ? paymentCells[c.key] : null}
                               </TableCell>
                             ))}
+                            <TableCell className="text-right">
+                              {/*
+                                Only where there is a statement line to give
+                                back. A legacy row has none, and a transfer leg
+                                must be reversed as a movement so its two halves
+                                cannot come apart — both are handled in the
+                                payments dialog instead.
+                              */}
+                              {p.statementLineId != null && !internal && (
+                                <Button
+                                  type="button" variant="ghost" size="icon"
+                                  aria-label={`Unmatch this payment from ${o.reference}`}
+                                  title="Unmatch — returns the line to the pool"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setUnmatching({ order: o, payment: p })
+                                    setUnmatchReason('')
+                                  }}
+                                >
+                                  <Unlink className="size-3.5" />
+                                </Button>
+                              )}
+                            </TableCell>
                           </TableRow>
                         )
                       })}
@@ -1284,6 +1325,96 @@ function FinanceReportPage() {
         open={managing !== null}
         onOpenChange={(o) => { if (!o) setManaging(null) }}
       />
+
+      {/*
+        Unmatching a statement line straight from the report.
+
+        The line goes back to the unmatched pool and the order is recomputed, so
+        the correction is: unmatch here, then open the RIGHT order and confirm it
+        against the same line. Nothing about the line itself changes — it keeps
+        its date, payer, reference and amount, because it is the bank's record
+        and not ours to edit.
+      */}
+      <Dialog
+        open={unmatching !== null}
+        onOpenChange={(o) => { if (!o) { setUnmatching(null); setUnmatchReason('') } }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Unmatch this payment from {unmatching?.order.reference}?</DialogTitle>
+            <DialogDescription>
+              {unmatching && (
+                <>
+                  {naira(unmatching.payment.amount)}
+                  {unmatching.payment.bankRef ? ` · ${unmatching.payment.bankRef}` : ''}
+                  {paymentPayer(unmatching.payment) ? ` · ${paymentPayer(unmatching.payment)}` : ''}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <p className="rounded-lg border border-foreground/15 bg-muted/30 p-3 text-sm text-muted-foreground">
+              The bank line goes back to the unmatched pool, and this order is
+              recalculated without it. Open the order it really belongs to and
+              confirm it there — the line keeps its date, payer, reference and
+              amount, so it will be exactly where you left it.
+            </p>
+
+            {/* An order mid-pipeline is the case worth stopping on: the money
+                coming off may be what released it. */}
+            {unmatching && ['Released', 'Loading', 'Completed'].includes(unmatching.order.status) && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  This order is <strong>{unmatching.order.status}</strong> — tickets may already
+                  have been issued against it. Taking this payment off may leave it short of its
+                  own value.
+                </span>
+              </p>
+            )}
+
+            <div className="space-y-1.5">
+              <Label className={cn(MICRO, 'text-muted-foreground')}>Why (required)</Label>
+              <Input
+                autoFocus
+                value={unmatchReason}
+                onChange={(e) => setUnmatchReason(e.target.value)}
+                placeholder="Matched to the wrong order"
+                onKeyDown={(e) => { if (e.key === 'Enter' && unmatchReason.trim().length >= 3) e.currentTarget.blur() }}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setUnmatching(null); setUnmatchReason('') }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={unmatchReason.trim().length < 3 || removePayment.isPending}
+              onClick={async () => {
+                if (!unmatching) return
+                try {
+                  await removePayment.mutateAsync({
+                    orderId: unmatching.order.id,
+                    paymentId: unmatching.payment.id,
+                    reason: unmatchReason.trim(),
+                  })
+                  setUnmatching(null)
+                  setUnmatchReason('')
+                } catch {
+                  // The mutation raises its own toast. The dialog stays open
+                  // with the reason intact so it can be retried.
+                }
+              }}
+            >
+              {removePayment.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+              Unmatch and return to pool
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
 {/* Delete dialog — commented out with the Delete column above; the
           column was its only trigger. Restore both together.
