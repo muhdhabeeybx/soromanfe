@@ -50,7 +50,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'differential'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -652,11 +652,21 @@ function FinanceReportPage() {
     [rows],
   )
 
+  /**
+   * The two columns the table splits Amount Paid across, each footed to its
+   * own sum. They add to totalAmountPaid — the summary states the money once,
+   * the table states where it came from.
+   */
+  const totalBankPaid = useMemo(() => rows.reduce((sum, o) => sum + o.amountPaidIn, 0), [rows])
+  const totalTransferred = useMemo(() => rows.reduce((sum, o) => sum + o.netTransfers, 0), [rows])
+
   const summary: FinanceReportSummary = {
     count: totals?.count ?? 0,
     totalQuantity: totals?.totalQuantity ?? 0,
     totalSalesValue,
     totalAmountPaid,
+    totalBankPaid,
+    totalTransferred,
     totalDifferential,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
@@ -1128,16 +1138,19 @@ function FinanceReportPage() {
                               {internal ? origin : (p.bankRef || '—')}
                             </span>
                           ),
-                          // Every payment, transfers included. A leg that took
-                          // money off the order is bracketed and blue, so the
-                          // column adds straight down to the order's Amount
-                          // Paid — one column instead of the two it took to
-                          // say the same thing.
-                          amount: (
-                            <span className={cn('whitespace-nowrap font-semibold', internal && TONE_CLASS.internal)}>
+                          // Receipts only, always positive, so the column can
+                          // be added straight down the page. A transfer leg
+                          // leaves it empty and lands in Transferred instead —
+                          // reading the two columns side by side is how you
+                          // tell bank money from money off another order.
+                          amount: internal ? null : (
+                            <span className="whitespace-nowrap font-semibold">{naira(p.amount)}</span>
+                          ),
+                          transfers: internal ? (
+                            <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
                               {p.amount < 0 ? `(${naira(Math.abs(p.amount))})` : naira(p.amount)}
                             </span>
-                          ),
+                          ) : null,
                           recordedBy: <span className="block max-w-[10rem] truncate">{paymentRecorder(p) || '—'}</span>,
                         }
                         return (

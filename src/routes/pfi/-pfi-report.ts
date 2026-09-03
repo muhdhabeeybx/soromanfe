@@ -173,6 +173,8 @@ function financeTotals(orders: FinanceReportOrder[]) {
     totalSalesValue: orders.reduce((s, o) => s + orderSalesValue(o), 0),
     totalAmountPaid,
     totalDifferential: orders.reduce((s, o) => s + o.balance, 0),
+    totalBankPaid: orders.reduce((s, o) => s + o.amountPaidIn, 0),
+    totalTransferred: orders.reduce((s, o) => s + o.netTransfers, 0),
   }
 }
 
@@ -758,9 +760,8 @@ export async function downloadPfiReportPdf(pfiId: number) {
               : isTransferLeg(pay)
                 ? up(`${pay.amount < 0 ? 'MOVED TO' : 'MOVED FROM'} ${pay.counterpartOrderRef || 'ANOTHER ORDER'}`)
                 : up(pay.bankRef || '—'),
-            // Transfers included and bracketed when outgoing, so the column
-            // adds down to the order's Amount Paid.
-            amount: pay.amount < 0 ? `(${pdfNaira(Math.abs(pay.amount))})` : pdfNaira(pay.amount),
+            amount: isTransferLeg(pay) ? '' : pdfNaira(pay.amount),
+            transfers: isTransferLeg(pay) ? pdfNaira(pay.amount) : '',
             recordedBy: up(paymentRecorder(pay) || '—'),
           }),
         )
@@ -775,7 +776,8 @@ export async function downloadPfiReportPdf(pfiId: number) {
     footAt('ref', `Total (${orders.length} orders)`)
     footAt('qty', totals.totalQuantity.toLocaleString())
     footAt('salesValue', pdfNaira(totals.totalSalesValue))
-    footAt('amount', pdfNaira(totals.totalAmountPaid))
+    footAt('amount', pdfNaira(totals.totalBankPaid))
+    footAt('transfers', pdfNaira(totals.totalTransferred))
     footAt('differential', pdfNaira(totals.totalDifferential))
 
     const refIdx = REPORT_COLUMNS.findIndex((c) => c.key === 'ref')

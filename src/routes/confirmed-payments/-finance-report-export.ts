@@ -44,21 +44,12 @@ import {
  */
 const NGN_PLAIN = '₦#,##0.00;₦#,##0.00;₦0.00'
 
-/**
- * Amount Paid, where a negative is a direction rather than a loss.
- *
- * The one column that keeps its brackets. Differential lets colour carry the
- * sign because red and green already mean owed and overpaid there; an outgoing
- * transfer leg is neither, so it reads blue like every other internal
- * movement — and blue alone cannot tell ₦54,450,000 out from ₦54,450,000 in.
- */
-const NGN_SIGNED = '₦#,##0.00;(₦#,##0.00);₦0.00'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function paintOwed(cell: any, value: number, key?: string) {
   const ink =
-    key === 'amount'
-      ? (value < -0.005 ? XL.internal : null)
+    key === 'transfers'
+      ? (Math.abs(value) < 0.005 ? null : XL.internal)
       : value > 0.005
         ? XL.loss
         : value < -0.005
@@ -97,9 +88,21 @@ export interface FinanceReportSummary {
   count: number
   totalQuantity: number
   totalSalesValue: number
-  /** Everything received on the listed orders, transfers included. */
+  /**
+   * Everything the listed orders have been paid, transfers included — what
+   * the summary means by "amount paid", and what Net Differential is measured
+   * against.
+   *
+   * The table splits the same money across two columns, because a desk
+   * reading one order needs to know which part a bank statement will show.
+   * `totalBankPaid` + `totalTransferred` is this figure.
+   */
   totalAmountPaid: number
-  /** Sales value less that. Positive is owed, negative is overpaid. */
+  /** The Amount Paid column's own sum — bank lines and pre-ledger rows. */
+  totalBankPaid: number
+  /** The Transferred column's own sum. Zero over a window holding both ends. */
+  totalTransferred: number
+  /** Sales value less totalAmountPaid. Positive is owed, negative is overpaid. */
   totalDifferential: number
   /**
    * The PFI's tank quantity — `startingQtyLitres`, the measured figure that
@@ -179,23 +182,35 @@ const COLUMNS: Array<{
   // ("TRF-9 · from ref 33531928491"), which both live in this column.
   { header: 'Bank Reference', key: 'depositRef', width: 30, scope: 'funding' },
   /**
-   * Everything the order has been paid, whichever way it arrived — a bank
-   * line, a pre-ledger record, or surplus transferred on from another order.
-   * A transfer leg carries its sign, so an order that gave money away nets
-   * down to what it kept.
+   * Money the bank paid in against this order — a matched statement line, or
+   * a pre-ledger record. Receipts only, never netted by a transfer made
+   * afterwards, so the column can be ticked off against a statement and
+   * summed straight down the page.
    *
-   * This column used to hold the bank figure alone, with Transferred and
-   * Balance beside it restating the same money twice more. Three columns to
-   * answer "what has this order been paid" is two too many; the sub-rows
-   * still show where each part came from.
+   * Transfers are deliberately NOT here. Reading this column beside the one
+   * after it is how you tell money that arrived from a bank from money that
+   * came off another order, which is the distinction the desk works in.
    */
-  { header: 'Amount Paid', key: 'amount', width: 18, fmt: NGN_SIGNED, scope: 'funding' },
+  { header: 'Amount Paid', key: 'amount', width: 18, fmt: NGN, scope: 'funding' },
   /**
-   * Sales value less Amount Paid. Positive is still owed, negative is more
-   * received than the order was worth, and a dash all the way down is a clean
-   * day. The one signed gap on the report.
+   * Sales value less EVERYTHING on the order — the bank figure and the
+   * transfers together. Positive is still owed, negative is more received
+   * than the order was worth, and a dash all the way down is a clean day.
+   *
+   * It used to be measured against the bank figure alone, with a Balance
+   * column measuring it again after transfers. That made an order settled
+   * entirely by a transfer read as owing its whole value: ORD-8442394D95CF
+   * is ₦54,450,000, was paid for by ₦54,450,000 moved off ORD-7B4D47DE5567,
+   * and showed a ₦54,450,000 shortfall. There is one gap now and it is this
+   * one; Balance is gone because it was already this subtraction.
    */
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
+  /**
+   * Movement between orders, on its own. Negative where money left, positive
+   * where it landed, so it nets to zero across a window holding both ends —
+   * and the sub-row beneath names the order at the other end.
+   */
+  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_PLAIN, scope: 'funding', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -280,11 +295,12 @@ function paymentRowValues(p: OrderPayment) {
   const when = paymentDate(p)
   const origin = transferOrigin(p)
   return {
-    // Every payment, transfers included and signed. The column sums straight
-    // down to the order's Amount Paid, which is the first thing anyone does
-    // with this sheet — it used to sum to the bank figure while a separate
-    // Transferred column held the rest.
-    amount: p.amount,
+    // Receipts only. A movement between orders is a signed figure in the
+    // Transfers column, not a negative in a column of money received — that
+    // column has to stay something you can select and sum, which is the first
+    // thing anyone does with this sheet.
+    amount: transfer ? null : p.amount,
+    transfers: transfer ? p.amount : null,
     depositor: up(paymentPayer(p) || '—'),
     /**
      * Never blank. A transfer leg has no statement line of its own, so it
@@ -339,6 +355,14 @@ function summaryColumns(
     { header: 'Total Quantity', value: summary.totalQuantity, fmt: QTY },
     { header: 'Total Sales Value', value: summary.totalSalesValue, fmt: NGN },
     { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
+    /**
+     * Only on the exports, and only because they print the summary and the
+     * table on one page: Total Amount Paid counts transfers, the Amount Paid
+     * COLUMN does not, and without this cell the two look like they disagree
+     * by exactly the transfers. On screen the table has no totals row, so
+     * there is nothing to reconcile and the summary stays at nine items.
+     */
+    { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_PLAIN, signed: true },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
   ]
   if (summary.initialStock != null) cols.push({ header: 'Tank Quantity (PFI)', value: summary.initialStock, fmt: QTY })
@@ -378,7 +402,8 @@ export function writeFinanceTable(
   rows: FinanceReportOrder[],
   summary: Pick<
     FinanceReportSummary,
-    'totalQuantity' | 'totalSalesValue' | 'totalAmountPaid' | 'totalDifferential'
+    | 'totalQuantity' | 'totalSalesValue' | 'totalDifferential'
+    | 'totalBankPaid' | 'totalTransferred'
   >,
   startRow: number,
 ): number {
@@ -430,7 +455,8 @@ export function writeFinanceTable(
         cell.border = ALL_BORDERS
         cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
         if (internal) cell.font = { color: { argb: XL.internal } }
-        if (c.key === 'amount') cell.numFmt = NGN_SIGNED
+        if (c.key === 'amount') cell.numFmt = NGN
+        if (c.key === 'transfers') cell.numFmt = NGN_PLAIN
       }
       if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
@@ -447,8 +473,9 @@ export function writeFinanceTable(
     ref: `Total (${rows.length} orders)`,
     qty: summary.totalQuantity,
     salesValue: summary.totalSalesValue,
-    amount: summary.totalAmountPaid,
+    amount: summary.totalBankPaid,
     differential: summary.totalDifferential,
+    transfers: summary.totalTransferred,
   }
   totalRow.height = ROW_HEIGHT.total
   // eachCell() alone would skip the columns this row never set a value for,
@@ -462,6 +489,7 @@ export function writeFinanceTable(
   }
   totalRow.getCell('differential').numFmt = NGN_PLAIN
   paintOwed(totalRow.getCell('differential'), summary.totalDifferential, 'differential')
+  paintOwed(totalRow.getCell('transfers'), summary.totalTransferred, 'transfers')
   totalRow.getCell('qty').numFmt = QTY
   totalRow.getCell('salesValue').numFmt = NGN
   totalRow.getCell('amount').numFmt = NGN
@@ -718,7 +746,7 @@ export async function exportFinanceReportPdf(
   const signedAt: Array<Record<number, number>> = []
   const indexOfCol = (key: string) => COLUMNS.findIndex((c) => c.key === key)
   const diffCol = indexOfCol('differential')
-  const amountCol = indexOfCol('amount')
+  const transfersCol = indexOfCol('transfers')
 
   rows.forEach((o, i) => {
     const v = rowValues(o, i)
@@ -759,14 +787,12 @@ export async function exportFinanceReportPdf(
           depositDate: pv.depositDate ? format(pv.depositDate, DATE_PATTERN) : '—',
           depositor: pv.depositor,
           depositRef: pv.depositRef,
-          amount: pv.amount < 0 ? `(${naira(Math.abs(pv.amount))})` : naira(pv.amount),
+          amount: pv.amount == null ? '' : naira(pv.amount),
+          transfers: pv.transfers == null ? '' : plain(pv.transfers),
           recordedBy: pv.recordedBy,
         }),
       )
-      // A transfer leg is the only payment that can be negative, and its sign
-      // is the whole point of showing it — so it gets the same red/green the
-      // Differential column does rather than reading as a plain receipt.
-      if (pv.amount < 0) signedAt[body.length - 1] = { [amountCol]: pv.amount }
+      if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
     }
   })
 
@@ -780,8 +806,9 @@ export async function exportFinanceReportPdf(
   footAt('ref', `Total (${rows.length})`)
   footAt('qty', summary.totalQuantity.toLocaleString())
   footAt('salesValue', naira(summary.totalSalesValue))
-  footAt('amount', naira(summary.totalAmountPaid))
+  footAt('amount', naira(summary.totalBankPaid))
   footAt('differential', plain(summary.totalDifferential))
+  footAt('transfers', plain(summary.totalTransferred))
 
   const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
   const depositRefIndex = COLUMNS.findIndex((c) => c.key === 'depositRef')
@@ -831,18 +858,20 @@ export async function exportFinanceReportPdf(
        *
        * Positive is order value MINUS money received, so it is a shortfall and
        * reads red; negative means more arrived than was billed and reads
-       * green. An outgoing transfer leg takes the internal blue instead: money
-       * moving between two orders is not a gain or a loss to anybody.
-       * See paintOwed.
+       * green. Transfers take neither: money moving between two orders is not
+       * a gain or a loss to anybody. See paintOwed.
        */
       const signed =
         data.section === 'foot'
-          ? ({ [diffCol]: summary.totalDifferential } as Record<number, number>)
+          ? ({
+              [diffCol]: summary.totalDifferential,
+              [transfersCol]: summary.totalTransferred,
+            } as Record<number, number>)
           : signedAt[data.row.index]
       const value = signed?.[data.column.index]
       if (typeof value === 'number' && Math.abs(value) >= 0.005) {
         data.cell.styles.textColor =
-          data.column.index === amountCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
+          data.column.index === transfersCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
       }
     },
   })
