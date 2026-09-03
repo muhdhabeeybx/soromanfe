@@ -9,9 +9,39 @@ import {
   XL, PDF, NGN, NGN_SIGNED, QTY, DATE_FMT, DATE_PATTERN,
   ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
-  writeTitleBlock, writeSectionHeading, paintSigned,
+  writeTitleBlock, writeSectionHeading,
   pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
 } from '#/lib/report-theme'
+
+/**
+ * Red is money still owed, green is money received beyond the bill.
+ *
+ * Deliberately NOT the theme's `paintSigned`, which colours by sign alone.
+ * Every signed column here is order value MINUS money received, so a POSITIVE
+ * number is a shortfall and has to read as the warning. Sign alone says the
+ * opposite, and did: an overpaid order printed red in both exports while an
+ * order still owing printed green — the exact inverse of the screen, on the
+ * one report where colour is supposed to mean something.
+ *
+ * sales-ledger has the same inversion and its own `paintBalance` for exactly
+ * this reason; the comment there warns about `paintSigned` explicitly.
+ *
+ * Transfers take neither colour. Money moving between two orders is not a gain
+ * or a loss to anybody, and the screen has always shown it in the same blue
+ * this uses.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function paintOwed(cell: any, value: number, key?: string) {
+  const ink =
+    key === 'transfers'
+      ? (Math.abs(value) < 0.005 ? null : XL.internal)
+      : value > 0.005
+        ? XL.loss
+        : value < -0.005
+          ? XL.gain
+          : null
+  if (ink) cell.font = { ...(cell.font || {}), color: { argb: ink } }
+}
 
 /**
  * Amounts and quantities are written as real numbers with a cell format,
@@ -410,7 +440,7 @@ export function writeFinanceTable(
       if (c.fmt) cell.numFmt = c.fmt
       if (c.signed) {
         const v = (values as Record<string, unknown>)[c.key]
-        if (typeof v === 'number') paintSigned(cell, v)
+        if (typeof v === 'number') paintOwed(cell, v, c.key)
       }
     }
     row.getCell('ref').font = { bold: true }
@@ -466,9 +496,9 @@ export function writeFinanceTable(
     cell.font = TOTAL_FONT
   }
   totalRow.getCell('differential').numFmt = NGN_SIGNED
-  paintSigned(totalRow.getCell('differential'), summary.totalDifferential)
-  paintSigned(totalRow.getCell('transfers'), summary.totalTransferred ?? 0)
-  paintSigned(totalRow.getCell('balance'), summary.totalBalance ?? summary.totalDifferential)
+  paintOwed(totalRow.getCell('differential'), summary.totalDifferential, 'differential')
+  paintOwed(totalRow.getCell('transfers'), summary.totalTransferred ?? 0, 'transfers')
+  paintOwed(totalRow.getCell('balance'), summary.totalBalance ?? summary.totalDifferential, 'balance')
   totalRow.getCell('qty').numFmt = QTY
   totalRow.getCell('salesValue').numFmt = NGN
   totalRow.getCell('amount').numFmt = NGN
@@ -550,7 +580,9 @@ export async function exportFinanceReportExcel(
     cell.font = TOTAL_FONT
     cell.alignment = { vertical: 'middle', horizontal: 'center' }
     if (col.fmt) cell.numFmt = col.fmt
-    if (col.signed && typeof col.value === 'number') paintSigned(cell, col.value)
+    if (col.signed && typeof col.value === 'number') {
+      paintOwed(cell, col.value, /Transferred/i.test(col.header) ? 'transfers' : undefined)
+    }
   }
   cursor++
 
@@ -658,6 +690,10 @@ export async function exportFinanceReportPdf(
   const signedSummaryIndexes = summaryCols
     .map((c, i) => (c.signed ? i : -1))
     .filter((i) => i >= 0)
+  // Transferred is signed but is not a gain or a loss — see paintOwed.
+  const transferSummaryIndexes = summaryCols
+    .map((c, i) => (/Transferred/i.test(c.header) ? i : -1))
+    .filter((i) => i >= 0)
 
   autoTable(doc, {
     startY,
@@ -673,8 +709,14 @@ export async function exportFinanceReportPdf(
       const text = String(data.cell.raw).trim()
       if (!text) return
       // Parenthesised is negative — pdfNaira writes it that way so the sign
-      // survives a monochrome print.
-      data.cell.styles.textColor = text.startsWith('(') ? PDF.loss : PDF.gain
+      // survives a monochrome print. Negative here means MORE money arrived
+      // than was billed, so it is the green one; a bare positive is a
+      // shortfall. See paintOwed for why sign alone gets this backwards.
+      if (transferSummaryIndexes.includes(data.column.index)) {
+        data.cell.styles.textColor = PDF.internal
+        return
+      }
+      data.cell.styles.textColor = text.startsWith('(') ? PDF.gain : PDF.loss
     },
   })
 
@@ -804,10 +846,12 @@ export async function exportFinanceReportPdf(
       }
       // Signed money reads green or red in the body and in the totals bar
       // alike — the one place in these documents where colour means anything.
+      // Parenthesised is negative, which on this column means the order took
+      // MORE than it was billed: green. A bare figure is still owed: red.
       if (data.column.index === differentialIndex) {
         const text = String(data.cell.raw).trim()
         if (text && text !== '—') {
-          data.cell.styles.textColor = text.startsWith('(') ? PDF.loss : PDF.gain
+          data.cell.styles.textColor = text.startsWith('(') ? PDF.gain : PDF.loss
         }
       }
     },
