@@ -43,6 +43,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { triggerDownload } from '#/lib/report-theme'
 import { cn } from '#/lib/utils'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 import { useCurrentUserRoles } from '#/lib/hooks/useRoles'
 import { hasAnyRole, Roles } from '#/lib/rbac'
 import { parseCsv, toImportRows, type ParsedImport } from '#/lib/contact-csv'
@@ -661,7 +662,7 @@ function PeoplePage() {
                               p.numberStatus !== 'ok' && 'text-warning',
                             )}>
                               {p.numberStatus === 'ok' ? <Phone className="size-3" /> : <PhoneOff className="size-3" />}
-                              {p.phone}
+                              <PhoneLink value={p.phone} className="text-inherit" />
                             </span>
                             {/* The other numbers this person signs in on. Named
                                 rather than counted when there is one, because
@@ -669,7 +670,7 @@ function PeoplePage() {
                                 and "1 more" would make them click to find it. */}
                             {p.extraPhones?.length === 1 && (
                               <span className="flex items-center gap-1 text-muted-foreground" title="Also signs in on this number">
-                                <PhoneCall className="size-3" />{p.extraPhones[0]}
+                                <PhoneCall className="size-3" /><PhoneLink value={p.extraPhones[0]} className="text-inherit" />
                               </span>
                             )}
                             {p.extraPhones?.length > 1 && (

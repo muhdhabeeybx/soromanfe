@@ -16,6 +16,7 @@ import { toNum } from '#/lib/utils'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/pfi/details')({
   beforeLoad: () => routeGuard('/pfi'),
@@ -319,7 +320,7 @@ function PFIDetails() {
               </div>
               <div>
                 <dt className="text-muted-foreground font-normal">Surveyor Phone</dt>
-                <dd className="font-semibold text-foreground mt-0.5">{pfi.surveyorPhone || '—'}</dd>
+                <dd className="font-semibold text-foreground mt-0.5"><PhoneLink value={pfi.surveyorPhone} /></dd>
               </div>
             </dl>
           </CardContent>

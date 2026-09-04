@@ -16,6 +16,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/admin/details')({
   beforeLoad: () => routeGuard('/admin'),
@@ -153,8 +154,8 @@ function UserDetailPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div><p className="text-xs text-muted-foreground font-normal uppercase">Email</p><a href={`mailto:${staff.email}`} className="text-sm text-primary mt-0.5 hover:underline flex items-center gap-1.5"><Mail className="size-3.5" /> {staff.email}</a></div>
-            <div><p className="text-xs text-muted-foreground font-normal uppercase">Phone Number</p>{staff.phone_number ? <a href={`tel:${staff.phone_number}`} className="text-sm text-primary mt-0.5 hover:underline flex items-center gap-1.5"><Phone className="size-3.5" /> {staff.phone_number}</a> : <p className="text-sm text-muted-foreground mt-0.5">Not provided</p>}</div>
+            <div><p className="text-xs text-muted-foreground font-normal uppercase">Email</p><span className="text-sm mt-0.5 flex items-center gap-1.5"><Mail className="size-3.5 text-muted-foreground shrink-0" /><EmailLink value={staff.email} /></span></div>
+            <div><p className="text-xs text-muted-foreground font-normal uppercase">Phone Number</p><span className="text-sm mt-0.5 flex items-center gap-1.5"><Phone className="size-3.5 text-muted-foreground shrink-0" /><PhoneLink value={staff.phone_number} fallback="Not provided" /></span></div>
             <div><p className="text-xs text-muted-foreground font-normal uppercase">Location Scope</p><p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5"><MapPin className="size-3.5 text-muted-foreground" />{isSuperAdminUser || staff.can_view_all_locations ? <span className="flex items-center gap-1"><Globe className="size-3" /> Full Access</span> : scopeNames.length === 0 ? <span className="text-muted-foreground">No locations assigned</span> : scopeNames.join(', ')}</p></div>
             {!isSuperAdminUser && !staff.can_view_all_locations && (
               <div><p className="text-xs text-muted-foreground font-normal uppercase">PFI Scope</p><p className="text-sm text-foreground mt-0.5">{staff.pfi_numbers?.length ? staff.pfi_numbers.join(', ') : <span className="text-muted-foreground">No PFIs assigned</span>}</p></div>

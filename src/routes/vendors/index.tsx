@@ -13,6 +13,7 @@ import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { useVendors } from '#/lib/hooks/useVendors'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/vendors/')({
   beforeLoad: () => routeGuard('/vendors'),
@@ -149,8 +150,8 @@ function VendorsIndex() {
 
                       {(vendor.phone || vendor.email) && (
                         <div className="text-xs text-muted-foreground space-y-0.5 mb-3">
-                          {vendor.phone && <p>{vendor.phone}</p>}
-                          {vendor.email && <p className="truncate">{vendor.email}</p>}
+                          {vendor.phone && <p><PhoneLink value={vendor.phone} /></p>}
+                          {vendor.email && <p className="truncate"><EmailLink value={vendor.email} /></p>}
                         </div>
                       )}
 

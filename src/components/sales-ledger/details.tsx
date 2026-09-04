@@ -19,6 +19,7 @@ import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { usePfiList, type Pfi } from '#/lib/hooks/usePfis'
 import { useLedgerGroups } from '#/lib/hooks/useLedgerGroups'
 import { useToast } from '#/lib/hooks/useToast'
+import { PhoneLink } from '#/components/ContactLink'
 import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import {
   QuickPaymentDialog, RowSetupDialog, EditEntryDialog, DeleteConfirmDialog,
@@ -517,10 +518,10 @@ export function SalesLedgerDetails() {
                                 {payment.payerName ? (
                                   <div>
                                     <p className="uppercase">{payment.payerName}</p>
-                                    {payment.phoneNumber && <p className="text-xs text-muted-foreground">{payment.phoneNumber}</p>}
+                                    {payment.phoneNumber && <p className="text-xs text-muted-foreground"><PhoneLink value={payment.phoneNumber} /></p>}
                                   </div>
                                 ) : payment.phoneNumber ? (
-                                  <span className="text-muted-foreground">{payment.phoneNumber}</span>
+                                  <PhoneLink value={payment.phoneNumber} className="text-muted-foreground" />
                                 ) : '—'}
                               </TableCell>
                               <TableCell className="text-foreground whitespace-nowrap">
@@ -641,7 +642,7 @@ export function SalesLedgerDetails() {
                       {(cgCustObj?.phoneNumber || cgCustObj?.contactPersonPhone) && (
                         <div className="text-xs text-muted-foreground flex items-center gap-1">
                           <Phone className="size-2.5 text-muted-foreground" />
-                          {cgCustObj.contactPersonPhone || cgCustObj.phoneNumber}
+                          <PhoneLink value={cgCustObj.contactPersonPhone || cgCustObj.phoneNumber} />
                         </div>
                       )}
 

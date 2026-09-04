@@ -12,6 +12,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '#
 import { Contact, Search, Plus, UserCheck, UserX, Star, Phone, Mail, Truck, FileText, X, SearchX, Loader2 } from 'lucide-react'
 import { useDriverList } from '#/lib/hooks/useDrivers'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/drivers/')({
   beforeLoad: () => routeGuard('/drivers'),
@@ -136,7 +137,7 @@ function DriversDashboard() {
                           </div>
                         </TableCell>
                         <TableCell><div className="flex items-center gap-1.5"><Star className="size-3.5 text-warning fill-warning" /><span className="font-semibold">{driver.rating}</span><span className={`text-xs font-normal ${getSafetyColor(driver.safetyScore)}`}>{driver.safetyScore}%</span></div></TableCell>
-                        <TableCell className="text-xs text-muted-foreground hidden md:table-cell"><div className="flex items-center gap-1"><Mail className="size-3" /><span className="truncate max-w-[160px]">{driver.email || '—'}</span></div><div className="flex items-center gap-1 mt-0.5"><Phone className="size-3" />{driver.phone}</div></TableCell>
+                        <TableCell className="text-xs text-muted-foreground hidden md:table-cell"><div className="flex items-center gap-1"><Mail className="size-3 shrink-0" /><EmailLink value={driver.email} className="truncate max-w-[160px]" /></div><div className="flex items-center gap-1 mt-0.5"><Phone className="size-3 shrink-0" /><PhoneLink value={driver.phone} /></div></TableCell>
                         <TableCell>{getStatusBadge(driver.status)}</TableCell>
                       </TableRow>
                     ))}

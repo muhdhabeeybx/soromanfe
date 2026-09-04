@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '../utils/formatters'
 import type { OrderWizardReturn } from '../hooks/useOrderWizard'
+import { PhoneLink } from '#/components/ContactLink'
 
 interface ReviewStepProps {
   wizard: OrderWizardReturn
@@ -49,7 +50,7 @@ export function ReviewStep({ wizard }: ReviewStepProps) {
           </div>
           <div>
             <span className="text-xs text-muted-foreground block">Phone</span>
-            <span className="font-semibold text-foreground">{selectedCustomer?.phone}</span>
+            <PhoneLink value={selectedCustomer?.phone} className="font-semibold text-foreground" />
           </div>
         </div>
         {(selectedCustomer?.balance || 0) < 0 && (

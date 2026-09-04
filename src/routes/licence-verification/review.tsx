@@ -18,6 +18,7 @@ import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/licence-verification/review')({
   beforeLoad: () => routeGuard('/licence-verification'),
@@ -261,9 +262,7 @@ function LicenceReviewPage() {
                   <Phone className="size-4 text-muted-foreground shrink-0" />
                   <div>
                     <p className="text-xs text-muted-foreground">Phone</p>
-                    <p className="text-sm font-normal">
-                      {license.customerPhone}
-                    </p>
+                    <PhoneLink value={license.customerPhone} className="text-sm font-normal" />
                   </div>
                 </div>
               )}
@@ -272,9 +271,7 @@ function LicenceReviewPage() {
                   <Mail className="size-4 text-muted-foreground shrink-0" />
                   <div>
                     <p className="text-xs text-muted-foreground">Email</p>
-                    <p className="text-sm font-normal">
-                      {license.customerEmail}
-                    </p>
+                    <EmailLink value={license.customerEmail} className="text-sm font-normal" />
                   </div>
                 </div>
               )}

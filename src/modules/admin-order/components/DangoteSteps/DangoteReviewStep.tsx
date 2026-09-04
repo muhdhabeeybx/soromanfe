@@ -6,6 +6,7 @@ import {
   Truck,
 } from 'lucide-react'
 import type { DangoteOrderWizardReturn } from '../../hooks/useDangoteOrderWizard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 interface DangoteReviewStepProps {
   wizard: DangoteOrderWizardReturn
@@ -44,11 +45,11 @@ export function DangoteReviewStep({ wizard }: DangoteReviewStepProps) {
             </div>
             <div>
               <span className="text-muted-foreground block">Phone</span>
-              <span className="font-normal">{selectedCustomer?.phone}</span>
+              <PhoneLink value={selectedCustomer?.phone} className="font-normal" />
             </div>
             <div>
               <span className="text-muted-foreground block">Email</span>
-              <span className="font-normal">{selectedCustomer?.email || '—'}</span>
+              <EmailLink value={selectedCustomer?.email} className="font-normal" />
             </div>
           </div>
         </div>

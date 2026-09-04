@@ -11,6 +11,7 @@ import {
 import { useTicketDetails, useRedeemTicket } from '#/lib/hooks/useTickets'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/ticket/details')({
   beforeLoad: () => routeGuard('/ticket'),
@@ -213,7 +214,7 @@ function TicketDetailsComponent() {
                 <div className="text-xs text-muted-foreground space-y-1">
                   <p>Redeemed At: <span className="font-semibold text-foreground">{redeemedDate || 'N/A'}</span></p>
                   {ticket.redeemedBy && (
-                    <p>Redeemed By: <span className="font-semibold text-foreground">{ticket.redeemedBy.firstName} {ticket.redeemedBy.surname} ({ticket.redeemedBy.email})</span></p>
+                    <p>Redeemed By: <span className="font-semibold text-foreground">{ticket.redeemedBy.firstName} {ticket.redeemedBy.surname} (<EmailLink value={ticket.redeemedBy.email} />)</span></p>
                   )}
                 </div>
               </div>
@@ -293,11 +294,11 @@ function TicketDetailsComponent() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <p className="text-xs text-muted-foreground uppercase font-normal">Email</p>
-                  <p className="font-normal text-foreground truncate">{ticket.order?.customer?.email || 'N/A'}</p>
+                  <EmailLink value={ticket.order?.customer?.email} fallback="N/A" className="font-normal text-foreground truncate block" />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground uppercase font-normal">Phone</p>
-                  <p className="font-normal text-foreground">{ticket.order?.customer?.phone || 'N/A'}</p>
+                  <PhoneLink value={ticket.order?.customer?.phone} fallback="N/A" className="font-normal text-foreground" />
                 </div>
               </div>
             </CardContent>

@@ -24,6 +24,7 @@ import { useVendorDetails, type Vendor } from '#/lib/hooks/useVendors'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
@@ -156,13 +157,13 @@ function VendorDetails() {
             {vendor.phone && (
               <div>
                 <p className="text-xs text-muted-foreground font-normal uppercase flex items-center gap-1"><Phone className="size-3.5" /> Phone</p>
-                <p className="text-foreground font-semibold mt-0.5">{vendor.phone}</p>
+                <PhoneLink value={vendor.phone} className="text-foreground font-semibold mt-0.5 block" />
               </div>
             )}
             {vendor.email && (
               <div>
                 <p className="text-xs text-muted-foreground font-normal uppercase flex items-center gap-1"><Mail className="size-3.5" /> Email</p>
-                <p className="text-foreground font-semibold mt-0.5">{vendor.email}</p>
+                <EmailLink value={vendor.email} className="text-foreground font-semibold mt-0.5 block" />
               </div>
             )}
             {vendor.address && (

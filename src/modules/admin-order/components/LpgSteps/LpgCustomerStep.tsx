@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '../../utils/formatters'
 import type { LpgOrderWizardReturn } from '../../hooks/useLpgOrderWizard'
+import { PhoneLink } from '#/components/ContactLink'
 
 interface LpgCustomerStepProps {
   wizard: LpgOrderWizardReturn
@@ -76,7 +77,7 @@ export function LpgCustomerStep({ wizard }: LpgCustomerStepProps) {
                 </div>
                 <div>
                   <span className="text-muted-foreground block">Phone</span>
-                  <span className="font-normal">{selectedCustomer.phone}</span>
+                  <PhoneLink value={selectedCustomer.phone} className="font-normal" />
                 </div>
                 <div>
                   <span className="text-muted-foreground block">Account Balance</span>

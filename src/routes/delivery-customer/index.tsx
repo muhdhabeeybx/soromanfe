@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useDeliveryCustomerList, useDeleteDeliveryCustomer } from '#/lib/hooks/useDeliveryCustomers'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 type DeliveryCustomer = {
   _id: string
@@ -89,15 +90,6 @@ function getDaysSinceTxn(lastTxnDate?: string | Date | null): number | null {
   } catch {
     return null
   }
-}
-
-const PhoneLink = ({ phone }: { phone?: string }) => {
-  if (!phone) return <span className="text-muted-foreground">—</span>
-  return (
-    <a href={`tel:${phone}`} className="text-primary hover:underline font-semibold" onClick={(e) => e.stopPropagation()}>
-      {phone}
-    </a>
-  )
 }
 
 const statusConfig = {
@@ -415,15 +407,15 @@ function DeliveryCustomerListRoute() {
                         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pt-0.5">
                           {c.phoneNumber && (
                             <span className="flex items-center gap-1">
-                              <Phone className="size-3" /> <PhoneLink phone={c.phoneNumber} />
+                              <Phone className="size-3" /> <PhoneLink value={c.phoneNumber} className="font-semibold" />
                               {c.altPhoneNumber && (
-                                <span className="ml-1 text-muted-foreground">/ <PhoneLink phone={c.altPhoneNumber} /></span>
+                                <span className="ml-1 text-muted-foreground">/ <PhoneLink value={c.altPhoneNumber} className="font-semibold" /></span>
                               )}
                             </span>
                           )}
                           {c.email && (
                             <span className="flex items-center gap-1">
-                              <Mail className="size-3" /> {c.email}
+                              <Mail className="size-3" /> <EmailLink value={c.email} />
                             </span>
                           )}
                           <span className="flex items-center gap-1 truncate max-w-xs">
@@ -536,20 +528,20 @@ function DeliveryCustomerListRoute() {
 
                 <div className="flex justify-between py-1 border-b border-border/50">
                   <span className="text-muted-foreground">Primary Phone</span>
-                  <PhoneLink phone={selectedCustomer.phoneNumber} />
+                  <PhoneLink value={selectedCustomer.phoneNumber} className="font-semibold" />
                 </div>
 
                 {selectedCustomer.altPhoneNumber && (
                   <div className="flex justify-between py-1 border-b border-border/50">
                     <span className="text-muted-foreground">Alt Phone</span>
-                    <PhoneLink phone={selectedCustomer.altPhoneNumber} />
+                    <PhoneLink value={selectedCustomer.altPhoneNumber} className="font-semibold" />
                   </div>
                 )}
 
                 {selectedCustomer.email && (
                   <div className="flex justify-between py-1 border-b border-border/50">
                     <span className="text-muted-foreground">Email</span>
-                    <span className="font-semibold">{selectedCustomer.email}</span>
+                    <EmailLink value={selectedCustomer.email} className="font-semibold" />
                   </div>
                 )}
 
@@ -558,7 +550,9 @@ function DeliveryCustomerListRoute() {
                     <span className="text-muted-foreground">Station Manager</span>
                     <span className="font-semibold">
                       {selectedCustomer.contactPerson}
-                      {selectedCustomer.contactPersonPhone && ` (${selectedCustomer.contactPersonPhone})`}
+                      {selectedCustomer.contactPersonPhone && (
+                        <> (<PhoneLink value={selectedCustomer.contactPersonPhone} />)</>
+                      )}
                     </span>
                   </div>
                 )}

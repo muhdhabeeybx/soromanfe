@@ -6,6 +6,7 @@ import {
   DollarSign,
 } from 'lucide-react'
 import type { LpgOrderWizardReturn } from '../../hooks/useLpgOrderWizard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', minimumFractionDigits: 0 }).format(value)
@@ -51,11 +52,11 @@ export function LpgReviewStep({ wizard }: LpgReviewStepProps) {
             </div>
             <div>
               <span className="text-muted-foreground block">Phone</span>
-              <span className="font-normal">{selectedCustomer?.phone}</span>
+              <PhoneLink value={selectedCustomer?.phone} className="font-normal" />
             </div>
             <div>
               <span className="text-muted-foreground block">Email</span>
-              <span className="font-normal">{selectedCustomer?.email || '—'}</span>
+              <EmailLink value={selectedCustomer?.email} className="font-normal" />
             </div>
           </div>
         </div>

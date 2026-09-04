@@ -16,6 +16,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
 import { useAllOrders } from '#/lib/hooks/useOrders'
 import { useOrderForTicketing, type TruckLoad } from '#/lib/hooks/useTickets'
+import { PhoneLink } from '#/components/ContactLink'
 
 export const fmt = (n: unknown) => Number(n || 0).toLocaleString('en-NG')
 
@@ -159,7 +160,8 @@ export function TruckCard({
             Truck {load.truckIndex} — <span className="font-mono">{load.truckNumber}</span>
           </p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {driverName || '—'}{driverPhone ? ` · ${driverPhone}` : ''}
+            {driverName || '—'}
+            {driverPhone && <> · <PhoneLink value={driverPhone} className="text-inherit" /></>}
           </p>
           <p className="mt-1 text-sm font-semibold">
             {fmt(load.quantity)} <span className="text-xs font-normal text-muted-foreground">{unit}</span>

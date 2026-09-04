@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '../../utils/formatters'
 import type { DangoteOrderWizardReturn } from '../../hooks/useDangoteOrderWizard'
+import { PhoneLink } from '#/components/ContactLink'
 
 interface DangoteCustomerStepProps {
   wizard: DangoteOrderWizardReturn
@@ -76,7 +77,7 @@ export function DangoteCustomerStep({ wizard }: DangoteCustomerStepProps) {
                 </div>
                 <div>
                   <span className="text-muted-foreground block">Phone</span>
-                  <span className="font-normal">{selectedCustomer.phone}</span>
+                  <PhoneLink value={selectedCustomer.phone} className="font-normal" />
                 </div>
                 <div>
                   <span className="text-muted-foreground block">Account Balance</span>

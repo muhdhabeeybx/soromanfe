@@ -25,6 +25,7 @@ import {
 } from '#/lib/hooks/useFleet'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/fleet-trucks/')({
   beforeLoad: () => routeGuard('/fleet-trucks'),
@@ -33,7 +34,20 @@ export const Route = createFileRoute('/fleet-trucks/')({
 
 const ALL = 'all'
 const naira = (n: number) => `₦${Number(n || 0).toLocaleString('en-NG')}`
-type SortKey = 'debits' | 'credits' | 'balance'
+type SortKey = 'plate' | 'debits' | 'credits' | 'balance'
+
+/**
+ * Plate order, reading digits as numbers so ABC-9 precedes ABC-10.
+ *
+ * This is the default, and deliberately so: a directory is a document you
+ * arrive at already knowing which plate you want, and an order that reshuffles
+ * every time an entry is posted makes a truck impossible to find twice. The
+ * money columns are still sortable for the times the question really is "who
+ * is costing the most" — but that question has an answer on the ledger page,
+ * and looking a truck up does not.
+ */
+const byPlate = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
 
 function FleetDirectoryPage() {
   const navigate = useNavigate()
@@ -42,8 +56,8 @@ function FleetDirectoryPage() {
   const [loadStatus, setLoadStatus] = useState(ALL)
   const [condition, setCondition] = useState(ALL)
   const [capacity, setCapacity] = useState(ALL)
-  const [sortBy, setSortBy] = useState<SortKey>('balance')
-  const [desc, setDesc] = useState(true)
+  const [sortBy, setSortBy] = useState<SortKey>('plate')
+  const [desc, setDesc] = useState(false)
   const [editing, setEditing] = useState<FleetTruck | null | 'new'>(null)
   const [deleting, setDeleting] = useState<FleetTruck | null>(null)
 
@@ -108,7 +122,12 @@ function FleetDirectoryPage() {
         .some((f) => String(f ?? '').toLowerCase().includes(q))
     })
 
-    filtered.sort((a, b) => (desc ? b[sortBy] - a[sortBy] : a[sortBy] - b[sortBy]))
+    filtered.sort((a, b) => {
+      const gap = sortBy === 'plate'
+        ? byPlate(String(a.truck.plateNumber ?? ''), String(b.truck.plateNumber ?? ''))
+        : a[sortBy] - b[sortBy]
+      return desc ? -gap : gap
+    })
     return filtered
   }, [trucks, money, lifetime, search, loadStatus, condition, capacity, sortBy, desc])
 
@@ -123,7 +142,8 @@ function FleetDirectoryPage() {
 
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) setDesc((d) => !d)
-    else { setSortBy(key); setDesc(true) }
+    // Money is interesting at its largest, a plate at its first.
+    else { setSortBy(key); setDesc(key !== 'plate') }
   }
 
   const exportSummary = async () => {
@@ -156,7 +176,7 @@ function FleetDirectoryPage() {
   }
 
   const SortHead = ({ k, label, className }: { k: SortKey; label: string; className?: string }) => (
-    <TableHead className={cn('text-right', className)}>
+    <TableHead className={cn(k === 'plate' ? 'text-left' : 'text-right', className)}>
       <button
         type="button" onClick={() => toggleSort(k)}
         className="inline-flex items-center gap-1 outline-none hover:text-foreground focus-visible:underline"
@@ -261,7 +281,7 @@ function FleetDirectoryPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">S/N</TableHead>
-                  <TableHead>Truck No.</TableHead>
+                  <SortHead k="plate" label="Truck No." />
                   <TableHead>Status</TableHead>
                   {/* Capacity, driver and contact fold away on small screens. */}
                   <TableHead className="hidden md:table-cell">Capacity</TableHead>
@@ -326,7 +346,7 @@ function FleetDirectoryPage() {
                         {r.truck.driverName}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground md:table-cell">
-                        {r.truck.driverPhone || '—'}
+                        <PhoneLink value={r.truck.driverPhone} />
                       </TableCell>
                       <TableCell className="text-right text-destructive">
                         {r.debits ? naira(r.debits) : '—'}

@@ -26,6 +26,7 @@ import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { getErrorMessage } from '#/lib/utils'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/dangote-order-request/review')({
   beforeLoad: () => routeGuard('/dangote-order-request'),
@@ -220,14 +221,14 @@ function ReviewPage() {
               <Mail className="size-4 text-muted-foreground shrink-0" />
               <div>
                 <p className="text-xs text-muted-foreground">Email</p>
-                <p className="text-sm font-normal text-foreground">{request.customerEmail || 'N/A'}</p>
+                <EmailLink value={request.customerEmail} fallback="N/A" className="text-sm font-normal text-foreground" />
               </div>
             </div>
             <div className="flex items-center gap-3">
               <Phone className="size-4 text-muted-foreground shrink-0" />
               <div>
                 <p className="text-xs text-muted-foreground">Phone</p>
-                <p className="text-sm font-normal text-foreground">{request.customerPhone || 'N/A'}</p>
+                <PhoneLink value={request.customerPhone} fallback="N/A" className="text-sm font-normal text-foreground" />
               </div>
             </div>
             <div className="flex items-center gap-3">

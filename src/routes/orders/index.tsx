@@ -25,6 +25,7 @@ import { PANEL, MICRO, PANEL_RAIL } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import { useAllOrders } from '#/lib/hooks/useOrders'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 
 import {
   DATE_PRESETS, resolveRange, toNumber, formatNaira, formatQty, isPaid, isVoidOrder, groupByDay,
@@ -474,7 +475,7 @@ function OrdersDashboard() {
                                   </span>
                                 )}
                               </TableCell>
-                              <TableCell className="text-muted-foreground">{o.customerPhone || '—'}</TableCell>
+                              <TableCell className="text-muted-foreground"><PhoneLink value={o.customerPhone} /></TableCell>
                               <TableCell>{o.depotName || o.state || '—'}</TableCell>
                               <TableCell className="text-right font-medium">{formatQty(toNumber(o.quantity))}</TableCell>
                               <TableCell className="text-right">{formatNaira(toNumber(o.price))}</TableCell>

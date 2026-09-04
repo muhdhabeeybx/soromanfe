@@ -34,6 +34,7 @@ import { toNum } from '#/lib/utils'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/deposits/details')({
   beforeLoad: () => routeGuard('/deposits'),
@@ -238,7 +239,7 @@ function DepositDetailPage() {
               <p className="text-xs text-muted-foreground font-normal uppercase">Phone</p>
               <p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5">
                 <Phone className="size-3.5 text-muted-foreground" />
-                {deposit.customerPhone || '—'}
+                <PhoneLink value={deposit.customerPhone} />
               </p>
             </div>
             <div>

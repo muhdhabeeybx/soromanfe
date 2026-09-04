@@ -42,6 +42,7 @@ import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import type { Commission, CommissionRate } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/commissions/')({
   beforeLoad: () => routeGuard('/commissions'),
@@ -506,7 +507,7 @@ function CommissionsTab() {
                           )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {c.customerPhone || '—'}
+                          <PhoneLink value={c.customerPhone} />
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {c.depotName}

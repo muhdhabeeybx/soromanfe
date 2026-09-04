@@ -63,6 +63,7 @@ export {
 } from './-roles'
 export { Roles, ALL_ROLES, ROLE_GROUPS, LOCATION_CHOICES, type LocationChoice, type PfiOption, pfisList, getCurrentUserRoles } from './-roles'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/admin/')({
   beforeLoad: () => routeGuard('/admin'),
@@ -323,23 +324,15 @@ function StaffManagement() {
                             </div>
                           </TableCell>
                           <TableCell className="hidden md:table-cell">
-                            <a
-                              href={`mailto:${staff.email}`}
-                              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors duration-250 ease-luxe"
-                              onClick={(e) => e.stopPropagation()}
- >
+                            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                               <Mail className="size-3 shrink-0" />
-                              <span className="truncate max-w-[160px]">{staff.email}</span>
-                            </a>
+                              <EmailLink value={staff.email} className="truncate max-w-[160px]" />
+                            </span>
                             {staff.phone_number && (
-                              <a
-                                href={`tel:${staff.phone_number}`}
-                                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors mt-0.5 duration-250 ease-luxe"
-                                onClick={(e) => e.stopPropagation()}
- >
+                              <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                                 <Phone className="size-3 shrink-0" />
-                                {staff.phone_number}
-                              </a>
+                                <PhoneLink value={staff.phone_number} />
+                              </span>
                             )}
                           </TableCell>
                           <TableCell className="hidden lg:table-cell text-xs text-foreground">

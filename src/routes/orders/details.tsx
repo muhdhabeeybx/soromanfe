@@ -16,6 +16,7 @@ import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { OrderExpiryBadge } from './-order-expiry'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/orders/details')({
   beforeLoad: () => routeGuard('/orders'),
@@ -273,14 +274,14 @@ function RouteComponent() {
                 <p className="text-xs text-muted-foreground font-normal uppercase">Email Address</p>
                 <p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5 truncate">
                   <Mail className="size-3.5 text-muted-foreground shrink-0" />
-                  {order.customerEmail || order.customer?.email || 'N/A'}
+                  <EmailLink value={order.customerEmail || order.customer?.email} fallback="N/A" className="truncate" />
                 </p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground font-normal uppercase">Phone Line</p>
                 <p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5">
                   <Phone className="size-3.5 text-muted-foreground shrink-0" />
-                  {order.customerPhone || order.customer?.phone || 'N/A'}
+                  <PhoneLink value={order.customerPhone || order.customer?.phone} fallback="N/A" />
                 </p>
               </div>
             </div>

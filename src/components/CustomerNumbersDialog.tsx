@@ -7,6 +7,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { PhoneLink } from '#/components/ContactLink'
 import { Loader2, Trash2, Star, ShieldCheck } from 'lucide-react'
 import {
   useCustomerPhones, useAddCustomerPhone, useDeleteCustomerPhone, useMakePhonePrimary,
@@ -66,7 +67,7 @@ export function CustomerNumbersDialog({ person, onClose }: { person: PersonRow |
                 <div key={entry.id ?? 'primary'} className="flex flex-wrap items-center gap-2 px-3 py-2.5">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm">{entry.phone}</span>
+                      <PhoneLink value={entry.phone} className="font-mono text-sm" />
                       {entry.isPrimary && (
                         <Badge variant="outline" className="h-5 gap-1 px-1.5 text-xs font-normal bg-accent/10 text-accent border-accent/20">
                           <Star className="size-3" />Main

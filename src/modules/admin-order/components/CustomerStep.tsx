@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '../utils/formatters'
 import type { OrderWizardReturn } from '../hooks/useOrderWizard'
+import { PhoneLink } from '#/components/ContactLink'
 
 interface CustomerStepProps {
   wizard: OrderWizardReturn
@@ -79,7 +80,7 @@ export function CustomerStep({ wizard }: CustomerStepProps) {
                   </div>
                   <div>
                     <span className="text-muted-foreground block">Phone</span>
-                    <span className="font-normal">{selectedCustomer.phone}</span>
+                    <PhoneLink value={selectedCustomer.phone} className="font-normal" />
                   </div>
                   <div>
                     <span className="text-muted-foreground block">Account Balance</span>

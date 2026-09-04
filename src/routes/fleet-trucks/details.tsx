@@ -1,44 +1,50 @@
 /**
  * One truck, whole.
  *
- * The directory answers "which truck is the problem"; this page answers
- * "what is going on with this one" — and those are different enough that the
- * second question was previously answered nowhere. A row in a table can hold
- * a balance and a driver's name. It cannot hold the motor boy's phone number,
- * the road-worthiness date that lapsed last month, and the eleven ledger
- * entries that produced the balance, all at once.
+ * The directory answers "which truck is the problem"; this page answers "what
+ * is going on with this one", and a table row cannot hold the second answer —
+ * not the motor boy's number, the road-worthiness date that lapsed last
+ * month, and the entries that produced the balance, all at once.
  *
- * ── Money first ──────────────────────────────────────────────────────────
+ * ── How it is laid out ───────────────────────────────────────────────────
  *
- * Debits, credits and balance lead, because that is what the truck is opened
- * for, and they move with the period selector so the figures always describe
- * the entries listed underneath them. Everything else on the page — people,
- * vehicle, compliance — is a property of the truck and ignores the period
- * entirely; a chassis number does not have a July value.
+ * Money leads, two cards to a row, because that is what the truck is opened
+ * for. The period selector sits directly above those cards and governs them
+ * and the ledger at the foot of the page — and nothing else, because a
+ * chassis number does not have a July value.
+ *
+ * Everything between is a spec sheet: label left in quiet type, value right
+ * in bold, one row per fact, hairlines between. That rhythm is what makes a
+ * page of forty small facts scannable — the eye runs down the right-hand
+ * column reading only values, and drops left only when it needs the name of
+ * the one it landed on. The earlier version stacked micro-labels above their
+ * values in a grid, which gave every fact the same weight and produced a
+ * field of grey with no way in.
  *
  * ── The ledger is the same ledger ────────────────────────────────────────
  *
- * The entries and the running balance come from the fleet-ledger module, not
- * from arithmetic redone here. A detail page that totals a truck differently
- * from the ledger page is worse than a detail page that does not exist.
+ * Entries and running balance come from the fleet-ledger module, not from
+ * arithmetic redone here. A detail page that totals a truck differently from
+ * the ledger page is worse than one that does not exist.
  */
 
 import { useMemo, useState } from 'react'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { format, isWithinInterval } from 'date-fns'
 import {
-  Pencil, Truck, Wallet, TrendingDown, TrendingUp, Phone, User, Users,
-  AlertTriangle, ShieldCheck, ExternalLink, ArrowLeft, Gauge, FileText,
+  Pencil, Wallet, TrendingDown, TrendingUp, User, Users, UserPlus,
+  AlertTriangle, ShieldCheck, ExternalLink, Gauge, FileText,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
+import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { StatusChip } from '#/components/ui/status-chip'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import { PageHeader } from '#/components/PageHeader'
 import { PageLoader } from '#/components/PageLoader'
 import { PageEmpty } from '#/components/PageEmpty'
 import { Breadcrumbs } from '#/components/Breadcrumbs'
-import { SummaryCards } from '#/components/SummaryCards'
+import { PhoneLink } from '#/components/ContactLink'
 import { TruckDialog } from '#/components/TruckDialog'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn } from '#/lib/utils'
@@ -101,6 +107,8 @@ function TruckDetailPage() {
     return map
   }, [entries])
 
+  const lifetime = balances.get(entries[entries.length - 1]?.id) ?? 0
+
   const money = useMemo(() => {
     let debits = 0
     let credits = 0
@@ -114,29 +122,6 @@ function TruckDetailPage() {
   const status = parseStatus(truck?.truckStatus)
   const incidents = useMemo(() => parseIncidents(truck?.incidents), [truck?.incidents])
 
-  const cards = useMemo(() => [
-    {
-      title: 'Total spend', value: naira(money.debits), icon: <TrendingDown />, tone: 'red' as const,
-      description: `${money.entries} entr${money.entries === 1 ? 'y' : 'ies'} in this period`,
-    },
-    {
-      title: 'Total earned', value: naira(money.credits), icon: <TrendingUp />, tone: 'green' as const,
-      description: 'Income credited to this truck',
-    },
-    {
-      title: 'Balance', value: signedNaira(money.balance), icon: <Wallet />,
-      tone: (money.balance < 0 ? 'red' : 'green') as 'red' | 'green',
-      className: signedTone(money.balance),
-      description: money.balance < 0 ? 'It cost more than it earned' : 'It earned more than it cost',
-    },
-    {
-      title: 'Lifetime balance', value: signedNaira(balances.get(entries[entries.length - 1]?.id) ?? 0),
-      icon: <Gauge />,
-      tone: ((balances.get(entries[entries.length - 1]?.id) ?? 0) < 0 ? 'red' : 'green') as 'red' | 'green',
-      description: `Across all ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`,
-    },
-  ], [money, balances, entries])
-
   if (isLoading) return <PageLoader message="Loading truck…" />
   if (!truck) {
     return (
@@ -148,6 +133,7 @@ function TruckDetailPage() {
   }
 
   const lapsed = isExpired(truck.insuranceExpiry) || isExpired(truck.roadWorthinessExpiry)
+  const periodLabel = DATE_PRESETS.find((p) => p.value === preset)?.label ?? 'All time'
 
   return (
     <div className="animate-fade-in space-y-6">
@@ -172,7 +158,7 @@ function TruckDetailPage() {
           </span>
         }
         description={
-          [truck.truckMake, truck.model, truck.maxCapacity ? `${truck.maxCapacity}L` : null]
+          [truck.truckMake, truck.model, truck.maxCapacity ? `${Number(truck.maxCapacity).toLocaleString('en-NG')} L` : null]
             .filter(Boolean).join(' · ') || 'No vehicle details on file'
         }
         backAction={() => navigate({ to: '/fleet-trucks' })}
@@ -193,60 +179,114 @@ function TruckDetailPage() {
       />
 
       {status.reason && (
-        <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          {status.reason}
+        <p className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+          <span>
+            <span className="font-semibold text-warning">Flagged {status.rating.toLowerCase()}</span>
+            {' — '}{status.reason}
+          </span>
         </p>
       )}
 
-      {/* Period applies to the money and the ledger below it, and to nothing
-          else on the page — the rest is not a per-period fact. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={cn(MICRO, 'text-muted-foreground')}>Money for</span>
-        {DATE_PRESETS.map((p) => (
-          <button
-            key={p.value} type="button" onClick={() => setPreset(p.value)}
-            className={cn(
-              'rounded-full border px-3 py-1 text-xs transition-colors duration-250 ease-luxe outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
-              preset === p.value
-                ? 'border-accent/40 bg-accent/10 text-accent'
-                : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
-            )}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
+      {/* ── Money ───────────────────────────────────────────────────────── */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={cn(MICRO, 'mr-1 text-muted-foreground')}>Money for</span>
+          {DATE_PRESETS.map((p) => (
+            <button
+              key={p.value} type="button" onClick={() => setPreset(p.value)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs transition-colors duration-250 ease-luxe outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+                preset === p.value
+                  ? 'border-accent/40 bg-accent/10 font-medium text-accent'
+                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
 
-      <SummaryCards cards={cards} />
+        {/* Two to a row: these are four large figures, and four across turns
+            each into a cramped column no wider than its own label. */}
+        <StatCardGrid count={4} className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+          <StatCard
+            tone="red" icon={<TrendingDown />} label="Total spend"
+            value={naira(money.debits)}
+            description={`${money.entries} entr${money.entries === 1 ? 'y' : 'ies'} · ${periodLabel}`}
+          />
+          <StatCard
+            tone="green" icon={<TrendingUp />} label="Total earned"
+            value={naira(money.credits)}
+            description="Income credited to this truck"
+          />
+          <StatCard
+            tone={money.balance < 0 ? 'red' : 'green'} icon={<Wallet />} label={`Balance · ${periodLabel}`}
+            value={signedNaira(money.balance)} valueClassName={signedTone(money.balance)}
+            description={money.balance < 0 ? 'It cost more than it earned' : 'It earned more than it cost'}
+          />
+          <StatCard
+            tone={lifetime < 0 ? 'red' : 'green'} icon={<Gauge />} label="Lifetime balance"
+            value={signedNaira(lifetime)} valueClassName={signedTone(lifetime)}
+            description={`Across all ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}
+          />
+        </StatCardGrid>
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* ── People ───────────────────────────────────────────────────── */}
+        {/* ── Crew ─────────────────────────────────────────────────────── */}
         <section className={PANEL}>
           <div className={PANEL_RAIL}>
-            <span className={MICRO}>Who runs it</span>
+            <span className={MICRO}>Crew</span>
             {truck.driverId && (
               <Link
                 to="/drivers/details"
                 search={{ id: String(truck.driverId) }}
                 className="inline-flex items-center gap-1 text-xs text-accent transition-opacity duration-250 ease-luxe hover:opacity-70"
               >
-                Driver record <ExternalLink className="size-3" />
+                Full driver record <ExternalLink className="size-3" />
               </Link>
             )}
           </div>
-          <div className={cn(PANEL_BODY, 'space-y-4')}>
-            <Person
-              icon={<User className="size-3.5" />} role="Driver"
-              name={truck.driverName} phone={truck.driverPhone} altPhone={truck.driverAltPhone}
-            />
-            <Person
-              icon={<Users className="size-3.5" />} role="Motor boy"
-              name={truck.motorBoyName} phone={truck.motorBoyPhone}
-            />
-            <Person
-              icon={<User className="size-3.5" />} role="Spare driver"
-              name={truck.spareDriverName} phone={truck.spareDriverPhone}
+          <div className={PANEL_BODY}>
+            <div className="divide-y divide-foreground/[0.08]">
+              <Person
+                icon={<User className="size-4" />} role="Driver" primary
+                name={truck.driverName} phones={[truck.driverPhone, truck.driverAltPhone]}
+              />
+              <Person
+                icon={<Users className="size-4" />} role="Motor boy"
+                name={truck.motorBoyName} phones={[truck.motorBoyPhone]}
+              />
+              <Person
+                icon={<UserPlus className="size-4" />} role="Spare driver"
+                name={truck.spareDriverName} phones={[truck.spareDriverPhone]}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* ── Papers ───────────────────────────────────────────────────── */}
+        <section className={cn(PANEL, lapsed && 'border-warning/40')}>
+          <div className={cn(PANEL_RAIL, lapsed && 'border-warning/25')}>
+            <span className={MICRO}>Papers</span>
+            {lapsed
+              ? <span className="flex items-center gap-1.5 text-xs font-medium text-warning">
+                  <AlertTriangle className="size-3.5" /> Something has lapsed
+                </span>
+              : <span className="flex items-center gap-1.5 text-xs font-medium text-accent">
+                  <ShieldCheck className="size-3.5" /> All current
+                </span>}
+          </div>
+          <div className={cn(PANEL_BODY, 'pt-2')}>
+            <Expiry label="Insurance" value={truck.insuranceExpiry} />
+            <Expiry label="Road worthiness" value={truck.roadWorthinessExpiry} />
+            <Expiry label="Registration" value={truck.registrationExpiry} />
+            <Expiry label="Next service due" value={truck.nextServiceDate} />
+            <Row label="Last serviced" value={fmtDate(truck.lastServiceDate)} />
+            <Row
+              label="Next service mileage"
+              value={truck.nextServiceMileage ? `${Number(truck.nextServiceMileage).toLocaleString('en-NG')} km` : null}
             />
           </div>
         </section>
@@ -254,51 +294,41 @@ function TruckDetailPage() {
         {/* ── Vehicle ──────────────────────────────────────────────────── */}
         <section className={PANEL}>
           <div className={PANEL_RAIL}><span className={MICRO}>The vehicle</span></div>
-          <div className={cn(PANEL_BODY, 'grid gap-x-6 gap-y-3 sm:grid-cols-2')}>
-            <Detail label="Make" value={truck.truckMake} />
-            <Detail label="Model" value={truck.model} />
-            <Detail label="Year" value={truck.year} />
-            <Detail label="Type" value={truck.truckType} />
-            <Detail label="Chassis number" value={truck.chassisNumber} mono />
-            <Detail label="VIN" value={truck.vin} mono />
-            <Detail label="Max capacity" value={truck.maxCapacity ? `${truck.maxCapacity} L` : null} />
-            <Detail label="Fuel capacity" value={truck.fuelCapacity ? `${truck.fuelCapacity} L` : null} />
-            <Detail label="Avg litres per trip" value={truck.avgLitresPerTrip} />
-            <Detail label="Mileage" value={truck.mileage ? Number(truck.mileage).toLocaleString('en-NG') : null} />
-          </div>
-        </section>
-
-        {/* ── Compliance ───────────────────────────────────────────────── */}
-        <section className={cn(PANEL, lapsed && 'border-warning/40')}>
-          <div className={cn(PANEL_RAIL, lapsed && 'border-warning/25')}>
-            <span className={MICRO}>Papers</span>
-            {lapsed
-              ? <span className="flex items-center gap-1.5 text-xs text-warning">
-                  <AlertTriangle className="size-3.5" /> Something has lapsed
-                </span>
-              : <span className="flex items-center gap-1.5 text-xs text-accent">
-                  <ShieldCheck className="size-3.5" /> Current
-                </span>}
-          </div>
-          <div className={cn(PANEL_BODY, 'grid gap-x-6 gap-y-3 sm:grid-cols-2')}>
-            <Expiry label="Insurance" value={truck.insuranceExpiry} />
-            <Expiry label="Road worthiness" value={truck.roadWorthinessExpiry} />
-            <Expiry label="Registration" value={truck.registrationExpiry} />
-            <Expiry label="Next service" value={truck.nextServiceDate} />
-            <Detail label="Last service" value={fmtDate(truck.lastServiceDate)} />
-            <Detail label="Next service mileage" value={truck.nextServiceMileage} />
+          <div className={cn(PANEL_BODY, 'pt-2')}>
+            <Row label="Make" value={truck.truckMake} />
+            <Row label="Model" value={truck.model} />
+            <Row label="Year" value={truck.year} />
+            <Row label="Type" value={truck.truckType} />
+            <Row label="Chassis number" value={truck.chassisNumber} mono />
+            <Row label="VIN" value={truck.vin} mono />
+            <Row
+              label="Max capacity"
+              value={truck.maxCapacity ? `${Number(truck.maxCapacity).toLocaleString('en-NG')} L` : null}
+            />
+            <Row
+              label="Fuel capacity"
+              value={truck.fuelCapacity ? `${Number(truck.fuelCapacity).toLocaleString('en-NG')} L` : null}
+            />
+            <Row
+              label="Average per trip"
+              value={truck.avgLitresPerTrip ? `${Number(truck.avgLitresPerTrip).toLocaleString('en-NG')} L` : null}
+            />
+            <Row
+              label="Mileage"
+              value={truck.mileage ? `${Number(truck.mileage).toLocaleString('en-NG')} km` : null}
+            />
           </div>
         </section>
 
         {/* ── Incidents and notes ──────────────────────────────────────── */}
         <section className={PANEL}>
           <div className={PANEL_RAIL}>
-            <span className={MICRO}>Incidents</span>
+            <span className={MICRO}>Incidents &amp; notes</span>
             <span className="text-xs text-muted-foreground">
               {incidents.length === 0 ? 'None recorded' : `${incidents.length} on file`}
             </span>
           </div>
-          <div className={cn(PANEL_BODY, 'space-y-3')}>
+          <div className={cn(PANEL_BODY, 'space-y-4')}>
             {incidents.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing has been logged against this truck.</p>
             ) : (
@@ -308,15 +338,15 @@ function TruckDetailPage() {
                     <span className="block text-xs tabular-nums text-muted-foreground">
                       {fmtDate(incident.date) || 'Undated'}
                     </span>
-                    <span className="block text-sm">{incident.description || '—'}</span>
+                    <span className="block text-sm font-medium">{incident.description || '—'}</span>
                   </li>
                 ))}
               </ul>
             )}
             {truck.notes && (
-              <div className="border-t border-foreground/10 pt-3">
+              <div className={cn(incidents.length > 0 && 'border-t border-foreground/10 pt-4')}>
                 <span className={cn(MICRO, 'block text-muted-foreground')}>Notes</span>
-                <p className="mt-1 text-sm whitespace-pre-wrap">{truck.notes}</p>
+                <p className="mt-1.5 text-sm whitespace-pre-wrap">{truck.notes}</p>
               </div>
             )}
           </div>
@@ -327,13 +357,13 @@ function TruckDetailPage() {
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={MICRO}>
-            {inRange.length} entr{inRange.length === 1 ? 'y' : 'ies'}
+            Ledger · {inRange.length} entr{inRange.length === 1 ? 'y' : 'ies'}
           </span>
           {inRange.length > 0 && (
             <span className="text-xs tabular-nums text-muted-foreground">
-              <span className="text-destructive">{naira(money.debits)} debit</span>
+              <span className="font-medium text-destructive">{naira(money.debits)}</span> debit
               {' · '}
-              <span className="text-accent">{naira(money.credits)} credit</span>
+              <span className="font-medium text-accent">{naira(money.credits)}</span> credit
             </span>
           )}
         </div>
@@ -368,7 +398,7 @@ function TruckDetailPage() {
               <tfoot>
                 <TableRow className="border-t-2 border-foreground/25 bg-muted/70 hover:bg-muted/70">
                   <TableCell className="py-3 font-semibold" colSpan={3}>
-                    Period total
+                    {periodLabel} total
                   </TableCell>
                   <TableCell className="py-3 text-right font-semibold tabular-nums text-destructive">
                     {naira(money.debits)}
@@ -387,11 +417,7 @@ function TruckDetailPage() {
         )}
       </section>
 
-      <TruckDialog
-        truck={truck}
-        open={editing}
-        onOpenChange={setEditing}
-      />
+      <TruckDialog truck={truck} open={editing} onOpenChange={setEditing} />
     </div>
   )
 }
@@ -427,38 +453,97 @@ function LedgerLine({
   )
 }
 
-/** A named person with the numbers you would actually ring. */
+/**
+ * One spec-sheet line: quiet label left, bold value right.
+ *
+ * The value carries the weight because it is the thing being looked up; the
+ * label is only there to say what you found. Missing values stay unbolded and
+ * muted, so an empty field reads as absent rather than as a fact.
+ */
+function Row({ label, value, mono }: { label: string; value?: unknown; mono?: boolean }) {
+  const shown = value === null || value === undefined || value === '' ? null : String(value)
+  return (
+    <div className="flex items-baseline justify-between gap-6 border-b border-foreground/[0.07] py-2.5 last:border-0">
+      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          'min-w-0 truncate text-right text-sm',
+          mono && 'font-mono',
+          shown ? 'font-semibold' : 'text-muted-foreground',
+        )}
+        title={shown ?? undefined}
+      >
+        {shown ?? '—'}
+      </span>
+    </div>
+  )
+}
+
+/** A date that can already have passed, and says so where it stands. */
+function Expiry({ label, value }: { label: string; value?: string | null }) {
+  const gone = isExpired(value)
+  const shown = fmtDate(value)
+  return (
+    <div className="flex items-baseline justify-between gap-6 border-b border-foreground/[0.07] py-2.5 last:border-0">
+      <span className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+        {label}
+        {gone && <AlertTriangle className="size-3.5 text-warning" aria-label="Expired" />}
+      </span>
+      <span
+        className={cn(
+          'text-right text-sm tabular-nums',
+          gone ? 'font-semibold text-warning' : shown ? 'font-semibold' : 'text-muted-foreground',
+        )}
+      >
+        {shown ?? '—'}
+        {gone && <span className="ml-1.5 text-xs font-normal">expired</span>}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * A named person with the numbers you would actually ring.
+ *
+ * The driver reads a size larger than the other two: the crew has an order,
+ * and flattening it would make the page ask you to work out which of three
+ * equal names is the one who drives.
+ */
 function Person({
-  icon, role, name, phone, altPhone,
+  icon, role, name, phones, primary,
 }: {
   icon: React.ReactNode
   role: string
   name?: string | null
-  phone?: string | null
-  altPhone?: string | null
+  phones: Array<string | null | undefined>
+  primary?: boolean
 }) {
-  const numbers = [phone, altPhone].filter(Boolean) as string[]
+  const numbers = phones.filter((p) => p && String(p).trim()) as string[]
   return (
-    <div className="flex items-start gap-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+    <div className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+      <span
+        className={cn(
+          'mt-0.5 flex shrink-0 items-center justify-center rounded-full',
+          primary ? 'size-9 bg-accent/10 text-accent' : 'size-9 bg-muted text-muted-foreground',
+        )}
+      >
         {icon}
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <span className={cn(MICRO, 'block text-muted-foreground')}>{role}</span>
-        <span className="block truncate text-sm font-medium">
-          {name || <span className="font-normal text-muted-foreground">Not assigned</span>}
+        <span
+          className={cn(
+            'block truncate',
+            name ? 'font-semibold' : 'text-muted-foreground',
+            primary ? 'text-base' : 'text-sm',
+          )}
+        >
+          {name || 'Not assigned'}
         </span>
         {numbers.length > 0 && (
-          <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
             {numbers.map((n) => (
-              // tel: because the number on this page is there to be called,
-              // usually from the phone the page is open on.
-              <a
-                key={n} href={`tel:${n}`}
-                className="inline-flex items-center gap-1 text-xs tabular-nums text-muted-foreground transition-colors duration-250 ease-luxe hover:text-accent"
-              >
-                <Phone className="size-3" />{n}
-              </a>
+              <PhoneLink key={n} value={n} className="text-sm text-muted-foreground" />
             ))}
           </div>
         )}
@@ -467,36 +552,8 @@ function Person({
   )
 }
 
-function Detail({ label, value, mono }: { label: string; value?: unknown; mono?: boolean }) {
-  const shown = value === null || value === undefined || value === '' ? null : String(value)
-  return (
-    <div className="min-w-0">
-      <span className={cn(MICRO, 'block text-muted-foreground')}>{label}</span>
-      <span className={cn('block truncate text-sm', mono && 'font-mono', !shown && 'text-muted-foreground')}>
-        {shown ?? '—'}
-      </span>
-    </div>
-  )
-}
-
 const fmtDate = (raw?: string | null) => {
   if (!raw) return null
   const d = new Date(raw)
   return Number.isNaN(d.getTime()) ? null : format(d, 'd MMM yyyy')
-}
-
-/** A date that can be in the past, and says so. */
-function Expiry({ label, value }: { label: string; value?: string | null }) {
-  const gone = isExpired(value)
-  return (
-    <div className="min-w-0">
-      <span className={cn(MICRO, 'flex items-center gap-1.5 text-muted-foreground')}>
-        {label}
-        {gone && <AlertTriangle className="size-3 text-warning" aria-label="Expired" />}
-      </span>
-      <span className={cn('block truncate text-sm tabular-nums', gone ? 'text-warning' : !value && 'text-muted-foreground')}>
-        {fmtDate(value) ?? '—'}
-      </span>
-    </div>
-  )
 }

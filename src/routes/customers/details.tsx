@@ -23,6 +23,7 @@ import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { CustomerLicenses } from '#/components/CustomerLicenses'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/customers/details')({
   beforeLoad: () => routeGuard('/customers'),
@@ -332,14 +333,14 @@ function CustomerDetailPage() {
                 <Mail className="size-4 text-muted-foreground shrink-0" />
                 <div>
                   <p className="text-xs text-muted-foreground">Email</p>
-                  <p className="text-sm font-normal text-foreground">{customer.email || 'Not provided'}</p>
+                  <EmailLink value={customer.email} fallback="Not provided" className="text-sm font-normal text-foreground" />
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <Phone className="size-4 text-muted-foreground shrink-0" />
                 <div>
                   <p className="text-xs text-muted-foreground">Phone</p>
-                  <p className="text-sm font-normal text-foreground">{customer.phone}</p>
+                  <PhoneLink value={customer.phone} fallback="Not provided" className="text-sm font-normal text-foreground" />
                 </div>
               </div>
               <div className="flex items-center gap-3">

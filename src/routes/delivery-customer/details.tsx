@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useDeliveryCustomerDetails, useDeleteDeliveryCustomer } from '#/lib/hooks/useDeliveryCustomers'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/delivery-customer/details')({
   beforeLoad: () => routeGuard('/delivery-customer'),
@@ -135,8 +136,8 @@ function DeliveryCustomerDetailsView() {
       actions={
         <>
           <p className="text-muted-foreground text-sm mt-0.5">
-          Phone: <a href={`tel:${customer.phoneNumber}`} className="text-primary hover:underline font-semibold">{customer.phoneNumber}</a>
-          {customer.email && ` • ${customer.email}`}
+          Phone: <PhoneLink value={customer.phoneNumber} className="font-semibold" />
+          {customer.email && <> • <EmailLink value={customer.email} className="font-semibold" /></>}
           </p>
         </>
       }
@@ -228,24 +229,20 @@ function DeliveryCustomerDetailsView() {
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-sm pt-1">
                 <div>
                   <span className="text-xs text-muted-foreground block font-normal">Primary Phone</span>
-                  <a href={`tel:${customer.phoneNumber}`} className="font-semibold text-primary hover:underline">
-                    {customer.phoneNumber || 'N/A'}
-                  </a>
+                  <PhoneLink value={customer.phoneNumber} fallback="N/A" className="font-semibold" />
                 </div>
 
                 {customer.altPhoneNumber && (
                   <div>
                     <span className="text-xs text-muted-foreground block font-normal">Alt Phone</span>
-                    <a href={`tel:${customer.altPhoneNumber}`} className="font-semibold text-primary hover:underline">
-                      {customer.altPhoneNumber}
-                    </a>
+                    <PhoneLink value={customer.altPhoneNumber} className="font-semibold" />
                   </div>
                 )}
 
                 {customer.email && (
                   <div>
                     <span className="text-xs text-muted-foreground block font-normal">Email Address</span>
-                    <span className="font-semibold text-foreground truncate block">{customer.email}</span>
+                    <EmailLink value={customer.email} className="font-semibold text-foreground truncate block" />
                   </div>
                 )}
               </div>
@@ -343,13 +340,7 @@ function DeliveryCustomerDetailsView() {
                   <Phone className="size-5 text-warning shrink-0" />
                   <div>
                     <div className="text-xs text-muted-foreground font-normal">Manager's Phone</div>
-                    {customer.contactPersonPhone ? (
-                      <a href={`tel:${customer.contactPersonPhone}`} className="font-semibold text-primary hover:underline">
-                        {customer.contactPersonPhone}
-                      </a>
-                    ) : (
-                      <span className="font-semibold">N/A</span>
-                    )}
+                    <PhoneLink value={customer.contactPersonPhone} fallback="N/A" className="font-semibold" />
                   </div>
                 </div>
 

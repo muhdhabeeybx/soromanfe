@@ -11,6 +11,7 @@ import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { routeGuard } from '#/lib/route-guard'
+import { PhoneLink, EmailLink } from '#/components/ContactLink'
 
 export const Route = createFileRoute('/lpg-orders/details')({
   beforeLoad: () => routeGuard('/lpg-orders'),
@@ -259,14 +260,14 @@ function LpgOrderDetails() {
                 <p className="text-xs text-muted-foreground font-normal uppercase">Email Address</p>
                 <p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5 truncate">
                   <Mail className="size-3.5 text-muted-foreground shrink-0" />
-                  {request.customerEmail || 'N/A'}
+                  <EmailLink value={request.customerEmail} fallback="N/A" className="truncate" />
                 </p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground font-normal uppercase">Phone Line</p>
                 <p className="text-sm text-foreground mt-0.5 flex items-center gap-1.5">
                   <Phone className="size-3.5 text-muted-foreground shrink-0" />
-                  {request.customerPhone || 'N/A'}
+                  <PhoneLink value={request.customerPhone} fallback="N/A" />
                 </p>
               </div>
             </div>
