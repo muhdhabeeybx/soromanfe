@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Soroman Energy — Operations Portal",
+  "name": "Soroman Energy Operations Portal",
   "short_name": "Soroman",
-  "description": "The operations and finance platform of Soroman Energy Limited: depot inventory, order dispatch, fleet and delivery management, payment reconciliation and reporting.",
+  "description": "The operations and finance platform of Soroman Energy: depot inventory, order dispatch, fleet and delivery management, payment reconciliation and reporting.",
   "lang": "en",
   "dir": "ltr",
   "start_url": "/",
