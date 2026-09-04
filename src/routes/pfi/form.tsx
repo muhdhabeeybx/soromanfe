@@ -12,6 +12,7 @@ import { Label } from '#/components/ui/label'
 import { NativeSelect } from '#/components/ui/native-select'
 import { CommaInput } from '#/components/ui/comma-input'
 import { StatusChip } from '#/components/ui/status-chip'
+import { Checkbox } from '#/components/ui/checkbox'
 import { PageLoader } from '#/components/PageLoader'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
@@ -35,6 +36,8 @@ export const Route = createFileRoute('/pfi/form')({
 const EMPTY_FORM = {
   id: '',
   pfiType: 'coastal' as PfiType,
+  // Most batches are raised to trade. One bought ahead of selling says so.
+  notStarted: false,
   pfiDate: '',
   pfiNumber: '',
   description: '',
@@ -62,7 +65,15 @@ const EMPTY_FORM = {
 
 type FormState = typeof EMPTY_FORM
 
-const OFFICER_FIELDS: Array<{ label: string; key: keyof FormState }> = [
+/**
+ * Narrowed to the string-valued keys, not `keyof FormState`: the form also
+ * carries a boolean now, and a select's `value` cannot take one. Keeping the
+ * type honest here is what makes that a compile error rather than a control
+ * that renders blank.
+ */
+type StringKeys = { [K in keyof FormState]: FormState[K] extends string ? K : never }[keyof FormState]
+
+const OFFICER_FIELDS: Array<{ label: string; key: StringKeys }> = [
   { label: 'Audit Officer', key: 'auditOfficerId' },
   { label: 'Product Officer', key: 'productOfficerId' },
   { label: 'IT Compliance Officer', key: 'itComplianceOfficerId' },
@@ -285,6 +296,9 @@ function PFIForm() {
         // Rows written before the distinction existed carry no type, and every
         // one of them is coastal — it was the only kind there was.
         pfiType: editingPfi.pfiType === 'gantry' ? 'gantry' : 'coastal',
+        // A closed batch is never shown as not-started: closing is the
+        // /finish endpoint's business and this form must not undo it.
+        notStarted: editingPfi.status === 'not_started',
         pfiDate: formatDateToInput(editingPfi.pfiDate),
         pfiNumber: editingPfi.pfiNumber || '',
         description: editingPfi.description || '',
@@ -374,6 +388,11 @@ function PFIForm() {
     try {
       const payload = {
         pfiType: form.pfiType,
+        // Only ever the two live states. A finished batch's status is not
+        // this form's to move, so an edit of one leaves it untouched.
+        ...(editingPfi?.status === 'finished'
+          ? {}
+          : { status: form.notStarted ? 'not_started' : 'active' }),
         pfiDate: form.pfiDate || null,
         pfiNumber: form.pfiNumber.trim(),
         description: form.description,
@@ -537,6 +556,39 @@ function PFIForm() {
                   )
                 })}
               </div>
+
+              {/* Whether the batch is trading yet.
+                  A cargo is bought, shipped and paid for weeks before the
+                  first litre leaves the depot, and those costs have to land
+                  on the batch that incurred them. Marking it not-started
+                  lets it take expenses while staying out of the stock and
+                  revenue totals, so "PMS remaining" never counts product
+                  nobody can ship today.
+                  Hidden once a batch is closed: reopening it is not this
+                  form's business. */}
+              {editingPfi?.status !== 'finished' && (
+                <label
+                  className={cn(
+                    'flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors duration-250 ease-luxe',
+                    form.notStarted
+                      ? 'border-warning/40 bg-warning/5'
+                      : 'border-foreground/15 hover:border-foreground/30 hover:bg-muted/40',
+                  )}
+                >
+                  <Checkbox
+                    checked={form.notStarted}
+                    onCheckedChange={(v) => set('notStarted', v === true)}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">Not selling yet</span>
+                    <span className="mt-1 block text-xs leading-snug text-muted-foreground">
+                      The cargo exists and can take expenses, but its stock and revenue stay
+                      out of the portfolio totals until you start it from the PFI list.
+                    </span>
+                  </span>
+                </label>
+              )}
 
               {/* Switching an existing batch discards figures that stop
                   applying, and finding that out after saving is too late. */}

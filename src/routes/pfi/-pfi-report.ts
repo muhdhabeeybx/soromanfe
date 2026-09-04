@@ -16,7 +16,7 @@ import {
   GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   paintSigned, pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
 } from '#/lib/report-theme'
-import { unitNames } from '#/routes/pfi/-pfi-utils'
+import { unitNames, pfiStatusLabel } from '#/routes/pfi/-pfi-utils'
 
 /**
  * The PFI report.
@@ -197,7 +197,7 @@ function summaryPairs(pfi: PfiWithFinancials): Array<{ title: string; pairs: Pai
       pairs: [
         { label: 'PFI Number', value: pfi.pfiNumber, bold: true },
         { label: 'Type', value: gantry ? 'GANTRY' : 'COASTAL', bold: true },
-        { label: 'Status', value: pfi.status === 'active' ? 'ACTIVE' : 'FINISHED', bold: true },
+        { label: 'Status', value: pfiStatusLabel(pfi.status).toUpperCase(), bold: true },
         { label: 'Location', value: dash(pfi.locationName) },
         { label: 'Product', value: dash(pfi.productName) },
         // { label: 'PFI Date', value: pfi.pfiDate ? new Date(pfi.pfiDate) : '—', fmt: pfi.pfiDate ? DATE_FMT : undefined },
@@ -605,7 +605,7 @@ export async function downloadPfiReportPdf(pfiId: number) {
     `PFI Report — ${pfi.pfiNumber}`,
     [
       `Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`,
-      `Status: ${pfi.status === 'active' ? 'Active' : 'Finished'}`,
+      `Status: ${pfiStatusLabel(pfi.status)}`,
       `Location: ${pfi.locationName || '—'}`,
       `Product: ${pfi.productName || '—'}`,
     ].join('   ·   '),
@@ -935,7 +935,7 @@ export async function downloadMasterReport(pfis: PfiWithFinancials[]) {
     row.values = {
       pfi: p.pfiNumber,
       type: f.isGantry ? 'Gantry' : 'Coastal',
-      status: p.status === 'active' ? 'Active' : 'Finished',
+      status: pfiStatusLabel(p.status),
       loc: p.locationName || '',
       product: p.productName || '',
       unit: unitNames(p.productUnit).plural,

@@ -823,6 +823,19 @@ export const useDeleteCategory = () =>
  * Closing returns any gap between the figures typed at closure and the ones
  * the system computed, plus a warning when stock is still on the books.
  */
+/**
+ * Put a batch into trading.
+ *
+ * The counterpart to useFinishPfi, and deliberately as small as that one is
+ * large: closing records what a cargo settled for, whereas starting asserts
+ * one fact — this batch's stock is now stock anyone can sell.
+ */
+export const useStartPfi = () =>
+  useMoneyMutation<number>(
+    async (id) => (await api.post(`/pfis/${id}/start`, {})).data,
+    'PFI is now active',
+  )
+
 export const useFinishPfi = () =>
   useMoneyMutation<{ id: number; data: Record<string, any> }>(
     async ({ id, data }) => (await api.post(`/pfis/${id}/finish`, data)).data,

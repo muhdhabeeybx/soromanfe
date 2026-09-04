@@ -7,7 +7,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
 import { Separator } from '#/components/ui/separator'
-import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket } from 'lucide-react'
+import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Clock } from 'lucide-react'
 import { usePfiDetails, useUpdatePfi, useDeletePfi } from '#/lib/hooks/usePfis'
 import { unitNames } from '#/routes/pfi/-pfi-utils'
 import { useAdminList } from '#/lib/hooks/useAdmin'
@@ -17,6 +17,8 @@ import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { routeGuard } from '#/lib/route-guard'
 import { PhoneLink } from '#/components/ContactLink'
+import { cn } from '#/lib/utils'
+import { pfiStatusLabel } from '#/routes/pfi/-pfi-utils'
 
 export const Route = createFileRoute('/pfi/details')({
   beforeLoad: () => routeGuard('/pfi'),
@@ -113,6 +115,9 @@ function PFIDetails() {
   const decimals = names.decimals
 
   const isActive = pfi.status === 'active'
+  // Not the same question as isActive: a batch that has not started trading
+  // has nothing to close out, so the closure form must not be offered on it.
+  const notStarted = pfi.status === 'not_started'
 
   const unitPrice = toNum(pfi.unitPrice)
   const totalAmount = toNum(pfi.totalAmount)
@@ -215,11 +220,15 @@ function PFIDetails() {
                   {isGantry ? <Ticket className="size-3 mr-1 text-info inline" /> : <Package className="size-3 mr-1 text-primary inline" />}
                   {isGantry ? 'Gantry' : 'Coastal'}
                 </Badge>
-                {isActive ? (
-                  <Badge className="bg-success text-success-foreground">Active</Badge>
-                ) : (
-                  <Badge variant="secondary">Finished</Badge>
-                )}
+                <Badge
+                  className={cn(
+                    isActive && 'bg-success text-success-foreground',
+                    notStarted && 'bg-warning text-warning-foreground',
+                  )}
+                  variant={isActive || notStarted ? 'default' : 'secondary'}
+                >
+                  {pfiStatusLabel(pfi.status)}
+                </Badge>
               </div>
               <h2 className="text-lg md:text-xl font-semibold text-foreground mt-1 tracking-tight">{pfi.pfiNumber}</h2>
               <p className="text-muted-foreground mt-0.5 text-xs flex items-center gap-1.5">
@@ -424,9 +433,34 @@ function PFIDetails() {
           </CardContent>
         </Card>
 
-        {/* Card 5: Closure Card */}
+        {/* Card 5: Closure Card.
+
+            Three states, not two. A not-started batch has nothing to close
+            out, and falling through to the closure summary showed it an empty
+            audit block as though it had already been settled. */}
         <div className="md:col-span-2">
-          {isActive ? (
+          {notStarted ? (
+            <Card className="border-warning/30">
+              <CardHeader className="bg-warning/5 border-b border-warning/20">
+                <div className="flex items-center gap-2">
+                  <div className="size-8 rounded-lg bg-warning/15 flex items-center justify-center text-warning">
+                    <Clock className="size-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-sm">Not selling yet</CardTitle>
+                    <CardDescription className="text-xs">
+                      Nothing to close until this batch has traded
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-4 text-sm text-muted-foreground">
+                Expenses can be booked against this PFI now — they count towards the portfolio's
+                total cost. Its stock and revenue stay out of the totals until you start it from
+                the PFI list.
+              </CardContent>
+            </Card>
+          ) : isActive ? (
             <Card className="border-primary/20">
               <CardHeader className="bg-primary/5 border-b border-primary/10">
                 <CardTitle className="text-primary flex items-center gap-2">

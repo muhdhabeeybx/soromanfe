@@ -4,7 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Search, Plus, Package, Banknote, Droplets, TriangleAlert,
   ArrowUpDown, Lock, Pencil, Download, X, TrendingUp, TrendingDown,
-  FileSpreadsheet, Gauge,
+  FileSpreadsheet, Gauge, Play,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -18,9 +18,10 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { PfiDetailDialog } from '#/components/PfiDetailDialog'
 import { PfiCloseDialog } from '#/components/PfiCloseDialog'
+import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_FOOTER } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import { usePfiList, useStartPfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import {
   naira, litres, qty, unitNames, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
 } from '#/routes/pfi/-pfi-utils'
@@ -63,17 +64,25 @@ function serialOf(pfiNumber: string | null | undefined): [number, string] {
 }
 
 /**
- * Active batches first, then finished; newest serial first within each.
+ * Active batches, then not-started, then finished; newest serial first within
+ * each.
  *
- * Two groups rather than one list because they are read for different reasons:
- * an active batch is something to act on, a finished one is something to look
- * up. Mixing them by serial alone buries the live batches among the closed
- * ones the moment the numbering wraps.
+ * Groups rather than one flat list because they are read for different
+ * reasons: an active batch is something to act on, a not-started one is
+ * something coming, a finished one is something to look up. Mixing them by
+ * serial alone buries the live batches among the closed ones the moment the
+ * numbering wraps.
+ *
+ * Not-started sits second, not first: a cargo still being paid for is
+ * genuinely less urgent than one selling today, and putting the pipeline at
+ * the top of the list would push the trading book below the fold.
  */
+const STATUS_RANK: Record<string, number> = { active: 0, not_started: 1, finished: 2 }
+
 function compareSerial(a: PfiWithFinancials, b: PfiWithFinancials): number {
-  const aActive = a.status === 'active' ? 0 : 1
-  const bActive = b.status === 'active' ? 0 : 1
-  if (aActive !== bActive) return aActive - bActive
+  const aRank = STATUS_RANK[a.status] ?? 3
+  const bRank = STATUS_RANK[b.status] ?? 3
+  if (aRank !== bRank) return aRank - bRank
 
   const [an, al] = serialOf(a.pfiNumber)
   const [bn, bl] = serialOf(b.pfiNumber)
@@ -132,6 +141,8 @@ function PFIDashboard() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'serial', dir: 'desc' })
   const [detailId, setDetailId] = useState<number | null>(null)
   const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
+  const [starting, setStarting] = useState<PfiWithFinancials | null>(null)
+  const startPfi = useStartPfi()
 
   /**
    * Every batch, not the first hundred.
@@ -208,8 +219,8 @@ function PFIDashboard() {
    * zero would understate the portfolio cost and overstate its profit.
    */
   const stats = useMemo(() => {
-    let cost = 0, revenue = 0, expenses = 0, remaining = 0, deficitCost = 0
-    let costed = 0, uncosted = 0, active = 0, partSold = 0
+    let cost = 0, tradingCost = 0, revenue = 0, expenses = 0, remaining = 0, deficitCost = 0
+    let costed = 0, uncosted = 0, active = 0, notStarted = 0, partSold = 0
     let sold = 0
     // The two halves of the portfolio landing cost, accumulated together.
     let landingCost = 0, landingQty = 0
@@ -229,11 +240,28 @@ function PFIDashboard() {
 
     for (const p of pfis) {
       const f = p.financials
-      revenue += f.revenue
+      // A batch that has not started trading has no revenue and no sellable
+      // stock, but its money is already spent — cargo paid for, clearing
+      // settled, demurrage running. So it counts towards what the portfolio
+      // has cost and towards nothing else. Leaving its spend out entirely
+      // would understate the book by the price of a whole cargo; folding its
+      // stock in would answer "how much PMS can we ship today" with product
+      // nobody can ship.
+      const trading = p.status !== 'not_started'
+
+      if (trading) revenue += f.revenue
       expenses += f.totalExpenses
       if (f.deficitCost != null) deficitCost += f.deficitCost
-      if (f.grandTotalCost != null) { cost += f.grandTotalCost; costed++ } else uncosted++
+      if (f.grandTotalCost != null) {
+        cost += f.grandTotalCost
+        costed++
+        // Profit is revenue less cost, so both sides have to describe the
+        // same batches. Charging a whole cargo against the zero revenue it
+        // has not earned yet would show a loss the book has not made.
+        if (trading) tradingCost += f.grandTotalCost
+      } else uncosted++
       if (p.status === 'active') active++
+      if (!trading) notStarted++
       if (!f.profitIsMeaningful && f.sellThrough != null) partSold++
 
       // Per-fuel stock, ACTIVE batches only.
@@ -263,8 +291,10 @@ function PFIDashboard() {
       const inLitres = unitNames(p.productUnit).plural === 'Litres'
       if (!inLitres) { otherUnit++; continue }
 
-      remaining += f.remaining
-      sold += f.sold
+      if (trading) {
+        remaining += f.remaining
+        sold += f.sold
+      }
 
       // Weighted — total cost over total billed quantity, NOT the average of
       // each batch's own landing cost. Averaging per-litre figures would let a
@@ -293,11 +323,11 @@ function PFIDashboard() {
       })
 
     return {
-      cost, revenue, expenses, remaining, deficitCost, costed, uncosted, active, partSold,
+      cost, revenue, expenses, remaining, deficitCost, costed, uncosted, active, notStarted, partSold,
       sold, otherUnit, fuels,
       landing: landingQty > 0 ? landingCost / landingQty : null,
       landingQty,
-      profit: costed > 0 ? revenue - cost : null,
+      profit: costed > 0 ? revenue - tradingCost : null,
       count: pfis.length,
     }
   }, [pfis])
@@ -348,7 +378,14 @@ function PFIDashboard() {
         <StatCard
           icon={<Package />} label="Active PFIs" value={stats.active}
           tone="blue"
-          // description={`of ${stats.count} batch${stats.count === 1 ? '' : 'es'}${hasFilters ? ' matching' : ''}`}
+          // Batches waiting to trade are named here rather than left to be
+          // noticed further down the list — they are the reason this count
+          // and the number of rows on screen no longer match.
+          description={
+            stats.notStarted > 0
+              ? `${stats.notStarted} more not started yet`
+              : undefined
+          }
         />
         {/* Stock per fuel, not one number across the book. PMS and AGO are
             bought, priced and sold separately, and the question is always
@@ -375,6 +412,14 @@ function PFIDashboard() {
         <StatCard
           icon={<Banknote />} label="Total cost" value={naira(stats.cost)}
           tone="neutral"
+          // Says so out loud, because this is the one tile a not-started
+          // batch contributes to. Without the line the figure looks like it
+          // disagrees with the stock and revenue beside it.
+          description={
+            stats.notStarted > 0
+              ? `Includes ${stats.notStarted} batch${stats.notStarted === 1 ? '' : 'es'} not selling yet`
+              : undefined
+          }
           // An unpriced batch is left out rather than counted as ₦0, so the
           // figure understates the book unless it says how many are missing.
           // description={
@@ -451,6 +496,7 @@ function PFIDashboard() {
         <NativeSelect className="w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
         <option value="all">All statuses</option>
         <option value="active">Active</option>
+        <option value="not_started">Not started</option>
         <option value="finished">Finished</option>
         </NativeSelect>
         {/* Coastal and gantry rows read nothing alike — one has a BL and a
@@ -509,6 +555,7 @@ function PFIDashboard() {
             {rows.map((p) => {
               const f = p.financials
               const finished = p.status === 'finished'
+              const notStarted = p.status === 'not_started'
               const gantry = f.isGantry
               const uncosted = f.grandTotalCost == null
               const heroLabel = uncosted
@@ -526,8 +573,15 @@ function PFIDashboard() {
                           {/* Filled rather than outlined. Two chips sit here
                               side by side and a pair of outlines reads as
                               clutter around the number rather than as state. */}
-                          <StatusChip fill="solid" tone={finished ? 'inert' : 'accent'}>
-                            {finished ? 'Finished' : 'Active'}
+                          {/* Not-started wears the warning tone rather than
+                              the inert one a finished batch gets: both are
+                              out of the stock totals, but one is waiting on
+                              somebody and the other is done. */}
+                          <StatusChip
+                            fill="solid"
+                            tone={finished ? 'inert' : notStarted ? 'warning' : 'accent'}
+                          >
+                            {finished ? 'Finished' : notStarted ? 'Not started' : 'Active'}
                           </StatusChip>
                           <StatusChip fill="solid" tone="inert">
                             {gantry ? 'Gantry' : 'Coastal'}
@@ -708,7 +762,20 @@ function PFIDashboard() {
                       <Pencil data-icon="inline-start" />
                       Edit details
                     </Button>
-                    {!finished && (
+                    {/* A batch waiting to trade offers the one move that
+                        matters. Closing is hidden while it is not started —
+                        there is nothing to close out yet. */}
+                    {notStarted && (
+                      <Button
+                        variant="outline" size="sm"
+                        className="border-accent/40 text-accent hover:bg-accent/10 hover:text-accent"
+                        onClick={() => setStarting(p)}
+                      >
+                        <Play data-icon="inline-start" />
+                        Start selling
+                      </Button>
+                    )}
+                    {!finished && !notStarted && (
                       <Button
                         variant="outline" size="sm"
                         className="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
@@ -745,6 +812,27 @@ function PFIDashboard() {
         pfi={closing}
         open={closing != null}
         onOpenChange={(o) => !o && setClosing(null)}
+      />
+
+      {/* A confirm rather than a form: starting a batch records no figures,
+          it only asserts that the cargo is now sellable. What it changes is
+          worth spelling out, because the stock tiles move the moment it
+          lands. */}
+      <ConfirmDialog
+        open={starting != null}
+        onOpenChange={(o) => !o && setStarting(null)}
+        title={starting ? `Start selling ${starting.pfiNumber}?` : ''}
+        description={
+          starting
+            ? `Its remaining stock joins the ${fuelLabel(starting.productName)} total and its revenue starts counting towards the portfolio. Expenses already booked against it stay exactly as they are.`
+            : ''
+        }
+        confirmLabel="Start selling"
+        loading={startPfi.isPending}
+        onConfirm={async () => {
+          if (starting) await startPfi.mutateAsync(Number(starting.id))
+          setStarting(null)
+        }}
       />
     </div>
   )

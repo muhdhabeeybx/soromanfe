@@ -20,6 +20,28 @@ export function naira(v: number | null | undefined, opts?: { compact?: boolean }
   return `${sign}₦${Math.abs(v).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+/**
+ * How a batch's status is written, everywhere.
+ *
+ * Kept in one place because every screen that showed it was testing
+ * `status === 'active'` and labelling the other branch "Finished" — which
+ * quietly renamed a not-started batch the moment that status existed. A
+ * two-state test cannot be extended by adding a third state; it has to be
+ * replaced by a lookup.
+ *
+ * Unknown values read as Active: that is what every row on record was before
+ * this status existed, and it is the safer thing to be wrong about than
+ * telling someone a live cargo is closed.
+ */
+export const PFI_STATUS_LABEL: Record<string, string> = {
+  not_started: 'Not started',
+  active: 'Active',
+  finished: 'Finished',
+}
+
+export const pfiStatusLabel = (status?: string | null): string =>
+  PFI_STATUS_LABEL[String(status ?? '')] ?? 'Active'
+
 export function litres(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—'
   return `${Math.round(v).toLocaleString('en-NG')} L`

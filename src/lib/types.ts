@@ -282,13 +282,24 @@ export interface LpgStationItem {
  */
 export type PfiType = 'coastal' | 'gantry'
 
+/**
+ * A batch's trading life.
+ *
+ * `not_started` is a cargo that exists but is not selling yet — bought,
+ * shipped and being paid for, weeks before the first litre leaves the depot.
+ * It carries expenses like any other batch and stays out of every stock and
+ * revenue rollup until it is started, so "PMS remaining" never counts product
+ * nobody can ship today.
+ */
+export type PfiStatus = 'not_started' | 'active' | 'finished'
+
 export interface Pfi {
   _id: string
   id?: string | number
   pfiNumber: string
   /** Absent on rows written before the distinction existed — read as coastal. */
   pfiType?: PfiType
-  status: 'active' | 'finished'
+  status: PfiStatus
   description?: string
   pfiDate?: string | null
   locationId?: number | null

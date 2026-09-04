@@ -20,6 +20,7 @@ import { useCreateVendor } from '#/lib/hooks/useVendors'
 import { VendorField, type VendorFieldValue } from '#/components/VendorField'
 import {
   naira, qty, pct, moneyTone, unitNames, SurplusDeficit, SellThroughBar, profitCaveat,
+  pfiStatusLabel,
 } from '#/routes/pfi/-pfi-utils'
 
 /**
@@ -197,7 +198,7 @@ export function PfiDetailDialog({
               <div className="flex flex-wrap items-center gap-2">
                 <DialogTitle className="break-all font-semibold">{pfi.pfiNumber}</DialogTitle>
                 <Badge variant={pfi.status === 'active' ? 'default' : 'secondary'}>
-                  {pfi.status === 'active' ? 'Active' : 'Finished'}
+                  {pfiStatusLabel(pfi.status)}
                 </Badge>
                 <Badge variant="outline">{isGantry ? 'Gantry' : 'Coastal'}</Badge>
               </div>
