@@ -87,6 +87,25 @@ export function useFleetTrucks() {
   })
 }
 
+/**
+ * One truck, fetched by id.
+ *
+ * Its own query rather than a find() over the list, so a detail page opened
+ * from a link — or reloaded — has the truck without first paying for every
+ * truck in the fleet. Keyed under the list's own key, so the blanket
+ * invalidation every write already performs refreshes this too.
+ */
+export function useFleetTruck(id: number | null) {
+  return useQuery({
+    queryKey: [...KEYS.trucks, id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const res = await api.get(`/fleet/${id}`)
+      return res.data.data.truck as FleetTruck
+    },
+  })
+}
+
 export function useFleetLedger() {
   return useQuery({
     queryKey: KEYS.ledger,
@@ -161,6 +180,29 @@ export const useSaveLedgerEntry = () =>
       ).data,
     'Entry saved',
   )
+
+/**
+ * One posting across many trucks, in one request.
+ *
+ * Lines arrive fully resolved — each with its own description and amount —
+ * because the batch screen shows the operator exactly those lines before they
+ * commit, and what they approved is what must be stored. The server writes
+ * them in a single insert, so a batch either lands whole or not at all.
+ */
+export const useBatchLedgerEntries = () =>
+  useFleetMutation<{ entries: BatchLedgerLine[] }>(
+    async (payload) => (await api.post('/fleet/ledger/batch', payload)).data,
+    'Entries recorded',
+  )
+
+export type BatchLedgerLine = {
+  truckId: number
+  entryType: 'expense' | 'income'
+  category: string
+  amount: number
+  entryDate: string
+  description: string
+}
 
 export const useDeleteLedgerEntry = () =>
   useFleetMutation<number>(

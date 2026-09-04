@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import { PageHeader } from '#/components/PageHeader'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { isWithinInterval } from 'date-fns'
 import {
   Plus, Pencil, Trash2, Search, Truck, Activity, Wallet,
-  FileSpreadsheet, ArrowUpDown, AlertTriangle,
+  FileSpreadsheet, ArrowUpDown, AlertTriangle, ChevronRight,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -36,6 +36,7 @@ const naira = (n: number) => `₦${Number(n || 0).toLocaleString('en-NG')}`
 type SortKey = 'debits' | 'credits' | 'balance'
 
 function FleetDirectoryPage() {
+  const navigate = useNavigate()
   const [preset, setPreset] = useState<DatePreset>('all')
   const [search, setSearch] = useState('')
   const [loadStatus, setLoadStatus] = useState(ALL)
@@ -117,6 +118,9 @@ function FleetDirectoryPage() {
     return { trucks: trucks.length, active, avgCost: rows.length ? cost / rows.length : 0 }
   }, [rows, trucks])
 
+  const openTruck = (id: number) =>
+    navigate({ to: '/fleet-trucks/details', search: { id: String(id) } })
+
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) setDesc((d) => !d)
     else { setSortBy(key); setDesc(true) }
@@ -168,7 +172,7 @@ function FleetDirectoryPage() {
       <PageHeader
       eyebrow="Transport"
       title="Fleet"
-      description="At-a-glance truck performance — debits, credits, and balance per truck for any period."
+      description="At-a-glance truck performance — debits, credits, and balance per truck. Open a truck for its people, papers and full ledger."
       actions={
         <>
           <div className="flex flex-wrap gap-2">
@@ -273,10 +277,24 @@ function FleetDirectoryPage() {
                 {rows.map((r, i) => {
                   const lapsed = isExpired(r.truck.insuranceExpiry) || isExpired(r.truck.roadWorthinessExpiry)
                   return (
-                    <TableRow key={r.truck.id}>
+                    <TableRow
+                      key={r.truck.id}
+                      onClick={() => openTruck(r.truck.id)}
+                      className="cursor-pointer"
+                    >
                       <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                       <TableCell className="font-mono font-normal">
-                        {r.truck.plateNumber}
+                        {/* The plate is the way in — a row carries a balance
+                            and a driver's name, and everything else about the
+                            truck lives one click away. */}
+                        <button
+                          type="button"
+                          onClick={() => openTruck(r.truck.id)}
+                          className="group/plate inline-flex items-center gap-1 outline-none transition-colors duration-250 ease-luxe hover:text-accent focus-visible:underline"
+                        >
+                          {r.truck.plateNumber}
+                          <ChevronRight className="size-3 opacity-0 transition-opacity duration-250 ease-luxe group-hover/plate:opacity-100" />
+                        </button>
                         {!r.truck.isActive && (
                           <span className="ml-1.5 text-xs text-muted-foreground">retired</span>
                         )}
@@ -326,7 +344,7 @@ function FleetDirectoryPage() {
                       >
                         {naira(r.balance)}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-end gap-1">
                           <Button variant="ghost" size="icon-sm" onClick={() => setEditing(r.truck)}>
                             <Pencil /><span className="sr-only">Edit {r.truck.plateNumber}</span>

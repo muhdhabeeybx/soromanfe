@@ -4,7 +4,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { format, isWithinInterval } from 'date-fns'
 import {
   Plus, Pencil, Trash2, Search, Loader2, FileSpreadsheet, FileText,
-  TrendingDown, TrendingUp, Truck, Wallet, Scale, Tags,
+  TrendingDown, TrendingUp, Truck, Wallet, Scale, Tags, Download, ChevronDown, Layers,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -15,6 +15,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '#/components/ui/dialog'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
 import { PageLoader } from '#/components/PageLoader'
 import { PageEmpty } from '#/components/PageEmpty'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
@@ -34,6 +37,7 @@ import {
   type LedgerRow, type TruckGroup,
 } from './-fleet-ledger-data'
 import { exportFleetLedgerExcel, exportFleetLedgerPdf } from './-fleet-ledger-export'
+import { BatchEntryDialog } from './-batch-entry-dialog'
 
 export const Route = createFileRoute('/fleet-ledger/')({
   beforeLoad: () => routeGuard('/fleet-ledger'),
@@ -50,6 +54,24 @@ const signedNaira = (n: number) => (n < 0 ? `(${naira(Math.abs(n))})` : naira(n)
 /** Truck first, then date — see -fleet-ledger-data.ts for why. */
 type Arrangement = 'truck' | 'date'
 
+/**
+ * How a truck block is set apart from the one above it.
+ *
+ * Three cues, none of them a font size. The block's own rows are stepped in
+ * from the left, so the plate and its closing subtotal sit proud of the
+ * entries they bracket; an accent rail runs down the block's left edge, which
+ * is what makes the boundary visible at a glance while scrolling; and the two
+ * summary rows are shaded, the opening one more strongly than the close.
+ *
+ * Everything in the table is text-sm. Hierarchy is carried by weight, colour
+ * and indent — the summary rows used to be a size smaller than the entries
+ * they totalled, which read as a footnote rather than as the block's answer.
+ */
+const ENTRY_INDENT = 'pl-7'
+const SUMMARY_INDENT = 'pl-3'
+/** Drawn on the first cell of every row, so it reads as one unbroken edge. */
+const BLOCK_RAIL = '[&>tr>td:first-child]:border-l-2 [&>tr>td:first-child]:border-l-accent/30'
+
 function FleetLedgerPage() {
   const [preset, setPreset] = useState<DatePreset>('all')
   const [from, setFrom] = useState('')
@@ -60,6 +82,7 @@ function FleetLedgerPage() {
   const [categoryFilter, setCategoryFilter] = useState(ALL)
   const [arrangement, setArrangement] = useState<Arrangement>('truck')
   const [editing, setEditing] = useState<LedgerEntry | null | 'new'>(null)
+  const [batching, setBatching] = useState(false)
   const [deleting, setDeleting] = useState<LedgerEntry | null>(null)
 
   const { data: trucks = [] } = useFleetTrucks()
@@ -189,34 +212,39 @@ function FleetLedgerPage() {
       title="Trucks Ledger"
       description="Add, edit, and manage all truck expense and income entries."
       actions={
-        <>
-          <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline" size="sm"
-            onClick={() => runExport('excel')}
-            disabled={!filtered.length || exporting !== null}
-          >
-          {exporting === 'excel'
-            ? <Loader2 data-icon="inline-start" className="animate-spin" />
-            : <FileSpreadsheet data-icon="inline-start" />}
-          Export Excel
-          </Button>
-          <Button
-            variant="outline" size="sm"
-            onClick={() => runExport('pdf')}
-            disabled={!filtered.length || exporting !== null}
-          >
-          {exporting === 'pdf'
-            ? <Loader2 data-icon="inline-start" className="animate-spin" />
-            : <FileText data-icon="inline-start" />}
-          Export PDF
+        <div className="flex flex-wrap gap-2">
+          {/* One export control. Excel or PDF is a question about the file,
+              not two different reports, so it belongs inside the button
+              rather than beside it. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" disabled={!filtered.length || exporting !== null}>
+                {exporting
+                  ? <Loader2 data-icon="inline-start" className="animate-spin" />
+                  : <Download data-icon="inline-start" />}
+                Export
+                <ChevronDown data-icon="inline-end" className="opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem className="gap-2 text-sm" onClick={() => runExport('excel')}>
+                <FileSpreadsheet className="size-3.5 text-accent" /> Excel workbook
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2 text-sm" onClick={() => runExport('pdf')}>
+                <FileText className="size-3.5 text-muted-foreground" /> PDF report
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button variant="outline" size="sm" onClick={() => setBatching(true)}>
+            <Layers data-icon="inline-start" />
+            Batch entry
           </Button>
           <Button size="sm" onClick={() => setEditing('new')}>
-          <Plus data-icon="inline-start" />
-          Add entry
+            <Plus data-icon="inline-start" />
+            Add entry
           </Button>
-          </div>
-        </>
+        </div>
       }
     />
 
@@ -366,16 +394,21 @@ function FleetLedgerPage() {
           <div className="px-2 pb-2">
             <Table>
               <TableHeader>
-                <TableRow className="border-foreground/15">
-                  <TableHead className="font-medium">Date</TableHead>
-                  {arrangement === 'date' && <TableHead className="font-medium">Truck</TableHead>}
-                  <TableHead className="font-medium">Description</TableHead>
-                  <TableHead className="font-medium">Category</TableHead>
-                  <TableHead className="text-right font-medium text-destructive">Debit</TableHead>
-                  <TableHead className="text-right font-medium text-accent">Credit</TableHead>
-                  <TableHead className="text-right font-medium">Balance</TableHead>
-                  <TableHead className="font-medium">Entered By</TableHead>
-                  <TableHead className="text-right font-medium">Actions</TableHead>
+                <TableRow className="border-foreground/15 hover:bg-transparent">
+                  {/* Indented in step with the entry rows below it, so the
+                      column heading sits over its own column rather than over
+                      the block header's margin. */}
+                  <TableHead className={cn('text-sm font-medium', arrangement === 'truck' && ENTRY_INDENT)}>
+                    Date
+                  </TableHead>
+                  {arrangement === 'date' && <TableHead className="text-sm font-medium">Truck</TableHead>}
+                  <TableHead className="text-sm font-medium">Description</TableHead>
+                  <TableHead className="text-sm font-medium">Category</TableHead>
+                  <TableHead className="text-right text-sm font-medium text-destructive">Debit</TableHead>
+                  <TableHead className="text-right text-sm font-medium text-accent">Credit</TableHead>
+                  <TableHead className="text-right text-sm font-medium">Balance</TableHead>
+                  <TableHead className="text-sm font-medium">Entered by</TableHead>
+                  <TableHead className="text-right text-sm font-medium">Actions</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -402,18 +435,21 @@ function FleetLedgerPage() {
               {/* The fleet's own bottom line, closed off the way a ledger
                   closes: a rule above it and the balance carrying its sign. */}
               <tfoot>
-                <TableRow className="border-t-2 border-foreground/25 bg-muted/60 hover:bg-muted/60">
-                  <TableCell className="font-semibold" colSpan={arrangement === 'date' ? 4 : 3}>
-                    FLEET TOTAL — {totals.entries} entr{totals.entries === 1 ? 'y' : 'ies'},{' '}
-                    {totals.trucks} truck{totals.trucks === 1 ? '' : 's'}
+                <TableRow className="border-t-2 border-foreground/25 bg-muted/70 hover:bg-muted/70">
+                  <TableCell className="py-3 pl-3 font-semibold" colSpan={arrangement === 'date' ? 4 : 3}>
+                    Fleet total
+                    <span className="ml-2 font-normal text-muted-foreground">
+                      {totals.entries} entr{totals.entries === 1 ? 'y' : 'ies'} ·{' '}
+                      {totals.trucks} truck{totals.trucks === 1 ? '' : 's'}
+                    </span>
                   </TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums text-destructive">
+                  <TableCell className="py-3 text-right font-semibold tabular-nums text-destructive">
                     {naira(totals.debits)}
                   </TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums text-accent">
+                  <TableCell className="py-3 text-right font-semibold tabular-nums text-accent">
                     {naira(totals.credits)}
                   </TableCell>
-                  <TableCell className={cn('text-right font-semibold tabular-nums', signedTone(totals.balance))}>
+                  <TableCell className={cn('py-3 text-right font-semibold tabular-nums', signedTone(totals.balance))}>
                     {signedNaira(totals.balance)}
                   </TableCell>
                   <TableCell colSpan={2} />
@@ -423,6 +459,12 @@ function FleetLedgerPage() {
           </div>
         )}
       </section>
+
+      <BatchEntryDialog
+        open={batching}
+        trucks={trucks}
+        onOpenChange={setBatching}
+      />
 
       <EntryDialog
         entry={editing === 'new' ? null : editing}
@@ -452,8 +494,9 @@ function FleetLedgerPage() {
  * One truck's whole story: a banded header carrying its totals, its entries
  * oldest-first underneath, and a subtotal that closes the block.
  *
- * Its own <tbody> per truck, which is what lets the header row be sticky
- * within its group and keeps the browser from striping across a boundary.
+ * Its own <tbody> per truck, which is what carries the left rail and the
+ * rule that opens the block, and what keeps striping from running across a
+ * boundary.
  */
 function TruckBlock({
   group, onEdit, onDelete,
@@ -466,17 +509,14 @@ function TruckBlock({
   // column is absent in this arrangement — the block header names it once.
   const span = 3
   return (
-    <TableBody className="border-t border-foreground/15">
-      <TableRow className="border-foreground/15 bg-muted/40 hover:bg-muted/40">
-        <TableCell colSpan={span} className="py-3">
+    <TableBody className={cn('border-t-2 border-foreground/20', BLOCK_RAIL)}>
+      <TableRow className="border-foreground/15 bg-muted/60 hover:bg-muted/60">
+        <TableCell colSpan={span} className={cn('py-3', SUMMARY_INDENT)}>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            {/* The plate is the heading of the block, so it carries the weight
-                and the accent rule that marks a group boundary. */}
-            <span className="border-l-[3px] border-accent pl-2.5 font-mono text-sm font-semibold">
-              {group.plate}
-            </span>
-            <span className="text-xs text-muted-foreground">{group.driver || '—'}</span>
-            <span className="text-xs text-muted-foreground">
+            {/* The plate is the heading of the block, so it carries the weight. */}
+            <span className="font-mono font-semibold">{group.plate}</span>
+            <span className="text-muted-foreground">{group.driver || '—'}</span>
+            <span className="text-muted-foreground">
               {group.entries} entr{group.entries === 1 ? 'y' : 'ies'}
               {group.firstDate && group.lastDate && (
                 <> · {format(group.firstDate, 'd MMM yyyy')} – {format(group.lastDate, 'd MMM yyyy')}</>
@@ -484,33 +524,33 @@ function TruckBlock({
             </span>
           </div>
         </TableCell>
-        <TableCell className="text-right text-xs font-semibold tabular-nums text-destructive">
+        <TableCell className="py-3 text-right font-semibold tabular-nums text-destructive">
           {naira(group.debits)}
         </TableCell>
-        <TableCell className="text-right text-xs font-semibold tabular-nums text-accent">
+        <TableCell className="py-3 text-right font-semibold tabular-nums text-accent">
           {naira(group.credits)}
         </TableCell>
-        <TableCell className={cn('text-right text-xs font-semibold tabular-nums', signedTone(group.balance))}>
+        <TableCell className={cn('py-3 text-right font-semibold tabular-nums', signedTone(group.balance))}>
           {signedNaira(group.balance)}
         </TableCell>
         <TableCell colSpan={2} />
       </TableRow>
 
       {group.rows.map((row, i) => (
-        <EntryRow key={row.id} entry={row} index={i} onEdit={onEdit} onDelete={onDelete} />
+        <EntryRow key={row.id} entry={row} index={i} indent onEdit={onEdit} onDelete={onDelete} />
       ))}
 
-      <TableRow className="border-foreground/15 bg-muted/20 hover:bg-muted/20">
-        <TableCell colSpan={span} className="py-2 text-xs text-muted-foreground">
-          Subtotal — {group.plate}
+      <TableRow className="border-foreground/15 bg-muted/30 hover:bg-muted/30">
+        <TableCell colSpan={span} className={cn('py-2.5 text-muted-foreground', SUMMARY_INDENT)}>
+          Subtotal — <span className="font-mono text-foreground">{group.plate}</span>
         </TableCell>
-        <TableCell className="text-right text-xs font-semibold tabular-nums text-destructive">
+        <TableCell className="py-2.5 text-right font-semibold tabular-nums text-destructive">
           {naira(group.debits)}
         </TableCell>
-        <TableCell className="text-right text-xs font-semibold tabular-nums text-accent">
+        <TableCell className="py-2.5 text-right font-semibold tabular-nums text-accent">
           {naira(group.credits)}
         </TableCell>
-        <TableCell className={cn('text-right text-xs font-semibold tabular-nums', signedTone(group.balance))}>
+        <TableCell className={cn('py-2.5 text-right font-semibold tabular-nums', signedTone(group.balance))}>
           {signedNaira(group.balance)}
         </TableCell>
         <TableCell colSpan={2} />
@@ -520,31 +560,33 @@ function TruckBlock({
 }
 
 function EntryRow({
-  entry, index, showTruck = false, onEdit, onDelete,
+  entry, index, showTruck = false, indent = false, onEdit, onDelete,
 }: {
   entry: LedgerRow
   index: number
   showTruck?: boolean
+  /** Stepped in under its truck's block header — see ENTRY_INDENT. */
+  indent?: boolean
   onEdit: (e: LedgerEntry) => void
   onDelete: (e: LedgerEntry) => void
 }) {
   const expense = isExpense(entry)
   return (
-    <TableRow className={cn('border-foreground/10', index % 2 === 1 && 'bg-muted/[0.15]')}>
-      <TableCell className="whitespace-nowrap tabular-nums">
+    <TableRow className={cn('border-foreground/10', index % 2 === 1 && 'bg-foreground/[0.02]')}>
+      <TableCell className={cn('whitespace-nowrap tabular-nums', indent && ENTRY_INDENT)}>
         {format(new Date(entry.entry_date), 'd MMM yyyy')}
       </TableCell>
       {showTruck && <TableCell className="font-mono font-medium">{entry.truck_plate}</TableCell>}
-      <TableCell className="max-w-[16rem] truncate" title={entry.description || undefined}>
+      <TableCell className="max-w-[20rem] truncate" title={entry.description || undefined}>
         {entry.description || '—'}
       </TableCell>
       <TableCell className="text-muted-foreground">{entry.category}</TableCell>
       {/* One entry occupies exactly one column — the split is the whole point,
           since the model only has type and amount. */}
-      <TableCell className="text-right font-semibold tabular-nums text-destructive">
+      <TableCell className="text-right font-medium tabular-nums text-destructive">
         {expense ? naira(entry.amount) : ''}
       </TableCell>
-      <TableCell className="text-right font-semibold tabular-nums text-accent">
+      <TableCell className="text-right font-medium tabular-nums text-accent">
         {expense ? '' : naira(entry.amount)}
       </TableCell>
       {/* Quieter than the two columns feeding it: it is a position, not a

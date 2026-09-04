@@ -68,6 +68,7 @@ import { Route as FilingStationsDetailsRouteImport } from './routes/filing-stati
 import { Route as FilingStationsFormRouteImport } from './routes/filing-stations/form'
 import { Route as FleetLedgerIndexRouteImport } from './routes/fleet-ledger/index'
 import { Route as FleetTrucksIndexRouteImport } from './routes/fleet-trucks/index'
+import { Route as FleetTrucksDetailsRouteImport } from './routes/fleet-trucks/details'
 import { Route as HomeIndexRouteImport } from './routes/home/index'
 import { Route as InventoryIndexRouteImport } from './routes/inventory/index'
 import { Route as LicenceVerificationIndexRouteImport } from './routes/licence-verification/index'
@@ -424,6 +425,11 @@ const FleetTrucksIndexRoute = FleetTrucksIndexRouteImport.update({
   path: '/fleet-trucks/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FleetTrucksDetailsRoute = FleetTrucksDetailsRouteImport.update({
+  id: '/fleet-trucks/details',
+  path: '/fleet-trucks/details',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HomeIndexRoute = HomeIndexRouteImport.update({
   id: '/home/',
   path: '/home/',
@@ -720,6 +726,7 @@ export interface FileRoutesByFullPath {
   '/drivers/form': typeof DriversFormRoute
   '/filing-stations/details': typeof FilingStationsDetailsRoute
   '/filing-stations/form': typeof FilingStationsFormRoute
+  '/fleet-trucks/details': typeof FleetTrucksDetailsRoute
   '/licence-verification/review': typeof LicenceVerificationReviewRoute
   '/lpg-order-request/review': typeof LpgOrderRequestReviewRoute
   '/lpg-orders/details': typeof LpgOrdersDetailsRoute
@@ -833,6 +840,7 @@ export interface FileRoutesByTo {
   '/drivers/form': typeof DriversFormRoute
   '/filing-stations/details': typeof FilingStationsDetailsRoute
   '/filing-stations/form': typeof FilingStationsFormRoute
+  '/fleet-trucks/details': typeof FleetTrucksDetailsRoute
   '/licence-verification/review': typeof LicenceVerificationReviewRoute
   '/lpg-order-request/review': typeof LpgOrderRequestReviewRoute
   '/lpg-orders/details': typeof LpgOrdersDetailsRoute
@@ -947,6 +955,7 @@ export interface FileRoutesById {
   '/drivers/form': typeof DriversFormRoute
   '/filing-stations/details': typeof FilingStationsDetailsRoute
   '/filing-stations/form': typeof FilingStationsFormRoute
+  '/fleet-trucks/details': typeof FleetTrucksDetailsRoute
   '/licence-verification/review': typeof LicenceVerificationReviewRoute
   '/lpg-order-request/review': typeof LpgOrderRequestReviewRoute
   '/lpg-orders/details': typeof LpgOrdersDetailsRoute
@@ -1062,6 +1071,7 @@ export interface FileRouteTypes {
     | '/drivers/form'
     | '/filing-stations/details'
     | '/filing-stations/form'
+    | '/fleet-trucks/details'
     | '/licence-verification/review'
     | '/lpg-order-request/review'
     | '/lpg-orders/details'
@@ -1175,6 +1185,7 @@ export interface FileRouteTypes {
     | '/drivers/form'
     | '/filing-stations/details'
     | '/filing-stations/form'
+    | '/fleet-trucks/details'
     | '/licence-verification/review'
     | '/lpg-order-request/review'
     | '/lpg-orders/details'
@@ -1288,6 +1299,7 @@ export interface FileRouteTypes {
     | '/drivers/form'
     | '/filing-stations/details'
     | '/filing-stations/form'
+    | '/fleet-trucks/details'
     | '/licence-verification/review'
     | '/lpg-order-request/review'
     | '/lpg-orders/details'
@@ -1402,6 +1414,7 @@ export interface RootRouteChildren {
   DriversFormRoute: typeof DriversFormRoute
   FilingStationsDetailsRoute: typeof FilingStationsDetailsRoute
   FilingStationsFormRoute: typeof FilingStationsFormRoute
+  FleetTrucksDetailsRoute: typeof FleetTrucksDetailsRoute
   LicenceVerificationReviewRoute: typeof LicenceVerificationReviewRoute
   LpgOrderRequestReviewRoute: typeof LpgOrderRequestReviewRoute
   LpgOrdersDetailsRoute: typeof LpgOrdersDetailsRoute
@@ -1900,6 +1913,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FleetTrucksIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/fleet-trucks/details': {
+      id: '/fleet-trucks/details'
+      path: '/fleet-trucks/details'
+      fullPath: '/fleet-trucks/details'
+      preLoaderRoute: typeof FleetTrucksDetailsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/home/': {
       id: '/home/'
       path: '/home'
@@ -2299,6 +2319,7 @@ const rootRouteChildren: RootRouteChildren = {
   DriversFormRoute: DriversFormRoute,
   FilingStationsDetailsRoute: FilingStationsDetailsRoute,
   FilingStationsFormRoute: FilingStationsFormRoute,
+  FleetTrucksDetailsRoute: FleetTrucksDetailsRoute,
   LicenceVerificationReviewRoute: LicenceVerificationReviewRoute,
   LpgOrderRequestReviewRoute: LpgOrderRequestReviewRoute,
   LpgOrdersDetailsRoute: LpgOrdersDetailsRoute,
