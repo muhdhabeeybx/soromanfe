@@ -37,13 +37,13 @@ import {
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { StatusChip } from '#/components/ui/status-chip'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import { PageHeader } from '#/components/PageHeader'
 import { PageLoader } from '#/components/PageLoader'
 import { PageEmpty } from '#/components/PageEmpty'
-import { Breadcrumbs } from '#/components/Breadcrumbs'
 import { PhoneLink } from '#/components/ContactLink'
 import { TruckDialog } from '#/components/TruckDialog'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
@@ -75,12 +75,23 @@ function TruckDetailPage() {
   const truckId = Number(id)
 
   const [preset, setPreset] = useState<DatePreset>('all')
+  // Two dates, but one is optional: resolveRange reads a `from` with no `to`
+  // as that single day, so "the 3rd" and "the 3rd to the 9th" are the same
+  // control rather than two.
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
   const [editing, setEditing] = useState(false)
 
   const { data: truck, isLoading } = useFleetTruck(Number.isFinite(truckId) ? truckId : null)
   const { data: allEntries = [] } = useFleetLedger()
 
-  const range = useMemo(() => resolveRange(preset), [preset])
+  const range = useMemo(
+    () => resolveRange(preset, {
+      from: from ? new Date(from) : undefined,
+      to: to ? new Date(to) : undefined,
+    }),
+    [preset, from, to],
+  )
 
   /** This truck's entries, oldest first — the order a running balance needs. */
   const entries = useMemo(
@@ -133,39 +144,55 @@ function TruckDetailPage() {
   }
 
   const lapsed = isExpired(truck.insuranceExpiry) || isExpired(truck.roadWorthinessExpiry)
-  const periodLabel = DATE_PRESETS.find((p) => p.value === preset)?.label ?? 'All time'
+
+  // A custom window names itself: one date reads as that day, two as the
+  // span. "Custom" on a total would tell the reader nothing about what they
+  // are looking at.
+  const customLabel = from && to && from !== to
+    ? `${fmtDate(from)} – ${fmtDate(to)}`
+    : fmtDate(from || to)
+  const periodLabel = (preset === 'custom' && customLabel)
+    || DATE_PRESETS.find((p) => p.value === preset)?.label
+    || 'All time'
 
   return (
     <div className="animate-fade-in space-y-6">
-      <Breadcrumbs
-        items={[
-          { label: 'Fleet Directory', href: '/fleet-trucks' },
-          { label: String(truck.plateNumber || '—') },
-        ]}
-      />
+      {/* No breadcrumb trail above this: it would end on the plate, and the
+          heading directly beneath is the same plate again. The header's own
+          back arrow is the way out, and it does not stutter.
 
+          The plate is the heading, plainly — set in the page's display face
+          rather than in mono, which at 30px reads as a code sample, and with
+          no chips crowded onto the same line at heading size. The state of
+          the truck belongs on the line underneath, at the size chips are
+          actually drawn for. */}
       <PageHeader
         eyebrow="Transport"
-        title={
-          <span className="flex flex-wrap items-center gap-3">
-            <span className="font-mono">{truck.plateNumber}</span>
+        title={truck.plateNumber}
+        description={
+          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
             <StatusChip
               tone={status.rating === 'Bad' ? 'destructive' : status.rating === 'Fair' ? 'warning' : 'accent'}
             >
               {status.rating}
             </StatusChip>
             {!truck.isActive && <StatusChip tone="inert">Retired</StatusChip>}
+            <span>
+              {[
+                truck.truckMake,
+                truck.model,
+                truck.maxCapacity ? `${Number(truck.maxCapacity).toLocaleString('en-NG')} L` : null,
+              ].filter(Boolean).join(' · ') || 'No vehicle details on file'}
+            </span>
           </span>
-        }
-        description={
-          [truck.truckMake, truck.model, truck.maxCapacity ? `${Number(truck.maxCapacity).toLocaleString('en-NG')} L` : null]
-            .filter(Boolean).join(' · ') || 'No vehicle details on file'
         }
         backAction={() => navigate({ to: '/fleet-trucks' })}
         actions={
           <div className="flex flex-wrap gap-2">
+            {/* Lands on the ledger already filtered to this truck — a button
+                that dumps you in the whole fleet's ledger is a small lie. */}
             <Button variant="outline" size="sm" asChild>
-              <Link to="/fleet-ledger">
+              <Link to="/fleet-ledger" search={{ truck: String(truck.id) }}>
                 <FileText data-icon="inline-start" />
                 Open ledger
               </Link>
@@ -205,6 +232,46 @@ function TruckDetailPage() {
               {p.label}
             </button>
           ))}
+
+          {/* One date is a day, two are a span. Typing in either box switches
+              off whichever preset was lit, so the chips never claim a period
+              the figures are not actually showing. */}
+          <span
+            className={cn(
+              'flex items-center gap-1.5 rounded-full border py-0.5 pr-1.5 pl-3 transition-colors duration-250 ease-luxe',
+              preset === 'custom' ? 'border-accent/40 bg-accent/10' : 'border-border',
+            )}
+          >
+            <span className={cn('text-xs', preset === 'custom' ? 'text-accent' : 'text-muted-foreground')}>
+              Or
+            </span>
+            <Input
+              type="date" value={from} aria-label="From"
+              onChange={(e) => { setFrom(e.target.value); setPreset('custom') }}
+              className="h-6 w-[8.5rem] border-transparent bg-transparent px-1.5 text-xs dark:bg-transparent"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <Input
+              type="date" value={to} aria-label="To"
+              onChange={(e) => { setTo(e.target.value); setPreset('custom') }}
+              className="h-6 w-[8.5rem] border-transparent bg-transparent px-1.5 text-xs dark:bg-transparent"
+            />
+            {preset === 'custom' && (
+              <button
+                type="button"
+                onClick={() => { setFrom(''); setTo(''); setPreset('all') }}
+                className="rounded-full px-1.5 text-xs text-muted-foreground transition-colors duration-250 ease-luxe outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Clear
+              </button>
+            )}
+          </span>
+
+          {preset === 'custom' && from && !to && (
+            <span className="text-xs text-muted-foreground">
+              A single day. Add a second date for a range.
+            </span>
+          )}
         </div>
 
         {/* Two to a row: these are four large figures, and four across turns
@@ -554,6 +621,9 @@ function Person({
 
 const fmtDate = (raw?: string | null) => {
   if (!raw) return null
-  const d = new Date(raw)
+  // A bare yyyy-MM-dd is a calendar date, not an instant. Left to `new Date`
+  // it parses as UTC midnight and renders as the day before anywhere west of
+  // Greenwich, so it is read as local time instead.
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw)
   return Number.isNaN(d.getTime()) ? null : format(d, 'd MMM yyyy')
 }

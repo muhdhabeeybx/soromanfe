@@ -41,6 +41,10 @@ import { BatchEntryDialog } from './-batch-entry-dialog'
 
 export const Route = createFileRoute('/fleet-ledger/')({
   beforeLoad: () => routeGuard('/fleet-ledger'),
+  // Arriving from a truck's detail page, already narrowed to that truck.
+  validateSearch: (search: Record<string, unknown>): { truck?: string } => ({
+    truck: (search.truck as string) || undefined,
+  }),
   component: FleetLedgerPage,
 })
 
@@ -73,11 +77,14 @@ const SUMMARY_INDENT = 'pl-3'
 const BLOCK_RAIL = '[&>tr>td:first-child]:border-l-2 [&>tr>td:first-child]:border-l-accent/30'
 
 function FleetLedgerPage() {
+  const { truck: truckParam } = Route.useSearch()
   const [preset, setPreset] = useState<DatePreset>('all')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [search, setSearch] = useState('')
-  const [truckFilter, setTruckFilter] = useState(ALL)
+  // Seeded from the URL, then owned by the select — landing here filtered is
+  // a starting point, not a lock the user has to go back to the URL to undo.
+  const [truckFilter, setTruckFilter] = useState(truckParam ?? ALL)
   const [typeFilter, setTypeFilter] = useState(ALL)
   const [categoryFilter, setCategoryFilter] = useState(ALL)
   const [arrangement, setArrangement] = useState<Arrangement>('truck')
