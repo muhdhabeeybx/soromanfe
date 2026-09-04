@@ -1,4 +1,4 @@
-# Soroman Admin is a staff-only dashboard behind a login. Nothing here should
-# be crawled or indexed; index.html carries the matching noindex meta tag.
+# The Soroman Energy operations portal is a staff-only tool behind a login. Nothing
+# here should be crawled or indexed; index.html carries the matching noindex tag.
 User-agent: *
 Disallow: /

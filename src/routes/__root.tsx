@@ -31,7 +31,7 @@ export const Route = createRootRoute({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'Soroman Admin Dashboard',
+        title: 'Soroman Energy — Operations Portal',
       },
     ],
     // General Sans is self-hosted from src/assets/fonts and declared in
