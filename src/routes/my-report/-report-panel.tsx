@@ -821,7 +821,23 @@ export function ReportPanel({
     edit(initialEdit)
   }, [initialEdit, loadedHandoff, def.type])
 
-  const ready = form.reportDate !== '' && (def.requireLocation === false || form.location.trim() !== '')
+  /**
+   * A report cannot be filed without the batch it is about.
+   *
+   * The PFI is the required answer and location follows from it, rather than
+   * the other way round — a location typed by hand belongs to no batch, so
+   * none of the figures on the sheet can be checked against anything. Asking
+   * for both also invited two answers that could disagree.
+   *
+   * Location is still checked because the API column is NOT NULL: a PFI with
+   * no location on file would otherwise submit blank and come back as a bare
+   * "Validation failed". Compliance is the exception — it reports on the whole
+   * company, so it has no PFI line at all.
+   */
+  const ready = form.reportDate !== '' && (
+    def.requireLocation === false
+      || (form.pfiNumber !== '' && form.location.trim() !== '')
+  )
 
   return (
     <div className="space-y-6">
@@ -868,6 +884,13 @@ export function ReportPanel({
                 <option value="">
                   {def.requireLocation === false ? 'Whole company (no single PFI)' : 'Select an active PFI…'}
                 </option>
+                {/* A report being edited may name a PFI that has since closed.
+                    Without an option of its own the select renders blank,
+                    which now reads as an unfilled required field on a report
+                    that is perfectly valid. */}
+                {form.pfiNumber && !activePfis.some((p) => p.pfiNumber === form.pfiNumber) && (
+                  <option value={form.pfiNumber}>{form.pfiNumber} (closed)</option>
+                )}
                 {activePfis.map((p) => (
                   <option key={p.id} value={p.pfiNumber}>{p.pfiNumber}</option>
                 ))}
@@ -878,8 +901,8 @@ export function ReportPanel({
               <Input
                 id="location"
                 value={form.location}
-                readOnly={!!form.pfiNumber}
-                placeholder={def.requireLocation === false ? COMPANY_WIDE : 'Choose a PFI, or type it'}
+                readOnly={def.requireLocation !== false || !!form.pfiNumber}
+                placeholder={def.requireLocation === false ? COMPANY_WIDE : 'Choose a PFI above'}
                 onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
               />
               <p className="text-xs text-muted-foreground/70">
@@ -935,7 +958,9 @@ export function ReportPanel({
               <p className="mr-auto text-xs text-muted-foreground">
                 {def.requireLocation === false
                   ? 'A date is needed before this can be filed.'
-                  : 'A date and location are needed before this can be filed.'}
+                  : !form.reportDate || !form.pfiNumber
+                    ? 'A date and PFI are needed before this can be filed.'
+                    : 'This PFI has no location on file — add one to the PFI before filing against it.'}
               </p>
             )}
             <Button disabled={!ready || save.isPending} onClick={() => save.mutate()}>
