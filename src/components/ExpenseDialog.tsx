@@ -386,7 +386,7 @@ export function ExpenseDialog({
         currency: form.currency,
         // Omitted on naira, where the server refuses a rate outright rather
         // than quietly accepting one it will never use.
-        ...(foreign ? { exchange_rate: Number(form.exchange_rate) } : {}),
+        ...(foreign ? { exchange_rate: form.exchange_rate === '' ? null : Number(form.exchange_rate) } : {}),
         amount_ex_vat: includeTax ? num(form.amount_ex_vat) : null,
         vat_amount: includeTax ? num(form.vat_amount) : null,
         invoice_amount: includeTax ? num(form.invoice_amount) : null,
@@ -404,7 +404,9 @@ export function ExpenseDialog({
               amount_paid: num(form.amount_paid) ?? Number(form.amount),
               // Money already gone: the rate it went at is a fact of that
               // payment, and the server requires it on a foreign invoice.
-              ...(foreign ? { paid_exchange_rate: Number(form.paid_exchange_rate) || Number(form.exchange_rate) } : {}),
+              ...(foreign && (form.paid_exchange_rate || form.exchange_rate)
+                ? { paid_exchange_rate: Number(form.paid_exchange_rate) || Number(form.exchange_rate) }
+                : {}),
               payment_date: form.payment_date,
               payment_method: form.payment_method,
               payment_reference: form.payment_reference,
@@ -636,9 +638,9 @@ export function ExpenseDialog({
           */}
           {foreign && (
             <Field
-              wide required
-              label={`Rate — naira per ${form.currency}`}
-              hint="The rate this invoice is being converted at today. The rate on the day it is actually paid is captured separately, at payment."
+              wide
+              label={`Rate — naira per ${form.currency} (optional)`}
+              hint="Leave it blank to record the invoice in its own currency and convert later. The rate on the day it is actually paid is captured separately, at payment."
             >
               <NumberInput
                 allowDecimal placeholder="0.00" value={form.exchange_rate}
@@ -658,7 +660,11 @@ export function ExpenseDialog({
                     </span>
                   </>
                 ) : (
-                  'Enter an amount and a rate to see what this is worth in naira.'
+                  // Said plainly, because it is a real consequence rather than
+                  // a missing field: without a rate this request has no naira
+                  // value at all, and every naira total will exclude it until
+                  // one is set.
+                  `Left blank, this stays as ${form.currency} ${Number(form.amount || 0).toLocaleString()} and is counted separately from the naira totals until a rate is added.`
                 )}
               </p>
             </Field>

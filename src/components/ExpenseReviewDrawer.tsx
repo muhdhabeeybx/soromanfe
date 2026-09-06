@@ -232,17 +232,28 @@ export function ExpenseReviewDrawer({
   const payCurrency = String(expense?.currency || 'NGN')
   const payForeign = payCurrency !== 'NGN'
   const paidRate = Number(pay.paid_exchange_rate) || 0
-  const raisedRate = Number(expense?.exchange_rate) || 1
+  /**
+   * Null when the request was never converted, which is allowed. There is then
+   * nothing to compare a payment rate against, so the rate field goes away
+   * rather than inviting a number the server would refuse.
+   */
+  const raisedRateRaw = Number(expense?.exchange_rate)
+  const raisedRate = Number.isFinite(raisedRateRaw) && raisedRateRaw > 0 ? raisedRateRaw : null
   const paidNgn = payForeign ? (Number(pay.amount_paid) || 0) * paidRate : Number(pay.amount_paid) || 0
-  const raisedNgn = (Number(expense?.amount) || 0) * raisedRate
-  const fxDifference = payForeign && paidRate > 0 ? Math.round((paidNgn - raisedNgn) * 100) / 100 : 0
+  const raisedNgn = raisedRate === null ? null : (Number(expense?.amount) || 0) * raisedRate
+  const fxDifference =
+    payForeign && paidRate > 0 && raisedNgn !== null
+      ? Math.round((paidNgn - raisedNgn) * 100) / 100
+      : 0
+  /** A payment rate only means something against a request that has one. */
+  const canRatePayment = payForeign && raisedRate !== null
 
   // A payment that settles for something other than what was approved needs a
   // reason on the record — mirrors the server-side check in paymentFor().
   const payReady =
     !!pay.bank_paid_from.trim() &&
     Number(pay.amount_paid) > 0 &&
-    (!payForeign || paidRate > 0) &&
+    (!canRatePayment || paidRate > 0) &&
     (payVariance === 0 || !!pay.payment_notes.trim())
 
   const run = async (action: ExpenseAction) => {
@@ -285,7 +296,7 @@ export function ExpenseReviewDrawer({
             payment_date: pay.payment_date || undefined,
             payment_method: pay.payment_method,
             payment_notes: pay.payment_notes.trim(),
-            ...(payForeign ? { paid_exchange_rate: paidRate } : {}),
+            ...(canRatePayment ? { paid_exchange_rate: paidRate } : {}),
           }
         : undefined,
     })
@@ -465,7 +476,11 @@ export function ExpenseReviewDrawer({
                 {payForeign && (
                   <Row
                     label="Approved in naira"
-                    value={`${naira(raisedNgn)} · at ${raisedRate.toLocaleString()}`}
+                    value={
+                      raisedNgn === null
+                        ? 'Not converted — no rate on this request'
+                        : `${naira(raisedNgn)} · at ${raisedRate?.toLocaleString()}`
+                    }
                   />
                 )}
                 {settled != null && (
@@ -703,7 +718,7 @@ export function ExpenseReviewDrawer({
                       loss that has to land somewhere — stating it here is what
                       stops it being absorbed silently into the expense.
                     */}
-                    {payForeign && (
+                    {canRatePayment && (
                       <div className="space-y-1.5 sm:col-span-2">
                         <label className={cn(MICRO, 'block text-muted-foreground')}>
                           Rate paid at — naira per {payCurrency}
@@ -713,7 +728,7 @@ export function ExpenseReviewDrawer({
                           onValueChange={(v) => setPay((p) => ({ ...p, paid_exchange_rate: v }))}
                         />
                         <p className="text-xs leading-tight text-muted-foreground/70">
-                          Approved at {raisedRate.toLocaleString()} · {naira(raisedNgn)}
+                          Approved at {raisedRate?.toLocaleString()} · {naira(raisedNgn ?? 0)}
                         </p>
                         {paidRate > 0 && (
                           <p className={cn(

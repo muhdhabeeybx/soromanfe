@@ -22,10 +22,17 @@ export function expenseMoney(e: PfiExpense, value?: number | string | null): str
   })}`
 }
 
-/** The same figure in naira, for the line underneath. Empty on a naira row. */
+/**
+ * The same figure in naira, for the line underneath.
+ *
+ * Empty on a naira row, where it would only repeat the line above. On a
+ * foreign row with no rate it says so rather than printing a number — there
+ * genuinely is no naira figure, and inventing one is the error.
+ */
 export function expenseMoneyNgn(e: PfiExpense, field: 'amount' | 'amount_paid' = 'amount'): string {
   if (!isForeignExpense(e)) return ''
-  return naira(expenseNgn(e, field))
+  const value = expenseNgn(e, field)
+  return value === null ? 'not converted' : naira(value)
 }
 
 /**
@@ -221,31 +228,45 @@ export function paidFromParts(
 // ── Totals ────────────────────────────────────────────────────────────────
 
 /**
- * The rate that turns one expense's figures into naira.
+ * The rate that turns one expense's figures into naira, or null.
  *
- * 1 on everything domestic. On a foreign invoice it is the rate the request
- * was raised at — the same rate the invoice's own VAT and WHT were quoted
- * under, which is why they convert at it too.
+ * 1 on everything domestic. Null on a foreign invoice recorded without a rate
+ * — which is allowed, because the desk often does not know what it will buy
+ * the currency at, and an invented rate is worse than none.
+ *
+ * Null and NOT 1. Falling back to 1 is the whole failure this module exists to
+ * prevent: it would read an unconverted $50,000 as ₦50,000 and add it to a
+ * naira total, understating it seventyfold with nothing looking wrong.
  */
-export const expenseRate = (e: PfiExpense): number => {
+export const expenseRate = (e: PfiExpense): number | null => {
+  if (!isForeignExpense(e)) return 1
   const rate = Number(e.exchange_rate)
-  return Number.isFinite(rate) && rate > 0 ? rate : 1
+  return Number.isFinite(rate) && rate > 0 ? rate : null
 }
 
+/** A foreign invoice nobody has put a rate against. It has no naira value. */
+export const isUnconverted = (e: PfiExpense): boolean => expenseRate(e) === null
+
 /**
- * One of an expense's money fields, in naira.
+ * One of an expense's money fields, in naira — or null when there is no rate
+ * to translate it with.
  *
  * `amount` and `amount_paid` come back from the server already translated, as
  * columns the database generates and nothing can write stale. The invoice
  * breakdown has no generated twin, so it is converted here at the same rate.
  */
-export const expenseNgn = (e: PfiExpense, field: 'amount' | 'amount_paid' | 'vat_amount' | 'wht_deduction'): number => {
+export const expenseNgn = (
+  e: PfiExpense,
+  field: 'amount' | 'amount_paid' | 'vat_amount' | 'wht_deduction',
+): number | null => {
+  const rate = expenseRate(e)
+  if (rate === null) return null
   if (field === 'amount') return Number(e.amount_ngn ?? e.amount) || 0
   if (field === 'amount_paid') {
     if (e.amount_paid == null) return 0
-    return Number(e.amount_paid_ngn ?? Number(e.amount_paid) * expenseRate(e)) || 0
+    return Number(e.amount_paid_ngn ?? Number(e.amount_paid) * rate) || 0
   }
-  return (Number(e[field]) || 0) * expenseRate(e)
+  return (Number(e[field]) || 0) * rate
 }
 
 /**
@@ -269,13 +290,29 @@ export function expenseTotals(rows: PfiExpense[]) {
   let wht = 0
   const byStatus = new Map<string, { label: string; count: number; amount: number }>()
   const byKind = new Map<string, { label: string; count: number; amount: number }>()
+  /** Foreign invoices with no rate — outside every naira figure below. */
+  const unconverted = new Map<string, { currency: string; count: number; amount: number }>()
 
   for (const e of rows) {
-    const amount = expenseNgn(e, 'amount')
+    /**
+     * An unconverted foreign invoice has no naira value, so it cannot join
+     * these totals — but it must not vanish either. It is collected below and
+     * reported beside the total, in its own currency, so the summary reads
+     * "₦9.08bn, and USD 50,000 besides" rather than quietly under-reporting.
+     */
+    if (isUnconverted(e)) {
+      const code = expenseCurrency(e)
+      const u = unconverted.get(code) ?? { currency: code, count: 0, amount: 0 }
+      u.count++; u.amount += Number(e.amount) || 0
+      unconverted.set(code, u)
+      continue
+    }
+
+    const amount = expenseNgn(e, 'amount') ?? 0
     requested += amount
-    vat += expenseNgn(e, 'vat_amount')
-    wht += expenseNgn(e, 'wht_deduction')
-    if (e.amount_paid != null) paid += expenseNgn(e, 'amount_paid')
+    vat += expenseNgn(e, 'vat_amount') ?? 0
+    wht += expenseNgn(e, 'wht_deduction') ?? 0
+    if (e.amount_paid != null) paid += expenseNgn(e, 'amount_paid') ?? 0
     else if (e.status === 'paid') paid += amount
 
     const s = byStatus.get(e.status) ?? { label: e.status_label || e.status, count: 0, amount: 0 }
@@ -297,5 +334,11 @@ export function expenseTotals(rows: PfiExpense[]) {
     wht,
     byStatus: [...byStatus.entries()].map(([status, v]) => ({ status, ...v })),
     byKind: [...byKind.values()].sort((a, b) => b.amount - a.amount),
+    /**
+     * What every naira figure above leaves out, by currency. Empty on an
+     * ordinary day; when it is not, the totals are partial and the page has
+     * to say so.
+     */
+    unconverted: [...unconverted.values()].sort((a, b) => b.amount - a.amount),
   }
 }

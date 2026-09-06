@@ -126,8 +126,13 @@ export type PfiExpense = {
   // raised at, and again at the rate on the day it was paid.
   /** ISO 4217. 'NGN' on everything domestic. */
   currency?: string
-  /** Naira per unit of `currency`, at the time of raising. '1' on NGN. */
-  exchange_rate?: string
+  /**
+   * Naira per unit of `currency`, at the time of raising. '1' on NGN.
+   *
+   * Null on a foreign invoice recorded without a rate — allowed, and then the
+   * row has no naira value at all rather than a guessed one.
+   */
+  exchange_rate?: string | null
   /** The rate on the day it cleared. Null until paid, and null on NGN. */
   paid_exchange_rate?: string | null
   /**

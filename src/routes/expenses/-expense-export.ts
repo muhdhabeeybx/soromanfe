@@ -156,6 +156,16 @@ export async function exportExpensesExcel(rows: PfiExpense[], meta: ExpenseExpor
     ['Outstanding', t.outstanding, NGN_SIGNED],
     [`VAT (${vatPct}%)`, t.vat, NGN],
     ['WHT deducted', t.wht, NGN],
+    /**
+     * Every naira figure above excludes any foreign invoice recorded without
+     * a rate, because such a row genuinely has no naira value. Printing the
+     * residue in its own currency, on its own line, is what stops the sheet
+     * quietly under-reporting — the alternative is a total that is wrong by
+     * an amount the reader cannot see.
+     */
+    ...t.unconverted.map((u) =>
+      [`Not converted (${u.currency})`, u.amount, COUNT] as [string, number, string],
+    ),
   ]
   for (const [label, value, fmt] of totalPairs) {
     const r = ws.getRow(cursor)
@@ -353,6 +363,13 @@ export async function exportExpensesPdf(rows: PfiExpense[], meta: ExpenseExportM
       ['Outstanding', pdfNaira(t.outstanding)],
       [`VAT (${vatPct}%)`, pdfNaira(t.vat)],
       ['WHT deducted', pdfNaira(t.wht)],
+      // Same disclosure as the workbook, and for the same reason: the naira
+      // figures above exclude any invoice recorded without a rate, and a
+      // printed sheet is the worst place to meet a silent omission.
+      ...t.unconverted.map((u) => [
+        `Not converted (${u.currency})`,
+        `${u.currency} ${u.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      ]),
     ],
     theme: 'grid',
     styles: pdfStyles.body,
