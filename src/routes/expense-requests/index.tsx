@@ -28,7 +28,7 @@ import { ExpenseReviewDrawer, StepBadge } from '#/components/ExpenseReviewDrawer
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { routeGuard } from '#/lib/route-guard'
 import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
-import { statusRow, categoryChip, categoryGrouping } from '#/lib/expense-presentation'
+import { statusRow, categoryChip, categoryGrouping, expenseMoney, expenseMoneyNgn, isForeignExpense } from '#/lib/expense-presentation'
 import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 import { useToast } from '#/lib/hooks/useToast'
 
@@ -309,12 +309,17 @@ function MyRequestsPage() {
                       {e.description || '—'}
                     </TableCell>
                     <TableCell className="text-right font-semibold whitespace-nowrap text-blue-700 dark:text-blue-400">
-                      {naira(Number(e.amount))}
+                      {expenseMoney(e)}
+                      {isForeignExpense(e) && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {expenseMoneyNgn(e)}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap font-semibold text-success">
                       {e.amount_paid != null
-                        ? naira(Number(e.amount_paid))
-                        : (e.status === 'paid' ? naira(Number(e.amount)) : <span className="font-normal text-muted-foreground">—</span>)}
+                        ? expenseMoney(e, e.amount_paid)
+                        : (e.status === 'paid' ? expenseMoney(e) : <span className="font-normal text-muted-foreground">—</span>)}
                     </TableCell>
                     <TableCell><StepBadge expense={e} /></TableCell>
                     <TableCell className="text-right" onClick={(ev) => ev.stopPropagation()}>

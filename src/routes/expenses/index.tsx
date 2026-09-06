@@ -20,8 +20,7 @@ import { ScopedBankAccountsDialog } from '#/components/ScopedBankAccountsDialog'
 import { BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { exportExpensesExcel, exportExpensesPdf } from '#/routes/expenses/-expense-export'
 import {
-  statusRow, categoryChip, categoryGrouping, payeeAccount, paidFromParts,
-} from '#/lib/expense-presentation'
+  statusRow, categoryChip, categoryGrouping, payeeAccount, paidFromParts, expenseMoney, expenseMoneyNgn, isForeignExpense } from '#/lib/expense-presentation'
 import { useBankAccountPicker, resolveBankAccount } from '#/lib/bank-accounts'
 import { useToast } from '#/lib/hooks/useToast'
 import { MICRO, PANEL } from '#/lib/panel'
@@ -451,7 +450,12 @@ function ExpensesPage() {
                         compares, so they are the two that get a colour —
                         blue for the claim, green for the money that moved. */}
                     <TableCell className="text-right font-semibold whitespace-nowrap text-blue-700 dark:text-blue-400">
-                      {naira(Number(e.amount))}
+                      {expenseMoney(e)}
+                      {isForeignExpense(e) && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {expenseMoneyNgn(e)}
+                        </span>
+                      )}
                     </TableCell>
                     {/* Blank until it is settled — a request awaiting payment
                         has not paid ₦0. Once actually paid, a still-blank
@@ -460,8 +464,8 @@ function ExpensesPage() {
                         than showing a paid row as if nothing had cleared. */}
                     <TableCell className="text-right whitespace-nowrap font-semibold text-success">
                       {e.amount_paid != null
-                        ? cash(e.amount_paid)
-                        : (e.status === 'paid' ? naira(Number(e.amount)) : <span className="font-normal text-muted-foreground">—</span>)}
+                        ? (isForeignExpense(e) ? expenseMoney(e, e.amount_paid) : cash(e.amount_paid))
+                        : (e.status === 'paid' ? expenseMoney(e) : <span className="font-normal text-muted-foreground">—</span>)}
                     </TableCell>
                     {/* <TableCell className="text-muted-foreground">{e.gl_code || '—'}</TableCell> */}
                     {/* <TableCell className="text-muted-foreground">{e.bank_code || '—'}</TableCell> */}

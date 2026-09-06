@@ -1,4 +1,32 @@
 import type { PfiExpense } from '#/lib/hooks/usePfis'
+import { naira } from '#/routes/pfi/-pfi-utils'
+
+/** What the invoice is billed in. 'NGN' unless the vessel side raised it. */
+export const expenseCurrency = (e: PfiExpense): string => String(e.currency || 'NGN')
+
+export const isForeignExpense = (e: PfiExpense): boolean => expenseCurrency(e) !== 'NGN'
+
+/**
+ * One of an expense's figures, written in the currency it was billed in.
+ *
+ * A dollar invoice must never be printed behind a naira sign. Every list on
+ * the page reads down a single column, and ₦50,000 against USD 50,000 is a
+ * seventy-fold difference that looks identical.
+ */
+export function expenseMoney(e: PfiExpense, value?: number | string | null): string {
+  const n = Number(value ?? e.amount) || 0
+  if (!isForeignExpense(e)) return naira(n)
+  return `${expenseCurrency(e)} ${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+/** The same figure in naira, for the line underneath. Empty on a naira row. */
+export function expenseMoneyNgn(e: PfiExpense, field: 'amount' | 'amount_paid' = 'amount'): string {
+  if (!isForeignExpense(e)) return ''
+  return naira(expenseNgn(e, field))
+}
 
 /**
  * How an expense is coloured, in one place, for the screen and for both
@@ -193,7 +221,41 @@ export function paidFromParts(
 // ── Totals ────────────────────────────────────────────────────────────────
 
 /**
- * What a set of expenses adds up to.
+ * The rate that turns one expense's figures into naira.
+ *
+ * 1 on everything domestic. On a foreign invoice it is the rate the request
+ * was raised at — the same rate the invoice's own VAT and WHT were quoted
+ * under, which is why they convert at it too.
+ */
+export const expenseRate = (e: PfiExpense): number => {
+  const rate = Number(e.exchange_rate)
+  return Number.isFinite(rate) && rate > 0 ? rate : 1
+}
+
+/**
+ * One of an expense's money fields, in naira.
+ *
+ * `amount` and `amount_paid` come back from the server already translated, as
+ * columns the database generates and nothing can write stale. The invoice
+ * breakdown has no generated twin, so it is converted here at the same rate.
+ */
+export const expenseNgn = (e: PfiExpense, field: 'amount' | 'amount_paid' | 'vat_amount' | 'wht_deduction'): number => {
+  if (field === 'amount') return Number(e.amount_ngn ?? e.amount) || 0
+  if (field === 'amount_paid') {
+    if (e.amount_paid == null) return 0
+    return Number(e.amount_paid_ngn ?? Number(e.amount_paid) * expenseRate(e)) || 0
+  }
+  return (Number(e[field]) || 0) * expenseRate(e)
+}
+
+/**
+ * What a set of expenses adds up to, in naira.
+ *
+ * Naira and not the raw figures, because `amount` is denominated in the
+ * invoice's own currency: summing it across a mixed set adds dollars to naira
+ * as if they were the same unit, and a $50,000 demurrage invoice would land in
+ * a naira total as fifty thousand — understating it seventyfold, with nothing
+ * about the number looking wrong.
  *
  * `paid` follows the same rule the table does: a request awaiting payment has
  * not paid ₦0, and a paid row with no amount_paid (recorded before that column
@@ -209,11 +271,11 @@ export function expenseTotals(rows: PfiExpense[]) {
   const byKind = new Map<string, { label: string; count: number; amount: number }>()
 
   for (const e of rows) {
-    const amount = Number(e.amount) || 0
+    const amount = expenseNgn(e, 'amount')
     requested += amount
-    vat += Number(e.vat_amount) || 0
-    wht += Number(e.wht_deduction) || 0
-    if (e.amount_paid != null) paid += Number(e.amount_paid) || 0
+    vat += expenseNgn(e, 'vat_amount')
+    wht += expenseNgn(e, 'wht_deduction')
+    if (e.amount_paid != null) paid += expenseNgn(e, 'amount_paid')
     else if (e.status === 'paid') paid += amount
 
     const s = byStatus.get(e.status) ?? { label: e.status_label || e.status, count: 0, amount: 0 }

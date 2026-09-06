@@ -211,6 +211,8 @@ export function ExpenseReviewDrawer({
   const [pay, setPay] = useState({
     bank_paid_from: '', amount_paid: '', payment_reference: '',
     payment_date: '', payment_method: '', payment_notes: '',
+    /** Only on a foreign invoice — see payForeign below. */
+    paid_exchange_rate: '',
   })
   const [evidence, setEvidence] = useState<PendingFile[]>([])
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
@@ -218,11 +220,29 @@ export function ExpenseReviewDrawer({
     Number(pay.amount_paid) > 0
       ? Math.round((Number(pay.amount_paid) - Number(expense?.amount ?? 0)) * 100) / 100
       : 0
+
+  /**
+   * A foreign invoice is settled at the rate on the day, not the rate it was
+   * raised at, and the gap between the two is a real gain or loss.
+   *
+   * Required rather than defaulted: falling back to the raising rate computes
+   * a difference of exactly zero, which hides the one thing this figure exists
+   * to show. The server refuses it too — see paymentFor().
+   */
+  const payCurrency = String(expense?.currency || 'NGN')
+  const payForeign = payCurrency !== 'NGN'
+  const paidRate = Number(pay.paid_exchange_rate) || 0
+  const raisedRate = Number(expense?.exchange_rate) || 1
+  const paidNgn = payForeign ? (Number(pay.amount_paid) || 0) * paidRate : Number(pay.amount_paid) || 0
+  const raisedNgn = (Number(expense?.amount) || 0) * raisedRate
+  const fxDifference = payForeign && paidRate > 0 ? Math.round((paidNgn - raisedNgn) * 100) / 100 : 0
+
   // A payment that settles for something other than what was approved needs a
   // reason on the record — mirrors the server-side check in paymentFor().
   const payReady =
     !!pay.bank_paid_from.trim() &&
     Number(pay.amount_paid) > 0 &&
+    (!payForeign || paidRate > 0) &&
     (payVariance === 0 || !!pay.payment_notes.trim())
 
   const run = async (action: ExpenseAction) => {
@@ -242,6 +262,9 @@ export function ExpenseReviewDrawer({
           payment_date: format(new Date(), 'yyyy-MM-dd'),
           payment_method: '',
           payment_notes: '',
+          // Deliberately blank rather than seeded with the raising rate: the
+          // officer knows what they actually bought the currency at.
+          paid_exchange_rate: '',
         })
         setEvidence([])
         setPending(action)
@@ -262,6 +285,7 @@ export function ExpenseReviewDrawer({
             payment_date: pay.payment_date || undefined,
             payment_method: pay.payment_method,
             payment_notes: pay.payment_notes.trim(),
+            ...(payForeign ? { paid_exchange_rate: paidRate } : {}),
           }
         : undefined,
     })
@@ -427,7 +451,23 @@ export function ExpenseReviewDrawer({
 
               <div className="py-2">
                 <h3 className="pb-1 text-sm font-bold tracking-tight">Payment</h3>
-                <Row label="Amount requested" value={naira(requested)} />
+                <Row
+                  label="Amount requested"
+                  value={
+                    payForeign
+                      ? `${payCurrency} ${requested.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      : naira(requested)
+                  }
+                />
+                {/* The naira the request was approved at, and the rate that
+                    produced it. Both, because the figure is only checkable
+                    against the invoice if the rate behind it is stated. */}
+                {payForeign && (
+                  <Row
+                    label="Approved in naira"
+                    value={`${naira(raisedNgn)} · at ${raisedRate.toLocaleString()}`}
+                  />
+                )}
                 {settled != null && (
                   <>
                     <Row label="Amount paid" value={naira(settled)} />
@@ -638,20 +678,63 @@ export function ExpenseReviewDrawer({
                       )}
                     </div>
                     <div className="space-y-1.5">
-                      <label className={cn(MICRO, 'block text-muted-foreground')}>Amount paid</label>
+                      <label className={cn(MICRO, 'block text-muted-foreground')}>
+                        Amount paid{payForeign ? ` (${payCurrency})` : ''}
+                      </label>
                       <NumberInput
                         allowDecimal value={pay.amount_paid}
                         onValueChange={(v) => setPay((p) => ({ ...p, amount_paid: v }))}
                       />
                       <p className="text-xs leading-tight text-muted-foreground/70">
-                        {naira(requested)} requested
+                        {payForeign ? `${payCurrency} ${requested.toLocaleString()}` : naira(requested)} requested
                         {Number(pay.amount_paid) > 0 && Number(pay.amount_paid) !== requested
-                          ? ` · ${naira(Math.abs(Number(pay.amount_paid) - requested))} ${
+                          ? ` · ${payForeign
+                              ? `${payCurrency} ${Math.abs(Number(pay.amount_paid) - requested).toLocaleString()}`
+                              : naira(Math.abs(Number(pay.amount_paid) - requested))} ${
                               Number(pay.amount_paid) < requested ? 'short' : 'over'
                             }`
                           : ''}
                       </p>
                     </div>
+
+                    {/*
+                      The rate on the day, and what it cost against what was
+                      approved. Shown because the difference is a real gain or
+                      loss that has to land somewhere — stating it here is what
+                      stops it being absorbed silently into the expense.
+                    */}
+                    {payForeign && (
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <label className={cn(MICRO, 'block text-muted-foreground')}>
+                          Rate paid at — naira per {payCurrency}
+                        </label>
+                        <NumberInput
+                          allowDecimal value={pay.paid_exchange_rate}
+                          onValueChange={(v) => setPay((p) => ({ ...p, paid_exchange_rate: v }))}
+                        />
+                        <p className="text-xs leading-tight text-muted-foreground/70">
+                          Approved at {raisedRate.toLocaleString()} · {naira(raisedNgn)}
+                        </p>
+                        {paidRate > 0 && (
+                          <p className={cn(
+                            'rounded-lg border p-2.5 text-sm',
+                            Math.abs(fxDifference) < 0.005
+                              ? 'border-foreground/15 bg-muted/40'
+                              : fxDifference > 0
+                                ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                                : 'border-success/30 bg-success/5 text-success',
+                          )}>
+                            <span className="font-semibold">{naira(paidNgn)}</span> leaves the bank
+                            {Math.abs(fxDifference) >= 0.005 && (
+                              <>
+                                {' — '}{naira(Math.abs(fxDifference))}{' '}
+                                {fxDifference > 0 ? 'more' : 'less'} than approved, on the rate alone
+                              </>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {/* <div className="space-y-1.5">
                       <label className={cn(MICRO, 'block text-muted-foreground')}>
                         Payment reference

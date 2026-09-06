@@ -34,6 +34,17 @@ const BLANK = {
   // includeTax below for the same reasoning applied to the invoice fields.
   description: '',
   amount: '',
+  /**
+   * The currency the INVOICE is in — not the currency it will be paid in.
+   *
+   * The vessel accounts are billed in dollars, and the foreign figure is the
+   * debt: it is what the vendor chases and what the document says. Naira is a
+   * translation, and the server derives it rather than trusting anything typed
+   * here.
+   */
+  currency: 'NGN',
+  /** Naira per unit of the above. Meaningless, and refused, on NGN. */
+  exchange_rate: '',
   amount_ex_vat: '',
   vat_amount: '',
   invoice_amount: '',
@@ -55,6 +66,8 @@ const BLANK = {
   // the mark-paid step on every ordinary request.
   bank_paid_from: '',
   amount_paid: '',
+  /** The rate on the day it actually cleared — not the one it was raised at. */
+  paid_exchange_rate: '',
   payment_date: format(new Date(), 'yyyy-MM-dd'),
   payment_method: 'Bank Transfer',
   payment_reference: '',
@@ -104,6 +117,22 @@ export const plain = (v: string | null | undefined) =>
  * between the label and the control so it is read as instruction rather than
  * as an error after the fact.
  */
+/**
+ * The currencies this business actually meets.
+ *
+ * Short on purpose. Naira for everything domestic; dollars for the vessel side
+ * — charter, freight, demurrage, marine insurance — and euros and sterling
+ * because European counterparties and P&I clubs bill in them. The database
+ * accepts any three-letter code, so a currency missing here is a one-line
+ * addition rather than a migration.
+ */
+const CURRENCIES = [
+  { code: 'NGN', label: 'Nigerian naira' },
+  { code: 'USD', label: 'US dollar' },
+  { code: 'EUR', label: 'Euro' },
+  { code: 'GBP', label: 'Pound sterling' },
+] as const
+
 function Field({
   label, hint, required, wide, children,
 }: {
@@ -190,6 +219,9 @@ export function ExpenseDialog({
         vendor_id: expense.vendor_id ? String(expense.vendor_id) : '',
         description: expense.description || '',
         amount: String(Number(expense.amount)),
+        currency: expense.currency || 'NGN',
+        exchange_rate: expense.currency && expense.currency !== 'NGN' ? show(expense.exchange_rate) : '',
+        paid_exchange_rate: show(expense.paid_exchange_rate),
         amount_ex_vat: show(expense.amount_ex_vat),
         vat_amount: show(expense.vat_amount),
         invoice_amount: show(expense.invoice_amount),
@@ -224,6 +256,11 @@ export function ExpenseDialog({
   }
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+
+  /** Anything but naira needs a rate before it means a number of naira. */
+  const foreign = form.currency !== 'NGN'
+  const rate = Number(form.exchange_rate) || 0
+  const ngnAmount = foreign ? (Number(form.amount) || 0) * rate : Number(form.amount) || 0
 
   const vatRate = cats?.vat_rate ?? 0.075
   const whtRates = cats?.wht_rates?.length ? cats.wht_rates : [0, 2, 2.5, 5, 10]
@@ -346,6 +383,10 @@ export function ExpenseDialog({
         vendor_id: vendorId,
         description: form.description,
         amount: Number(form.amount),
+        currency: form.currency,
+        // Omitted on naira, where the server refuses a rate outright rather
+        // than quietly accepting one it will never use.
+        ...(foreign ? { exchange_rate: Number(form.exchange_rate) } : {}),
         amount_ex_vat: includeTax ? num(form.amount_ex_vat) : null,
         vat_amount: includeTax ? num(form.vat_amount) : null,
         invoice_amount: includeTax ? num(form.invoice_amount) : null,
@@ -361,6 +402,9 @@ export function ExpenseDialog({
               record_as_paid: true,
               bank_paid_from: form.bank_paid_from,
               amount_paid: num(form.amount_paid) ?? Number(form.amount),
+              // Money already gone: the rate it went at is a fact of that
+              // payment, and the server requires it on a foreign invoice.
+              ...(foreign ? { paid_exchange_rate: Number(form.paid_exchange_rate) || Number(form.exchange_rate) } : {}),
               payment_date: form.payment_date,
               payment_method: form.payment_method,
               payment_reference: form.payment_reference,
@@ -546,9 +590,30 @@ export function ExpenseDialog({
 
           <Section title="3. How much" />
 
+          <Field label="Currency" hint="What the invoice is billed in.">
+            <NativeSelect
+              value={form.currency}
+              onChange={(e) => {
+                const currency = e.target.value
+                // A naira request has no rate at all, and the server refuses
+                // one — so switching back has to clear it rather than leave a
+                // stale number behind the change.
+                setForm((f) => ({
+                  ...f,
+                  currency,
+                  ...(currency === 'NGN' ? { exchange_rate: '', paid_exchange_rate: '' } : {}),
+                }))
+              }}
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>{c.code} — {c.label}</option>
+              ))}
+            </NativeSelect>
+          </Field>
+
           <Field
-            wide required
-            label="Amount to be paid"
+            required
+            label={foreign ? `Amount to be paid (${form.currency})` : 'Amount to be paid'}
             hint={
               includeTax
                 ? 'Invoice amount less WHT. What actually leaves the bank is recorded by the Expenditure Officer at the end.'
@@ -560,6 +625,44 @@ export function ExpenseDialog({
               onValueChange={(v) => set('amount', v)}
             />
           </Field>
+
+          {/*
+            The rate, and what it makes the request worth.
+
+            Shown rather than hidden because the naira figure is what every
+            approver is actually authorising and what every total will carry —
+            asking someone to approve "50,000" without saying 50,000 of what,
+            worth how much, is how a seventy-fold error gets signed off.
+          */}
+          {foreign && (
+            <Field
+              wide required
+              label={`Rate — naira per ${form.currency}`}
+              hint="The rate this invoice is being converted at today. The rate on the day it is actually paid is captured separately, at payment."
+            >
+              <NumberInput
+                allowDecimal placeholder="0.00" value={form.exchange_rate}
+                onValueChange={(v) => set('exchange_rate', v)}
+              />
+              <p className={cn(
+                'mt-2 rounded-lg border p-2.5 text-sm',
+                ngnAmount > 0
+                  ? 'border-foreground/15 bg-muted/40'
+                  : 'border-dashed border-foreground/20 text-muted-foreground',
+              )}>
+                {ngnAmount > 0 ? (
+                  <>
+                    <span className="font-semibold">{naira(ngnAmount)}</span>
+                    <span className="text-muted-foreground">
+                      {' '}· {form.currency} {Number(form.amount || 0).toLocaleString()} at {Number(form.exchange_rate).toLocaleString()}
+                    </span>
+                  </>
+                ) : (
+                  'Enter an amount and a rate to see what this is worth in naira.'
+                )}
+              </p>
+            </Field>
+          )}
 
           {/* Invoice/VAT/WHT: real accounting detail most requesters do not
               have to hand at the moment of asking, so it stays folded away. */}
