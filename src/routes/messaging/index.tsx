@@ -7,6 +7,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { Badge } from '#/components/ui/badge'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '#/components/ui/select'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -1209,30 +1210,46 @@ function MessagingPage() {
             </div>
           ) : (
             <>
+              {/*
+                One fact per cell.
+
+                This was a hand-rolled table whose cells each stacked three or
+                four things — name over number over campaign, status over
+                provider status — so every row was four lines tall and the
+                columns stopped lining up. A log is read by scanning down one
+                column, and nothing about that shape let you. Split out, on the
+                same table primitives the rest of the app uses.
+              */}
               <div className={cn('overflow-x-auto transition-opacity', deliveriesFetching && 'opacity-60')}>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase">
-                      <th className="px-4 py-2 font-normal">Sent</th>
-                      <th className="px-4 py-2 font-normal">Recipient</th>
-                      <th className="px-4 py-2 font-normal">Channel</th>
-                      <th className="px-4 py-2 font-normal">Status</th>
-                      <th className="px-4 py-2 font-normal">What happened</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="whitespace-nowrap">Sent</TableHead>
+                      <TableHead className="whitespace-nowrap">Delivered</TableHead>
+                      <TableHead>Recipient</TableHead>
+                      <TableHead>Destination</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Why</TableHead>
+                      {!logCampaign && <TableHead>Campaign</TableHead>}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {(deliveryData?.data || []).map((row) => (
-                      <tr key={row.id} className="border-b border-border/50 last:border-0 align-top">
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
                           {formatDate(row.sentAt || row.createdAt)}
-                          {/* When the carrier confirmed it, if it ever did. */}
-                          {row.deliveredAt && (
-                            <span className="block text-success">
-                              landed {formatDate(row.deliveredAt)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs">
+                        </TableCell>
+                        {/* Its own column rather than a second line under Sent:
+                            "did it actually land, and how long after" is the
+                            question this whole log exists to answer, and a dash
+                            down the column is the answer at a glance. */}
+                        <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                          {row.deliveredAt
+                            ? <span className="text-success">{formatDate(row.deliveredAt)}</span>
+                            : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className="text-xs">
                           {/* The name is why this column exists at all — a
                               broadcast to leads has no account behind it, so
                               the log could previously only show a number.
@@ -1240,41 +1257,36 @@ function MessagingPage() {
                               from the number, marked as such: who holds a
                               number today is a fair guess, not a record of who
                               was addressed. */}
-                          <span className="block font-medium">
+                          <span className="block max-w-[14rem] truncate font-medium">
                             {row.recipientName || '—'}
-                            {row.recipientName && row.nameResolvedNow && (
-                              <span
-                                className="ml-1 font-normal text-muted-foreground"
-                                title="Not recorded at the time — this is whoever holds the number now"
-                              >
-                                (matched now)
-                              </span>
-                            )}
                           </span>
-                          <span className="block font-mono text-muted-foreground">{row.destination || '—'}</span>
-                          {/* Which blast it went out with, when the log is not
-                              already narrowed to one. */}
-                          {!logCampaign && row.campaignTitle && (
-                            <span className="mt-0.5 flex items-center gap-0.5 text-muted-foreground">
-                              <Megaphone className="size-3 shrink-0" />
-                              <span className="truncate max-w-[180px]">{row.campaignTitle}</span>
+                          {row.recipientName && row.nameResolvedNow && (
+                            <span
+                              className="text-muted-foreground"
+                              title="Not recorded at the time — this is whoever holds the number now"
+                            >
+                              matched now
                             </span>
                           )}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs capitalize">{row.channel}</td>
-                        <td className="px-4 py-2.5">
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
+                          {row.destination || '—'}
+                        </TableCell>
+                        <TableCell className="text-xs capitalize">{row.channel}</TableCell>
+                        <TableCell className="whitespace-nowrap">
                           <StatusBadge status={row.status} />
                           {row.providerStatus && (
                             <span className="mt-0.5 block text-xs text-muted-foreground">{row.providerStatus}</span>
                           )}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs">
-                          {/* The short reason first, because it is the one
-                              that leads somewhere: an empty wallet is topped
-                              up, a DND number is sent transactionally, a dead
-                              number is corrected. The provider's own wording
-                              is kept underneath — it is the evidence, and a
-                              support call sometimes needs it verbatim. */}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {/* The short reason is the one that leads somewhere:
+                              an empty wallet is topped up, a DND number is sent
+                              transactionally, a dead number is corrected. The
+                              provider's own wording stays available underneath
+                              — it is the evidence, and a support call sometimes
+                              needs it verbatim — but folded away, so it cannot
+                              set the height of every row around it. */}
                           <ReasonChip
                             label={row.reasonLabel}
                             tone={row.reasonTone}
@@ -1282,20 +1294,32 @@ function MessagingPage() {
                             onClick={() => setLogReason(logReason === row.reasonCode ? '' : row.reasonCode)}
                           />
                           {row.error && (
-                            <details className="mt-1 max-w-[280px]">
+                            <details className="mt-1 max-w-[16rem]">
                               <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                                What the provider said
+                                Provider detail
                               </summary>
                               <span className="mt-0.5 block whitespace-pre-wrap break-words text-muted-foreground">
                                 {row.error}
                               </span>
                             </details>
                           )}
-                        </td>
-                      </tr>
+                        </TableCell>
+                        {!logCampaign && (
+                          <TableCell className="text-xs text-muted-foreground">
+                            {row.campaignTitle
+                              ? (
+                                <span className="flex items-center gap-1">
+                                  <Megaphone className="size-3 shrink-0" />
+                                  <span className="block max-w-[12rem] truncate">{row.campaignTitle}</span>
+                                </span>
+                              )
+                              : '—'}
+                          </TableCell>
+                        )}
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
               <Pagination
                 currentPage={logPage}
