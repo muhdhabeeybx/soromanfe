@@ -206,3 +206,24 @@ export async function emailReportsHub(
   })
   return res.data as { message: string }
 }
+
+/**
+ * The day's trading as a WhatsApp message.
+ *
+ * No attachment and no workbook — this is read on a phone, where a spreadsheet
+ * is a file nobody opens. The server builds the text, so the message says the
+ * same thing however it was triggered.
+ */
+export async function whatsappReportsHub(
+  opts: { date: string },
+  recipients: string[],
+): Promise<{
+  message: string
+  data?: { sent: string[]; failed: Array<{ to: string; error: string }>; skipped: string[]; body: string }
+}> {
+  const res = await api.post('/daily-reports/whatsapp', {
+    recipients,
+    reportDate: opts.date,
+  })
+  return res.data
+}

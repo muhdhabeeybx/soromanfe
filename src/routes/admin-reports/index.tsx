@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { FileSpreadsheet, Loader2, Mail, RefreshCw, Send, X } from 'lucide-react'
+import { FileSpreadsheet, Loader2, Mail, MessageCircle, RefreshCw, Send, X } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -26,7 +26,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
 import { fetchDailyReportsForDate, type DailyReportRow } from './-hub-data'
-import { exportReportsHub, emailReportsHub } from './-export'
+import { exportReportsHub, emailReportsHub, whatsappReportsHub } from './-export'
 
 export const Route = createFileRoute('/admin-reports/')({
   beforeLoad: () => routeGuard('/admin-reports'),
@@ -61,6 +61,7 @@ function AdminReportsPage() {
   const [pfiFilter, setPfiFilter] = useState('all')
   const [exporting, setExporting] = useState(false)
   const [emailDialogOpen, setEmailDialogOpen] = useState(false)
+  const [whatsappDialogOpen, setWhatsappDialogOpen] = useState(false)
 
   const {
     data: rows = [], isLoading, isFetching, isError, error, refetch,
@@ -174,6 +175,13 @@ function AdminReportsPage() {
               <Mail data-icon="inline-start" />
               Email report
             </Button>
+            {/* The same day, as a message rather than a workbook. Deliberately
+                a separate button: the two go to different people, and sending
+                both to everyone is how a report stops being read. */}
+            <Button variant="outline" size="sm" onClick={() => setWhatsappDialogOpen(true)} disabled={!filtered.length}>
+              <MessageCircle data-icon="inline-start" />
+              WhatsApp summary
+            </Button>
             <Button size="sm" onClick={handleExport} disabled={!filtered.length || exporting}>
               {exporting ? <Loader2 className="animate-spin" /> : <FileSpreadsheet data-icon="inline-start" />}
               Download report
@@ -248,6 +256,12 @@ function AdminReportsPage() {
         onOpenChange={setEmailDialogOpen}
         rows={filtered}
         opts={{ date: selectedDate, location: locationFilter, pfi: pfiFilter }}
+      />
+
+      <WhatsappReportDialog
+        open={whatsappDialogOpen}
+        onOpenChange={setWhatsappDialogOpen}
+        opts={{ date: selectedDate }}
       />
     </div>
   )
@@ -480,5 +494,135 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
         </Table>
       </div>
     </div>
+  )
+}
+
+const WA_RECIPIENTS_KEY = 'reports-hub-whatsapp-recipients'
+/** Anything that could be a phone number. The server does the real parsing. */
+const PHONE_RE = /^[+\d][\d\s()-]{6,24}$/
+
+/**
+ * Send the day as a WhatsApp message.
+ *
+ * Numbers persist in this browser, like the email list does, because the same
+ * three or four managers get it every time and retyping them is how a nightly
+ * habit stops being nightly.
+ *
+ * Nothing is sent until "Send" is pressed, and the result is reported per
+ * number — a send that reached two of five and said "sent" would leave the
+ * desk believing somebody was told something they never saw.
+ */
+function WhatsappReportDialog({
+  open, onOpenChange, opts,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  opts: { date: string }
+}) {
+  const [numbers, setNumbers] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(WA_RECIPIENTS_KEY)
+      return raw ? (JSON.parse(raw) as string[]) : []
+    } catch {
+      return []
+    }
+  })
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const toast = useToast()
+
+  const addNumber = () => {
+    const value = draft.trim().replace(/,$/, '')
+    if (!value) return
+    if (!PHONE_RE.test(value)) {
+      toast.error(`"${value}" doesn't look like a phone number`)
+      return
+    }
+    setNumbers((n) => (n.includes(value) ? n : [...n, value]))
+    setDraft('')
+  }
+  const removeNumber = (value: string) => setNumbers((n) => n.filter((x) => x !== value))
+
+  const send = async () => {
+    if (!numbers.length) return
+    setSending(true)
+    try {
+      const res = await whatsappReportsHub(opts, numbers)
+      localStorage.setItem(WA_RECIPIENTS_KEY, JSON.stringify(numbers))
+      const failed = res.data?.failed ?? []
+      if (failed.length) {
+        // Named, not counted: "3 failed" tells nobody which manager to ring.
+        toast.warning(
+          `${res.message}. Not delivered: ${failed.map((f) => `${f.to} (${f.error})`).join('; ')}`,
+        )
+      } else {
+        toast.success(res.message)
+      }
+      if (res.data?.sent.length) onOpenChange(false)
+    } catch (err) {
+      toast.error(getErrorMessage(err))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Send the day as a WhatsApp message</DialogTitle>
+          <DialogDescription>
+            A short text summary of {format(new Date(`${opts.date}T00:00:00`), 'd MMM yyyy')} —
+            volume, value and each location. No attachment.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          {numbers.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {numbers.map((value) => (
+                <span
+                  key={value}
+                  className="inline-flex items-center gap-1 rounded-full border border-foreground/15 bg-muted/50 px-2.5 py-1 text-xs"
+                >
+                  {value}
+                  <button
+                    type="button" onClick={() => removeNumber(value)}
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label={`Remove ${value}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addNumber() }
+              }}
+              placeholder="08031234567"
+              inputMode="tel"
+            />
+            <Button type="button" variant="outline" onClick={addNumber}>Add</Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            0803…, +234803… or 234803… all work. Numbers are remembered on this device.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={send} disabled={!numbers.length || sending}>
+            {sending ? <Loader2 className="animate-spin" /> : <Send data-icon="inline-start" />}
+            Send to {numbers.length || 'no one'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
