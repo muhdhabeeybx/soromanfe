@@ -29,7 +29,7 @@ import {
   useCustomerSegment, useBroadcast, useNotificationDeliveries, useDeliverySummary,
   useMessageTemplates, useCreateMessageTemplate, useDeleteMessageTemplate,
   usePriceList, useRenderedPreview, useSmsBalance, useCampaigns,
-  type SegmentFilters, type MessageTemplate, type Campaign,
+  type SegmentFilters, type MessageTemplate, type Campaign, type DeliveryLogParams,
 } from '#/lib/hooks/useMessaging'
 import { Pagination } from '#/components/Pagination'
 import { useToast } from '#/lib/hooks/useToast'
@@ -41,6 +41,16 @@ export const Route = createFileRoute('/messaging/')({
 })
 
 const SIGN_OFF = 'Order now: ordersoroman.com\nFor Enquiries: 08144915865'
+
+/**
+ * Recipients per request.
+ *
+ * Matches the server's own ceiling (schemas/notification.schema.js caps
+ * customerIds, staffIds and contacts at 1000). Kept just under it so a list
+ * that grows past a thousand splits rather than being refused — the whole
+ * audience still goes out, as several requests joined to one campaign.
+ */
+const BROADCAST_CHUNK = 900
 
 /**
  * Ready-made starting points for the scenarios most asked for — not stored
@@ -481,28 +491,44 @@ function MessagingPage() {
       audienceLabel: audienceDescription,
     }
 
-    // "Everyone" is two audiences, and the broadcast endpoint takes one at a
-    // time — customers are addressed by id, contacts by their details, and the
-    // engine resolves them differently. Two calls rather than one, which the
-    // recipient total above already reflects.
-    //
-    // The first call opens the campaign; the second is told which one to join,
-    // so one press of Send is one entry in the history rather than two.
+    /**
+     * "Everyone" is two audiences and the endpoint takes one at a time —
+     * customers by id, contacts by their details, resolved differently by the
+     * engine. Both are also chunked, because the endpoint refuses more than
+     * BROADCAST_CHUNK recipients in a single request.
+     *
+     * That refusal is why this had to change. It is a rejection, not a trim:
+     * once the customer list passed a thousand, the whole send returned a
+     * validation error, and because the customers call threw, the contacts
+     * call after it never ran. Every "Everyone" broadcast has therefore
+     * reached zero contacts, and the campaign history shows exactly that.
+     *
+     * The first request opens the campaign and every later one is told which
+     * campaign to join, so one press of Send stays one entry in the history
+     * however many requests it took.
+     */
     let campaignId: number | undefined
-    if (customerRecipientIds.length > 0) {
-      const result = await broadcast.mutateAsync({
-        ...common, audience: 'customers' as const, customerIds: customerRecipientIds,
-      })
-      campaignId = result.campaignId ?? undefined
+
+    const sendChunks = async <T,>(items: T[], build: (batch: T[]) => Record<string, unknown>) => {
+      for (let i = 0; i < items.length; i += BROADCAST_CHUNK) {
+        const batch = items.slice(i, i + BROADCAST_CHUNK)
+        const result = await broadcast.mutateAsync({
+          ...common,
+          ...(campaignId ? { campaignId } : {}),
+          ...build(batch),
+        } as Parameters<typeof broadcast.mutateAsync>[0])
+        campaignId = campaignId ?? result.campaignId ?? undefined
+      }
     }
-    if (contactRecipients.length > 0) {
-      await broadcast.mutateAsync({
-        ...common,
-        campaignId,
-        audience: 'contacts' as const,
-        contacts: contactRecipients.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
-      })
-    }
+
+    await sendChunks(customerRecipientIds, (batch) => ({
+      audience: 'customers' as const,
+      customerIds: batch,
+    }))
+    await sendChunks(contactRecipients, (batch) => ({
+      audience: 'contacts' as const,
+      contacts: batch.map((c) => ({ name: c.name, email: c.email, phone: c.phone })),
+    }))
 
     setConfirmOpen(false)
     setSubject('')
@@ -535,6 +561,24 @@ function MessagingPage() {
   /** One classified failure reason, clicked straight off the roll-up. */
   const [logReason, setLogReason] = useState('')
   /**
+   * How the log is ordered. Newest first by default, because the question a
+   * log is opened with is almost always "what just happened".
+   */
+  const [logSort, setLogSort] = useState<NonNullable<DeliveryLogParams['sort']>>('created')
+  const [logDir, setLogDir] = useState<'asc' | 'desc'>('desc')
+
+  /**
+   * Clicking a column sorts by it, descending first — for a date that is
+   * newest, for a status it groups the ones worth looking at. Clicking the
+   * same column again flips it. Changing the order returns to page one, or
+   * you are looking at page 4 of an ordering you have never seen page 1 of.
+   */
+  const sortBy = (key: NonNullable<DeliveryLogParams['sort']>) => {
+    setLogDir((d) => (logSort === key && d === 'desc' ? 'asc' : 'desc'))
+    setLogSort(key)
+    setLogPage(1)
+  }
+  /**
    * Whether the log covers everything the system sends, or only broadcasts.
    *
    * It used to be hard-wired to broadcasts, silently — `type` was pinned to
@@ -556,6 +600,8 @@ function MessagingPage() {
     channel: logChannel === 'all' ? undefined : logChannel,
     status: logStatus === 'all' ? undefined : logStatus,
     reason: logReason || undefined,
+    sort: logSort,
+    dir: logDir,
     campaignId: logCampaign?.id,
     search: logSearch || undefined,
     from: logFrom || undefined,
@@ -1224,14 +1270,16 @@ function MessagingPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="whitespace-nowrap">Sent</TableHead>
-                      <TableHead className="whitespace-nowrap">Delivered</TableHead>
-                      <TableHead>Recipient</TableHead>
+                      <SortHead sort="sent" active={logSort} dir={logDir} onSort={sortBy}>Sent</SortHead>
+                      <SortHead sort="delivered" active={logSort} dir={logDir} onSort={sortBy}>Delivered</SortHead>
+                      <SortHead sort="recipient" active={logSort} dir={logDir} onSort={sortBy}>Recipient</SortHead>
                       <TableHead>Destination</TableHead>
-                      <TableHead>Channel</TableHead>
-                      <TableHead>Status</TableHead>
+                      <SortHead sort="channel" active={logSort} dir={logDir} onSort={sortBy}>Channel</SortHead>
+                      <SortHead sort="status" active={logSort} dir={logDir} onSort={sortBy}>Status</SortHead>
                       <TableHead>Why</TableHead>
-                      {!logCampaign && <TableHead>Campaign</TableHead>}
+                      {!logCampaign && (
+                        <SortHead sort="campaign" active={logSort} dir={logDir} onSort={sortBy}>Campaign</SortHead>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1416,5 +1464,46 @@ function MessagingPage() {
         }}
       />
     </div>
+  )
+}
+
+/**
+ * A column header that sorts.
+ *
+ * Only the columns worth sorting get one — Destination and Why are not among
+ * them. A phone number sorts to no useful order, and Why is already filterable
+ * by clicking a reason chip, which answers the question sorting would.
+ *
+ * The arrow is only drawn on the active column. An icon on every header reads
+ * as decoration and stops saying anything about which order you are in.
+ */
+function SortHead({
+  sort, active, dir, onSort, children,
+}: {
+  sort: NonNullable<DeliveryLogParams['sort']>
+  active: string
+  dir: 'asc' | 'desc'
+  onSort: (key: NonNullable<DeliveryLogParams['sort']>) => void
+  children: React.ReactNode
+}) {
+  const on = active === sort
+  return (
+    <TableHead className="whitespace-nowrap p-0">
+      <button
+        type="button"
+        onClick={() => onSort(sort)}
+        aria-sort={on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+        className={cn(
+          'flex w-full items-center gap-1 px-3 py-2 text-left transition-colors',
+          'outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+          on ? 'text-foreground' : 'hover:text-foreground',
+        )}
+      >
+        {children}
+        <span className={cn('text-[0.65rem] leading-none', on ? 'opacity-100' : 'opacity-0')}>
+          {dir === 'asc' ? '▲' : '▼'}
+        </span>
+      </button>
+    </TableHead>
   )
 }

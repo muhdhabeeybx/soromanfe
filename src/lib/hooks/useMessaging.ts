@@ -258,6 +258,9 @@ export interface DeliveryLogParams {
   search?: string
   /** One classified failure reason — "every send that died on an empty wallet". */
   reason?: string
+  /** Whitelisted server-side; anything else falls back to newest first. */
+  sort?: 'created' | 'sent' | 'delivered' | 'status' | 'channel' | 'recipient' | 'campaign'
+  dir?: 'asc' | 'desc'
   page?: number
   limit?: number
 }
