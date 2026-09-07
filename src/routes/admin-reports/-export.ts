@@ -214,16 +214,37 @@ export async function emailReportsHub(
  * is a file nobody opens. The server builds the text, so the message says the
  * same thing however it was triggered.
  */
+export interface WhatsappReportResult {
+  message: string
+  data?: {
+    preview?: boolean
+    channel?: 'template' | 'text'
+    templateName?: string | null
+    /** Resolved {{1}}, {{2}}, … in order. Empty when sending as plain text. */
+    parameters?: string[]
+    sent: string[]
+    failed: Array<{ to: string; error: string }>
+    skipped: string[]
+    body: string
+  }
+}
+
 export async function whatsappReportsHub(
   opts: { date: string },
   recipients: string[],
-): Promise<{
-  message: string
-  data?: { sent: string[]; failed: Array<{ to: string; error: string }>; skipped: string[]; body: string }
-}> {
+  /**
+   * Resolve everything and send nothing.
+   *
+   * A template send fails outright when the parameter count does not match the
+   * body Meta approved, and the error arrives as an opaque code per recipient.
+   * Seeing the parameters first turns that into a comparison.
+   */
+  preview = false,
+): Promise<WhatsappReportResult> {
   const res = await api.post('/daily-reports/whatsapp', {
     recipients,
     reportDate: opts.date,
+    ...(preview ? { preview: true } : {}),
   })
   return res.data
 }

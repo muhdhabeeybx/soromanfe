@@ -26,7 +26,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
 import { fetchDailyReportsForDate, type DailyReportRow } from './-hub-data'
-import { exportReportsHub, emailReportsHub, whatsappReportsHub } from './-export'
+import { exportReportsHub, emailReportsHub, whatsappReportsHub, type WhatsappReportResult } from './-export'
 
 export const Route = createFileRoute('/admin-reports/')({
   beforeLoad: () => routeGuard('/admin-reports'),
@@ -529,6 +529,8 @@ function WhatsappReportDialog({
   })
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  /** What the last preview resolved to. Cleared whenever the list changes. */
+  const [preview, setPreview] = useState<WhatsappReportResult['data'] | null>(null)
   const toast = useToast()
 
   const addNumber = () => {
@@ -540,8 +542,25 @@ function WhatsappReportDialog({
     }
     setNumbers((n) => (n.includes(value) ? n : [...n, value]))
     setDraft('')
+    setPreview(null)
   }
-  const removeNumber = (value: string) => setNumbers((n) => n.filter((x) => x !== value))
+  const removeNumber = (value: string) => {
+    setNumbers((n) => n.filter((x) => x !== value))
+    setPreview(null)
+  }
+
+  const runPreview = async () => {
+    if (!numbers.length) return
+    setSending(true)
+    try {
+      const res = await whatsappReportsHub(opts, numbers, true)
+      setPreview(res.data ?? null)
+    } catch (err) {
+      toast.error(getErrorMessage(err))
+    } finally {
+      setSending(false)
+    }
+  }
 
   const send = async () => {
     if (!numbers.length) return
@@ -613,10 +632,48 @@ function WhatsappReportDialog({
           <p className="text-xs text-muted-foreground">
             0803…, +234803… or 234803… all work. Numbers are remembered on this device.
           </p>
+
+          {/*
+            What Meta will actually receive.
+
+            A template send fails outright if the number of parameters does not
+            match the body approved in the console, and the failure comes back
+            as a code per recipient rather than anything readable. Showing the
+            resolved {{1}}, {{2}}, … lets the two be compared before a send
+            rather than after one that reached nobody.
+          */}
+          {preview && (
+            <div className="space-y-2 rounded-lg border border-foreground/15 bg-muted/30 p-3">
+              <p className={cn(MICRO, 'text-muted-foreground')}>
+                {preview.channel === 'template'
+                  ? `Template "${preview.templateName}" · ${preview.parameters?.length ?? 0} parameter${preview.parameters?.length === 1 ? '' : 's'}`
+                  : 'Plain text — no template'}
+              </p>
+              {preview.channel === 'template' ? (
+                <ol className="space-y-1">
+                  {(preview.parameters ?? []).map((value, i) => (
+                    <li key={i} className="flex gap-2 text-xs">
+                      <span className="shrink-0 font-mono text-muted-foreground">{`{{${i + 1}}}`}</span>
+                      <span className="break-words">{value}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="whitespace-pre-wrap text-xs">{preview.body}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                If this does not match the body Meta approved, the send will be rejected —
+                set WHATSAPP_REPORT_TEMPLATE_PARAMS to reorder or change the fields.
+              </p>
+            </div>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={runPreview} disabled={!numbers.length || sending}>
+            Preview
+          </Button>
           <Button onClick={send} disabled={!numbers.length || sending}>
             {sending ? <Loader2 className="animate-spin" /> : <Send data-icon="inline-start" />}
             Send to {numbers.length || 'no one'}
