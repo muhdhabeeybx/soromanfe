@@ -569,7 +569,14 @@ function WhatsappReportDialog({
       const res = await whatsappReportsHub(opts, numbers)
       localStorage.setItem(WA_RECIPIENTS_KEY, JSON.stringify(numbers))
       const failed = res.data?.failed ?? []
-      if (failed.length) {
+      const sent = res.data?.sent ?? []
+
+      if (!sent.length) {
+        // Nothing went. The server says why in one sentence — a switched-off
+        // channel, a bad template, an unreachable number — and repeating it
+        // once per recipient would bury the one thing worth reading.
+        toast.error(res.message)
+      } else if (failed.length) {
         // Named, not counted: "3 failed" tells nobody which manager to ring.
         toast.warning(
           `${res.message}. Not delivered: ${failed.map((f) => `${f.to} (${f.error})`).join('; ')}`,
@@ -577,7 +584,7 @@ function WhatsappReportDialog({
       } else {
         toast.success(res.message)
       }
-      if (res.data?.sent.length) onOpenChange(false)
+      if (sent.length) onOpenChange(false)
     } catch (err) {
       toast.error(getErrorMessage(err))
     } finally {
