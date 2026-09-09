@@ -156,8 +156,10 @@ export const navCategories: NavCategory[] = [
   {
     category: "Truck Sales",
     items: [
-      // { title: "Delivery Inventory", icon: Package, path: "/delivery-inventory" },
-      { title: "Delivery Operations", icon: Truck, path: "/delivery-operations" },
+      // Named for what it holds rather than what is done to it: the page is a
+      // register of stock loaded out on trucks, and "operations" described the
+      // activity around it rather than the thing itself.
+      { title: "Delivery Inventory", icon: Truck, path: "/delivery-operations" },
       { title: "Delivery Customers", icon: Users, path: "/delivery-customer" },
       { title: "Sales Ledger", icon: BarChart3, path: "/sales-ledger" },
       { title: "Filling Stations", icon: Fuel, path: "/filing-stations" },

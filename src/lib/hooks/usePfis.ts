@@ -881,7 +881,101 @@ export function useDepotsForFilter() {
     staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const res = await api.get('/depots')
-      return (res.data.data.depots || []) as Array<{ _id: string; name: string }>
+      // Both keys appear depending on the endpoint's serialiser, and callers
+      // that need the id have been reaching past this type to get it.
+      return (res.data.data.depots || []) as Array<{ _id?: string; id?: string | number; name: string }>
     },
+  })
+}
+
+// ─── Delivery batches ───────────────────────────────────────────────────────
+//
+// The two facts a delivery allocation has that a cargo does not: the depots it
+// may be sold from, and the trucks that carried it. Both are empty on a
+// coastal batch, which is sold where it landed and measured into a tank.
+// See Sman-Backend/db/migrations/0027.
+
+/** One truck on a manifest. `loadedQty` is what went on, not what it holds. */
+export interface PfiTruck {
+  id?: number
+  truckId?: number | null
+  plateNumber: string
+  capacity?: number | null
+  loadedQty: number
+  loadedAt?: string | null
+  notes?: string
+  /** capacity − loaded. Server-side, so the screen cannot compute it differently. */
+  shortBy?: number | null
+}
+
+export interface PfiAllowedDepot {
+  id: number
+  name: string
+  city?: string | null
+  state?: string | null
+}
+
+/** Where a batch may be sold. Empty on anything that is not a delivery batch. */
+export function usePfiLocations(pfiId: number | null) {
+  return useQuery({
+    queryKey: ['pfi-locations', pfiId],
+    enabled: pfiId != null,
+    queryFn: async () => {
+      const res = await api.get(`/pfis/${pfiId}/locations`)
+      return (res.data?.data?.locations ?? []) as PfiAllowedDepot[]
+    },
+  })
+}
+
+export function useSetPfiLocations(pfiId: number | null) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (depotIds: number[]) => {
+      const res = await api.put(`/pfis/${pfiId}/locations`, { depotIds })
+      return res.data
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['pfi-locations', pfiId] })
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+      toast.success(data?.message || 'Locations updated')
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+export function usePfiTrucks(pfiId: number | null) {
+  return useQuery({
+    queryKey: ['pfi-trucks', pfiId],
+    enabled: pfiId != null,
+    queryFn: async () => {
+      const res = await api.get(`/pfis/${pfiId}/trucks`)
+      return res.data?.data as { trucks: PfiTruck[]; loadedTotal: number; capacityTotal: number }
+    },
+  })
+}
+
+/**
+ * Replace the manifest.
+ *
+ * The batch's quantity is rebuilt from it server-side, in the same
+ * transaction — so `pfis` is invalidated too, or the page would go on showing
+ * the quantity the batch had before these trucks were entered.
+ */
+export function useSetPfiTrucks(pfiId: number | null) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (trucks: PfiTruck[]) => {
+      const res = await api.put(`/pfis/${pfiId}/trucks`, { trucks })
+      return res.data
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['pfi-trucks', pfiId] })
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+      queryClient.invalidateQueries({ queryKey: ['pfi-detail', pfiId] })
+      toast.success(data?.message || 'Manifest saved')
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
   })
 }
