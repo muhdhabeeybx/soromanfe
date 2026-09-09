@@ -25,7 +25,7 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { FilterBar } from '#/components/FilterBar'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn } from '#/lib/utils'
-import { naira } from '#/routes/pfi/-pfi-utils'
+import { naira, qty, unitNames } from '#/routes/pfi/-pfi-utils'
 import { DATE_PRESETS, resolveRange, type DatePreset } from '#/routes/orders/-orders-utils'
 import { routeGuard } from '#/lib/route-guard'
 import {
@@ -707,6 +707,7 @@ function FinanceReportPage() {
       pfiNumber: p.pfiNumber,
       locationName: p.locationName || '—',
       productName: p.productName || '—',
+      productUnit: p.productUnit ?? null,
       initialStock: p.startingQtyLitres ?? 0,
       volumeSoldPeriod: soldByPfi.get(Number(p.id ?? p._id)) || 0,
       salesValuePeriod: valueByPfi.get(Number(p.id ?? p._id)) || 0,
@@ -982,12 +983,14 @@ function FinanceReportPage() {
                       <TableCell className="font-semibold text-accent">{p.pfiNumber}</TableCell>
                       <TableCell className="text-muted-foreground">{p.locationName}</TableCell>
                       <TableCell className="text-muted-foreground">{p.productName}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{p.initialStock.toLocaleString()} L</TableCell>
-                      <TableCell className="text-right whitespace-nowrap font-medium">{p.volumeSoldPeriod.toLocaleString()} L</TableCell>
+                      {/* Each batch in its own unit. LPG is kilograms; a
+                          tonne or a kilo printed as "L" is a wrong number. */}
+                      <TableCell className="text-right whitespace-nowrap">{qty(p.initialStock, p.productUnit)}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap font-medium">{qty(p.volumeSoldPeriod, p.productUnit)}</TableCell>
                       <TableCell className="text-right whitespace-nowrap font-medium">{naira(p.salesValuePeriod)}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap text-muted-foreground">{p.volumeSoldAllTime.toLocaleString()} L</TableCell>
+                      <TableCell className="text-right whitespace-nowrap text-muted-foreground">{qty(p.volumeSoldAllTime, p.productUnit)}</TableCell>
                       <TableCell className={cn('text-right whitespace-nowrap', p.volumeRemaining < 0 && 'text-destructive')}>
-                        {p.volumeRemaining.toLocaleString()} L
+                        {qty(p.volumeRemaining, p.productUnit)}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap text-muted-foreground">{naira(p.revenue)}</TableCell>
                     </TableRow>
@@ -1000,8 +1003,11 @@ function FinanceReportPage() {
                     <TableCell colSpan={4} className="text-xs text-muted-foreground">
                       Total ({pfiStock.length} PFI{pfiStock.length === 1 ? '' : 's'}) · {periodLabel}
                     </TableCell>
+                    {/* Totalled per unit, and joined. A kilogram cannot be
+                        added to a litre, so a single figure across a mixed set
+                        would be arithmetic on two different things. */}
                     <TableCell className="text-right font-semibold whitespace-nowrap">
-                      {pfiStock.reduce((s, p) => s + p.volumeSoldPeriod, 0).toLocaleString()} L
+                      {totalByUnit(pfiStock)}
                     </TableCell>
                     <TableCell className="text-right font-semibold whitespace-nowrap">
                       {naira(pfiStock.reduce((s, p) => s + p.salesValuePeriod, 0))}
@@ -1397,3 +1403,22 @@ function FinanceReportPage() {
     </div>
   )
 }
+
+/**
+ * Period volume totalled per unit, joined.
+ *
+ * A kilogram cannot be added to a litre, so a single number across a mixed set
+ * of batches would be arithmetic performed on two different things. Petrol in
+ * litres and cooking gas in kilograms each get their own figure.
+ */
+function totalByUnit(rows: Array<{ volumeSoldPeriod: number; productUnit: string | null }>): string {
+  const byUnit = new Map<string, number>()
+  for (const r of rows) {
+    const short = unitNames(r.productUnit).short
+    byUnit.set(short, (byUnit.get(short) || 0) + r.volumeSoldPeriod)
+  }
+  return [...byUnit.entries()]
+    .map(([short, total]) => `${total.toLocaleString()} ${short}`)
+    .join(' · ') || '—'
+}
+

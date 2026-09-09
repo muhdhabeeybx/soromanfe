@@ -1,4 +1,5 @@
 import { format } from 'date-fns'
+import { unitNames } from '#/routes/pfi/-pfi-utils'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
@@ -124,6 +125,14 @@ export interface PfiStockRow {
   pfiNumber: string
   locationName: string
   productName: string
+  /**
+   * The unit this batch is bought and sold in.
+   *
+   * Not decoration. LPG is kilograms and this block printed every figure as
+   * litres regardless, so three cooking-gas batches reported kilograms under
+   * a litre label — a wrong number, not a differently-worded one.
+   */
+  productUnit: string | null
   /** What measured into the tank when the batch landed. */
   initialStock: number
   /** Litres sold within the report's current filters — not all-time. */
@@ -324,6 +333,32 @@ function paymentRowValues(p: OrderPayment) {
     depositDate: when.date ? new Date(when.date) : null,
     recordedBy: up(paymentRecorder(p) || '—'),
   }
+}
+
+/**
+ * A quantity written in the unit its batch is actually measured in.
+ *
+ * Petrol is litres, cooking gas is kilograms, an LPG cargo is metric tonnes.
+ * Printing all three as "L" is not a labelling slip — it states a figure that
+ * is wrong by three orders of magnitude and looks entirely plausible.
+ */
+function qtyText(value: number, unit: string | null): string {
+  return `${Number(value || 0).toLocaleString()} ${unitNames(unit).short}`
+}
+
+/**
+ * Period volume totalled per unit, joined.
+ *
+ * A kilogram cannot be added to a litre, so one number across a mixed set is
+ * arithmetic on two different things. Each unit gets its own figure.
+ */
+function totalByUnit(rows: PfiStockRow[]): string {
+  const byUnit = new Map<string, number>()
+  for (const r of rows) {
+    const short = unitNames(r.productUnit).short
+    byUnit.set(short, (byUnit.get(short) || 0) + r.volumeSoldPeriod)
+  }
+  return [...byUnit.entries()].map(([u, t]) => `${t.toLocaleString()} ${u}`).join(' · ') || '—'
 }
 
 /** "ZENITH-DEPOT PAYMENTS REPORT 22-08-26" — PFI takes precedence over location, since it's the narrower filter. */
@@ -621,21 +656,26 @@ export async function exportFinanceReportExcel(
     })
     cursor++
 
-    let periodTotal = 0
+    const periodTotal = totalByUnit(pfiStock)
     let valueTotal = 0
     for (const p of pfiStock) {
       const row = ws.getRow(cursor)
       row.values = [
         up(p.pfiNumber), up(p.locationName), up(p.productName),
-        p.initialStock, p.volumeSoldPeriod, p.salesValuePeriod,
-        p.volumeSoldAllTime, p.volumeRemaining, p.revenue,
+        // Text with the unit attached rather than bare numbers: a column
+        // holding both kilograms and litres cannot carry one number format,
+        // and a figure whose unit is inferred from the header is the bug this
+        // replaces.
+        qtyText(p.initialStock, p.productUnit), qtyText(p.volumeSoldPeriod, p.productUnit),
+        p.salesValuePeriod,
+        qtyText(p.volumeSoldAllTime, p.productUnit), qtyText(p.volumeRemaining, p.productUnit),
+        p.revenue,
       ]
-      periodTotal += p.volumeSoldPeriod
       valueTotal += p.salesValuePeriod
       for (let i = 1; i <= 9; i++) {
         const cell = row.getCell(i)
         cell.border = ALL_BORDERS
-        if (i === 4 || i === 5 || i === 7 || i === 8) cell.numFmt = QTY
+        if (i === 4 || i === 5 || i === 7 || i === 8) cell.alignment = { horizontal: 'right' }
         if (i === 6 || i === 9) cell.numFmt = NGN
         // Negative remaining stock is a real deficit — the batch was
         // charged for more than the tank actually received.
@@ -644,13 +684,13 @@ export async function exportFinanceReportExcel(
       cursor++
     }
 
-    // Only the period-sold column is totalled — initial stock and remaining
-    // are per-PFI positions in mixed batches, and summing them across PFIs
-    // would not mean anything.
+    // Only the period columns are totalled — initial stock and remaining are
+    // per-PFI positions in mixed batches, the all-time figures span
+    // differently per batch, and neither sums meaningfully across PFIs.
     const stockTotalRow = ws.getRow(cursor)
     stockTotalRow.getCell(1).value = stockTotalLabel(pfiStock.length)
     stockTotalRow.getCell(5).value = periodTotal
-    stockTotalRow.getCell(5).numFmt = QTY
+    stockTotalRow.getCell(5).alignment = { horizontal: 'right' }
     stockTotalRow.getCell(6).value = valueTotal
     stockTotalRow.getCell(6).numFmt = NGN
     stockTotalRow.height = ROW_HEIGHT.total
@@ -931,7 +971,7 @@ export async function exportFinanceReportPdf(
     doc.setTextColor(0)
     stockY += 4
 
-    const periodTotal = pfiStock.reduce((s, p) => s + p.volumeSoldPeriod, 0)
+    const periodTotal = totalByUnit(pfiStock)
     const valueTotal = pfiStock.reduce((s, p) => s + p.salesValuePeriod, 0)
     autoTable(doc, {
       startY: stockY,
@@ -942,9 +982,9 @@ export async function exportFinanceReportPdf(
       ]],
       body: pfiStock.map((p) => [
         up(p.pfiNumber), up(p.locationName), up(p.productName),
-        p.initialStock.toLocaleString(), p.volumeSoldPeriod.toLocaleString(),
-        naira(p.salesValuePeriod), p.volumeSoldAllTime.toLocaleString(),
-        p.volumeRemaining.toLocaleString(), naira(p.revenue),
+        qtyText(p.initialStock, p.productUnit), qtyText(p.volumeSoldPeriod, p.productUnit),
+        naira(p.salesValuePeriod), qtyText(p.volumeSoldAllTime, p.productUnit),
+        qtyText(p.volumeRemaining, p.productUnit), naira(p.revenue),
       ]),
       // Only the period-sold column is totalled — initial stock and
       // remaining are per-PFI positions in mixed batches, summing them
@@ -953,7 +993,7 @@ export async function exportFinanceReportPdf(
       // are not, for the reason given on the workbook's own total row.
       foot: [[
         '', '', stockTotalLabel(pfiStock.length), '',
-        periodTotal.toLocaleString(), naira(valueTotal), '', '', '',
+        periodTotal, naira(valueTotal), '', '', '',
       ]],
       styles: { ...bodyStyle, fontSize: 7 },
       headStyles: headStyle,
