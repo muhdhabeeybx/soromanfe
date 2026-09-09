@@ -5,8 +5,14 @@ import { format, isWithinInterval } from 'date-fns'
 import {
   Package, CheckCircle2, Clock, DollarSign, Droplets, Truck, Hourglass,
   Search, Plus, X, RefreshCw, FileSpreadsheet, FileText, Eye, Pencil,
-  Trash2,
+  Trash2, Download, Loader2,
 } from 'lucide-react'
+
+import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
+import { useToast } from '#/lib/hooks/useToast'
+import { getErrorMessage } from '#/lib/utils'
+import { downloadOrderInvoice } from '#/lib/invoice'
+import type { Order, BankAccount } from '#/lib/types'
 
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -96,6 +102,24 @@ function OrdersDashboard() {
   // Filtering and the summary totals run client-side so the cards can
   // recalculate against the filtered set, which needs the whole result.
   const { data, isLoading, isError, error, refetch, isFetching } = useAllOrders()
+
+  /**
+   * Which account an order's invoice should tell the customer to pay into.
+   *
+   * By PFI first, falling back to the batch's depot — the same order of
+   * preference the finance report uses to match a payment, and for the same
+   * reason: two PFIs can run out of one location, and matching on the depot
+   * alone hands both the first account it finds.
+   *
+   * A miss is not an error. The invoice simply prints without its "pay into"
+   * block, which is what the wizard's own invoice does when the create
+   * response carried no payment details.
+   */
+  const { data: bankAccounts = [] } = useBankAccounts({ status: 'Active' })
+  const accountFor = (o: Order) =>
+    bankAccounts.find((a) => o.pfiId != null && a.pfiIds?.map(Number).includes(Number(o.pfiId)))
+    || bankAccounts.find((a) => o.depotId != null && a.depotIds?.map(Number).includes(Number(o.depotId)))
+    || null
   const orders: any[] = data?.orders || []
   const isTruncated = data?.truncated === true
   const totalAvailable = data?.totalAvailable ?? orders.length
@@ -441,7 +465,11 @@ function OrdersDashboard() {
                       <TableHead className="text-right">Total</TableHead>
                       <TableHead>PFI</TableHead>
                       <TableHead>Status</TableHead>
-                      {/* <TableHead className="text-right">Actions</TableHead> */}
+                      {/* The same invoice the wizard offers at the moment an
+                          order lands — reachable later, from the register,
+                          which is where anybody looking for last week's
+                          invoice actually starts. */}
+                      <TableHead className="text-right">Invoice</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -486,6 +514,10 @@ function OrdersDashboard() {
                                   <OrderStatusBadge status={o.status} />
                                   <OrderExpiryBadge status={o.status} expiresAt={o.expiresAt} expiredAt={o.expiredAt} />
                                 </div>
+                              </TableCell>
+
+                              <TableCell className="text-right">
+                                <InvoiceButton order={o} account={accountFor(o)} />
                               </TableCell>
                               
                               {/* <TableCell>
@@ -600,5 +632,55 @@ function OrdersDashboard() {
       </Dialog>
 
     </div>
+  )
+}
+
+/**
+ * Download one order's invoice from the register.
+ *
+ * The generator takes a loosely-typed order and fills what it has, so the row
+ * is passed straight through rather than refetched — every field the invoice
+ * reads is already on the list row, and a round trip per click would buy
+ * nothing but latency.
+ *
+ * Per-row state rather than one flag on the page: two people's invoices
+ * generating at once is normal on a busy register, and a shared spinner would
+ * make every other row look busy while one of them worked.
+ */
+function InvoiceButton({ order, account }: { order: Order; account: BankAccount | null }) {
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+
+  const download = async () => {
+    setBusy(true)
+    try {
+      await downloadOrderInvoice(
+        order,
+        account
+          ? {
+              bankName: account.bankName,
+              accountNumber: account.accountNumber,
+              accountName: account.accountName,
+            }
+          : null,
+      )
+    } catch (err) {
+      toast.error(getErrorMessage(err) || 'Could not generate the invoice')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={download}
+      disabled={busy}
+      title={`Download the invoice for ${order.orderNumber}`}
+    >
+      {busy ? <Loader2 className="animate-spin" /> : <Download />}
+      <span className="sr-only">Download invoice for {order.orderNumber}</span>
+    </Button>
   )
 }
