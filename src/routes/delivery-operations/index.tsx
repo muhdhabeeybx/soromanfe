@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { PageHeader } from '#/components/PageHeader'
+import { FilterBar } from '#/components/FilterBar'
+import { NativeSelect } from '#/components/ui/native-select'
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -424,12 +426,42 @@ function DeliveryOperationsPage() {
 
   const isLoading = isLoadingInventory
 
+  /**
+   * The active filters, as chips. Derived once.
+   *
+   * This list previously existed twice, character for character — once inside
+   * a `.length > 0 &&` test and again inside the `.map` that rendered it. Two
+   * copies of the same six entries is one edit away from a row that disagrees
+   * with the filters actually applied.
+   */
+  const activeChips = useMemo(
+    () => [
+      statusFilter !== 'all' && {
+        label: `Status: ${statusFilter === 'active' ? 'In transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`,
+        clear: () => setStatusFilter('all'),
+      },
+      truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
+      customerFilter && {
+        label: `Customer: ${distinctCustomers.find(([id]) => id === customerFilter)?.[1] || customerFilter}`,
+        clear: () => setCustomerFilter(''),
+      },
+      customerTypeFilter !== 'all' && {
+        label: `Type: ${customerTypeFilter === 'filling_station' ? 'Filling station' : 'Normal'}`,
+        clear: () => setCustomerTypeFilter('all'),
+      },
+      codeFilter && { label: `Batch: ${codeFilter}`, clear: () => setCodeFilter('') },
+      searchQuery && { label: `Search: "${searchQuery}"`, clear: () => setSearchQuery('') },
+    ].filter((x): x is { label: string; clear: () => void } => !!x),
+    [statusFilter, truckFilter, customerFilter, customerTypeFilter, codeFilter, searchQuery, distinctCustomers],
+  )
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <PageHeader
-        title="Delivery Operations"
-        description="Track truck loading cycles grouped by allocation code. Allocate trucks to PFIs and manage deliveries."
+        eyebrow="Truck Sales"
+        title="Delivery Inventory"
+        description="Stock loaded out on trucks, grouped by the batch it came from — what went out, where it went, and what has been sold."
         actions={
           <div className="flex gap-2">
             <Button variant="outline" className="gap-2 cursor-pointer" onClick={exportCSV} disabled={filtered.length === 0}>
@@ -450,113 +482,86 @@ function DeliveryOperationsPage() {
       {/* Summary Cards */}
       <SummaryCards cards={summaryCards} />
 
-      {/* Search + Filters Bar */}
-      <div className="bg-card p-4 rounded-xl border border-border space-y-3">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search truck, PFI, product, customer, depot, destination, code…"
-              className="pl-9 h-9 text-sm"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
+      {/*
+        The same filter bar every other list page uses.
+
+        This was a hand-rolled card holding five bare <select> elements with
+        their own sizing, borders and uppercase labels — close to the app's
+        controls without being them, which is the kind of near-miss that makes
+        a product feel assembled rather than designed. The chip row below it
+        was worse: the same six-entry array written out twice, once to test
+        whether any chips existed and once to render them, so any edit had to
+        be made in both places or the row would disagree with itself.
+      */}
+      <FilterBar>
+        <div className="relative min-w-[240px] flex-1">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search truck, PFI, product, customer, depot, destination, code…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2 border-t border-border">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-muted-foreground uppercase">Status</label>
-            <select aria-label="Filter by status" value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as StatusFilter)}
-              className="h-8 rounded-md border border-border bg-background text-foreground px-2 text-xs">
-              <option value="all">All Statuses</option>
-              <option value="active">In Transit</option>
-              <option value="delivered">Sold</option>
-              <option value="other">{STATUS_DISPLAY.empty.label}</option>
-            </select>
-          </div>
+        <NativeSelect
+          className="w-40" aria-label="Filter by status"
+          value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+        >
+          <option value="all">All statuses</option>
+          <option value="active">In transit</option>
+          <option value="delivered">Sold</option>
+          <option value="other">{STATUS_DISPLAY.empty.label}</option>
+        </NativeSelect>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-muted-foreground uppercase">Truck</label>
-            <select aria-label="Filter by truck" value={truckFilter}
-              onChange={e => setTruckFilter(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background text-foreground px-2 text-xs">
-              <option value="">All Trucks</option>
-              {distinctTruckPlates.map(plate => (
-                <option key={plate} value={plate}>{plate}</option>
-              ))}
-            </select>
-          </div>
+        <NativeSelect
+          className="w-40" aria-label="Filter by truck"
+          value={truckFilter} onChange={(e) => setTruckFilter(e.target.value)}
+        >
+          <option value="">All trucks</option>
+          {distinctTruckPlates.map((plate) => <option key={plate} value={plate}>{plate}</option>)}
+        </NativeSelect>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-muted-foreground uppercase">Customer</label>
-            <select aria-label="Filter by customer" value={customerFilter}
-              onChange={e => setCustomerFilter(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background text-foreground px-2 text-xs">
-              <option value="">All Customers</option>
-              {distinctCustomers.map(([id, name]) => (
-                <option key={id} value={id}>{name}</option>
-              ))}
-            </select>
-          </div>
+        <NativeSelect
+          className="w-48" aria-label="Filter by customer"
+          value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)}
+        >
+          <option value="">All customers</option>
+          {distinctCustomers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </NativeSelect>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-muted-foreground uppercase">Customer Type</label>
-            <select aria-label="Filter by Customer Type" value={customerTypeFilter}
-              onChange={e => setCustomerTypeFilter(e.target.value as any)}
-              className="h-8 rounded-md border border-border bg-background text-foreground px-2 text-xs">
-              <option value="all">All Types</option>
-              <option value="normal">Normal Only</option>
-              <option value="filling_station">Filling Stations Only</option>
-            </select>
-          </div>
+        <NativeSelect
+          className="w-44" aria-label="Filter by customer type"
+          value={customerTypeFilter} onChange={(e) => setCustomerTypeFilter(e.target.value as any)}
+        >
+          <option value="all">All customer types</option>
+          <option value="normal">Normal only</option>
+          <option value="filling_station">Filling stations only</option>
+        </NativeSelect>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-muted-foreground uppercase">Allocation Code</label>
-            <select aria-label="Filter by allocation code" value={codeFilter}
-              onChange={e => setCodeFilter(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background text-foreground px-2 text-xs font-normal">
-              <option value="">All Codes</option>
-              {distinctAllocationCodes.map(code => (
-                <option key={code} value={code}>{code}</option>
-              ))}
-            </select>
-          </div>
+        <NativeSelect
+          className="w-44" aria-label="Filter by allocation code"
+          value={codeFilter} onChange={(e) => setCodeFilter(e.target.value)}
+        >
+          <option value="">All batches</option>
+          {distinctAllocationCodes.map((code) => <option key={code} value={code}>{code}</option>)}
+        </NativeSelect>
+
+        {activeChips.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={clearAllFilters}>
+            <X data-icon="inline-start" />
+            Clear
+          </Button>
+        )}
+      </FilterBar>
+
+      {activeChips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {activeChips.map((chip) => (
+            <FilterChip key={chip.label} label={chip.label} onClear={chip.clear} />
+          ))}
         </div>
-
-        {/* Active Filter Chips */}
-        {[
-          statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`, clear: () => setStatusFilter('all') },
-          truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
-          customerFilter && { label: `Customer: ${distinctCustomers.find(([id]) => id === customerFilter)?.[1] || customerFilter}`, clear: () => setCustomerFilter('') },
-          customerTypeFilter !== 'all' && { label: `Type: ${customerTypeFilter === 'filling_station' ? 'Filling Station' : 'Normal'}`, clear: () => setCustomerTypeFilter('all') },
-          codeFilter && { label: `Code: ${codeFilter}`, clear: () => setCodeFilter('') },
-          searchQuery && { label: `Search: "${searchQuery}"`, clear: () => setSearchQuery('') },
-        ].filter((x): x is { label: string; clear: () => void } => !!x).length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border">
-              <span className="text-xs text-muted-foreground shrink-0">Filtering:</span>
-              {[
-                statusFilter !== 'all' && { label: `Status: ${statusFilter === 'active' ? 'In Transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`, clear: () => setStatusFilter('all') },
-                truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
-                customerFilter && { label: `Customer: ${distinctCustomers.find(([id]) => id === customerFilter)?.[1] || customerFilter}`, clear: () => setCustomerFilter('') },
-                customerTypeFilter !== 'all' && { label: `Type: ${customerTypeFilter === 'filling_station' ? 'Filling Station' : 'Normal'}`, clear: () => setCustomerTypeFilter('all') },
-                codeFilter && { label: `Code: ${codeFilter}`, clear: () => setCodeFilter('') },
-                searchQuery && { label: `Search: "${searchQuery}"`, clear: () => setSearchQuery('') },
-              ].filter((x): x is { label: string; clear: () => void } => !!x).map(chip => (
-                <span key={chip.label} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-normal bg-foreground text-background">
-                  {chip.label}
-                  <button title={`Remove: ${chip.label}`} onClick={chip.clear} className="hover:text-muted-foreground ml-0.5">
-                    <X className="size-2.5" />
-                  </button>
-                </span>
-              ))}
-              <button type="button" onClick={clearAllFilters} className="text-xs text-muted-foreground hover:text-foreground underline ml-1">
-                Clear all
-              </button>
-            </div>
-          )}
-      </div>
+      )}
 
       {/* Allocation Cards */}
       {isLoading ? (
@@ -760,5 +765,22 @@ function DeliveryOperationsPage() {
         toast={toast}
       />
     </div>
+  )
+}
+
+/** The same chip the orders register uses, so a filter reads identically. */
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-foreground/15 bg-muted/40 py-0.5 pr-1 pl-2.5 text-xs uppercase">
+      {label}
+      <button
+        type="button"
+        onClick={onClear}
+        className="flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors duration-250 ease-luxe outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <X className="size-2.5" />
+        <span className="sr-only">Remove {label} filter</span>
+      </button>
+    </span>
   )
 }
