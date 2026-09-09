@@ -6,11 +6,7 @@ import { NativeSelect } from '#/components/ui/native-select'
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
-import {
-  Plus, Search, Download,
-  Truck, Droplets, CheckCircle2,
-  X, Tag, Settings, Calendar,
-  Loader2, Split, Package } from 'lucide-react'
+import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Tag, Settings, Calendar, Loader2, Split } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -461,25 +457,29 @@ function DeliveryOperationsPage() {
         eyebrow="Truck Sales"
         title="Delivery Inventory"
         description="Stock loaded out on trucks, grouped by the batch it came from — what went out, where it went, and what has been sold."
+        /*
+          One action, not three.
+
+          This header carried Manage Codes, New Batch and Allocate Trucks side
+          by side — three doors onto one thing. An allocation code IS a batch:
+          naming it is creating the batch, and putting trucks on it is building
+          that batch's manifest. Three buttons made them read as three separate
+          jobs to be done in an order nobody had written down.
+
+          Creating a batch is now the only entry point, and everything done TO
+          a batch — its locations, its trucks, its allocations — lives on that
+          batch's own page, reached by opening it. Manage Codes goes with them:
+          a code with no batch behind it was a label waiting for something to
+          label.
+        */
         actions={
           <div className="flex gap-2">
             <Button variant="outline" className="gap-2 cursor-pointer" onClick={exportCSV} disabled={filtered.length === 0}>
               <Download className="size-4" /> Export
             </Button>
-            <Button variant="outline" className="gap-2 cursor-pointer" onClick={() => setManageCodesOpen(true)}>
-              <Settings className="size-4" /> Manage Codes
-            </Button>
-            {/* Creating the batch comes before allocating trucks to it, so it
-                sits to the left of that button and carries the plain style —
-                the accent stays on the action people take most. */}
             <Link to="/delivery-operations/batch" search={{ id: undefined }}>
-              <Button variant="outline" className="gap-2 cursor-pointer">
-                <Package className="size-4" /> New Batch
-              </Button>
-            </Link>
-            <Link to="/delivery-operations/allocate-trucks">
               <Button className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer">
-                <Plus className="size-4" /> Allocate Trucks
+                <Plus className="size-4" /> New Batch
               </Button>
             </Link>
           </div>
@@ -560,6 +560,24 @@ function DeliveryOperationsPage() {
             Clear
           </Button>
         )}
+
+        {/*
+          Renaming and deleting a code, demoted rather than deleted.
+
+          Creating a code is now creating a batch, so that half of this dialog
+          is gone from the header. Renaming and deleting are not — a rename
+          here cascades to every truck record carrying the code, and it is the
+          only way to do either. What it is not is a peer of "New Batch": it is
+          housekeeping on an existing list, so it sits with the filters where
+          housekeeping belongs, not beside the one thing this page is for.
+        */}
+        <Button
+          variant="ghost" size="sm" className="ml-auto"
+          onClick={() => setManageCodesOpen(true)}
+        >
+          <Settings data-icon="inline-start" />
+          Rename or delete codes
+        </Button>
       </FilterBar>
 
       {activeChips.length > 0 && (

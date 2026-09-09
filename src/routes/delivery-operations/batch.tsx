@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Truck } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Button } from '#/components/ui/button'
@@ -93,12 +93,27 @@ function DeliveryBatchPage() {
             : 'A delivery batch is a PFI. Name it and say where it loads, then add its locations and trucks.'
         }
         actions={
-          <Link to="/delivery-operations">
-            <Button variant="outline">
-              <ArrowLeft data-icon="inline-start" />
-              Back to inventory
-            </Button>
-          </Link>
+          <div className="flex gap-2">
+            <Link to="/delivery-operations">
+              <Button variant="outline">
+                <ArrowLeft data-icon="inline-start" />
+                Back to inventory
+              </Button>
+            </Link>
+            {/* Allocating trucks to customers is the one thing done to a batch
+                that is a sale rather than a fact about the batch, so it keeps
+                its own screen — but it is reached from the batch it belongs
+                to, not from a header three levels up that has no idea which
+                batch you meant. */}
+            {id && (
+              <Link to="/delivery-operations/allocate-trucks">
+                <Button>
+                  <Truck data-icon="inline-start" />
+                  Allocate to customers
+                </Button>
+              </Link>
+            )}
+          </div>
         }
       />
 
