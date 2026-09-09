@@ -336,6 +336,47 @@ function paymentRowValues(p: OrderPayment) {
 }
 
 /**
+ * The PDF's own columns, deliberately fewer than the workbook's.
+ *
+ * A spreadsheet can carry eighteen columns because it scrolls and every column
+ * can be widened. An A4 landscape page cannot: at eighteen, a company name
+ * wrapped to three lines or truncated to nothing, which is the state this
+ * replaces.
+ *
+ * Four columns go and two pairs merge:
+ *
+ *   PFI          dropped — it is named in the stock summary at the top, and on
+ *                a report filtered to one PFI it repeated on every row.
+ *   Paid Into    dropped from the rows, stated once in the summary as the set
+ *   Recorded By  of accounts used and the people who recorded, which is the
+ *                only form in which either is actually read.
+ *   Customer     merged with Company: the name, and the company beneath it in
+ *                bold, since the company is who the invoice is actually to.
+ *   Qty          merged with Product: the figure in bold, the product beneath.
+ *
+ * The workbook keeps all eighteen. It is a different document with different
+ * constraints, and narrowing it would lose data somebody filters on.
+ */
+const PDF_COLUMNS: Array<{ header: string; key: string; scope: ColumnScope; width?: number; signed?: boolean }> = [
+  { header: 'S/N', key: 'sn', scope: 'order', width: 7 },
+  { header: 'Date', key: 'date', scope: 'order', width: 14 },
+  { header: 'Order Reference', key: 'ref', scope: 'order', width: 22 },
+  { header: 'Customer', key: 'customerBlock', scope: 'order', width: 34 },
+  { header: 'Qty / Product', key: 'qtyBlock', scope: 'order', width: 21 },
+  { header: 'Rate', key: 'rate', scope: 'order', width: 16 },
+  { header: 'Sales Value', key: 'salesValue', scope: 'order', width: 22 },
+  { header: 'Deposit Date', key: 'depositDate', scope: 'funding', width: 14 },
+  { header: 'Depositor', key: 'depositor', scope: 'funding', width: 25 },
+  { header: 'Bank Reference', key: 'depositRef', scope: 'funding', width: 25 },
+  { header: 'Amount Paid', key: 'amount', scope: 'funding', width: 22 },
+  { header: 'Transferred', key: 'transfers', scope: 'funding', width: 19, signed: true },
+  { header: 'Differential', key: 'differential', scope: 'order', width: 19, signed: true },
+]
+
+/** The two columns drawn by hand, because each carries two lines at two weights. */
+const STACKED = new Set(['customerBlock', 'qtyBlock'])
+
+/**
  * A quantity written in the unit its batch is actually measured in.
  *
  * Petrol is litres, cooking gas is kilograms, an LPG cargo is metric tonnes.
@@ -805,6 +846,30 @@ export async function exportFinanceReportPdf(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let cursorY = (doc as any).lastAutoTable.finalY + 6
+  /**
+   * The two columns lifted out of the rows.
+   *
+   * Both repeated the same handful of values down hundreds of rows and cost
+   * two columns of page width to do it. As a set they are read in one glance
+   * and answer the questions actually asked of them: which accounts did the
+   * money land in, and who keyed it.
+   */
+  const accountsUsed = [...new Set(rows.flatMap((o) => o.paidInto || []).filter(Boolean))]
+  const recordedBy = [...new Set(
+    rows.flatMap((o) => (o.payments || []).map((pay) => paymentRecorder(pay))).filter(Boolean),
+  )]
+
+  for (const [label, items] of [['Paid into', accountsUsed], ['Recorded by', recordedBy]] as const) {
+    if (!items.length) continue
+    doc.setFontSize(7.5)
+    doc.setTextColor(...PDF.inkSoft)
+    doc.text(`${label}:  ${items.join('   \u00b7   ')}`, 14, cursorY, {
+      maxWidth: doc.internal.pageSize.getWidth() - 28,
+    })
+    doc.setTextColor(...PDF.ink)
+    cursorY += 5
+  }
+
   const note = extraFilterNote(filters)
   if (note) {
     doc.setFontSize(8)
@@ -814,157 +879,8 @@ export async function exportFinanceReportPdf(
     cursorY += 5
   }
 
-  // Each row is laid out by walking COLUMNS and asking each one whether this
-  // row kind fills it — so a column can be added, moved, or switched between
-  // order and funding scope without any index arithmetic here needing to
-  // follow it.
-  const cellsFor = (scope: ColumnScope, values: Record<string, string | number>) =>
-    COLUMNS.map((c) => (c.scope === scope ? (values[c.key] ?? '') : ''))
-
-  const body: (string | number)[][] = []
-  /**
-   * The signed value behind a printed cell, keyed by body row then column.
-   *
-   * With the brackets gone there is no sign left in the string to read, so
-   * colour comes off the number itself. Written in lockstep with `body`, so a
-   * row's figures are found by that row's own index.
-   */
-  const signedAt: Array<Record<number, number>> = []
-  const indexOfCol = (key: string) => COLUMNS.findIndex((c) => c.key === key)
-  const diffCol = indexOfCol('differential')
-  const transfersCol = indexOfCol('transfers')
-
-  rows.forEach((o, i) => {
-    const v = rowValues(o, i)
-    const orderRow = cellsFor('order', {
-      sn: v.sn,
-      date: v.date ? format(v.date, DATE_PATTERN) : '—',
-      ref: v.ref,
-      pfi: v.pfi,
-      customer: v.customer,
-      company: v.company,
-      qty: v.qty.toLocaleString(),
-      product: v.product,
-      rate: naira(v.rate),
-      salesValue: naira(v.salesValue),
-      differential: Math.abs(v.differential) < 0.005 ? '—' : plain(v.differential),
-      paidInto: v.paidInto,
-    })
-    // cellsFor() only fills the columns of the scope it was asked for, so the
-    // legacy amount — which lives in two funding-scope columns but belongs on
-    // the ORDER line — is written in by hand. Without it the Amount Paid
-    // column in the PDF would not sum to the total printed above it, while
-    // the workbook's would: the two documents disagreeing on the same figure.
-    const legacy = legacyAmount(o)
-    if (legacy > 0) {
-      const at = (key: string) => COLUMNS.findIndex((c) => c.key === key)
-      if (at('amount') >= 0) orderRow[at('amount')] = naira(legacy)
-      if (at('depositRef') >= 0) orderRow[at('depositRef')] = 'NO BANK RECORD'
-    }
-    body.push(orderRow)
-    signedAt[body.length - 1] = { [diffCol]: v.differential }
-
-    // The same rows as the workbook, built from the same function, so the two
-    // documents cannot say different things.
-    for (const p of visiblePayments(o)) {
-      const pv = paymentRowValues(p)
-      body.push(
-        cellsFor('funding', {
-          depositDate: pv.depositDate ? format(pv.depositDate, DATE_PATTERN) : '—',
-          depositor: pv.depositor,
-          depositRef: pv.depositRef,
-          amount: pv.amount == null ? '' : naira(pv.amount),
-          transfers: pv.transfers == null ? '' : plain(pv.transfers),
-          recordedBy: pv.recordedBy,
-        }),
-      )
-      if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
-    }
-  })
-
-  // Indexed by key, not position, so this can't silently point at the wrong
-  // cell if a column is ever inserted before one of these.
-  const footRow = new Array(COLUMNS.length).fill('')
-  const footAt = (key: string, value: string) => {
-    const idx = COLUMNS.findIndex((c) => c.key === key)
-    if (idx >= 0) footRow[idx] = value
-  }
-  footAt('ref', `Total (${rows.length})`)
-  footAt('qty', summary.totalQuantity.toLocaleString())
-  footAt('salesValue', naira(summary.totalSalesValue))
-  footAt('amount', naira(summary.totalBankPaid))
-  footAt('differential', plain(summary.totalDifferential))
-  footAt('transfers', plain(summary.totalTransferred))
-
-  const refColumnIndex = COLUMNS.findIndex((c) => c.key === 'ref')
-  const depositRefIndex = COLUMNS.findIndex((c) => c.key === 'depositRef')
-
-  autoTable(doc, {
-    startY: cursorY,
-    head: [COLUMNS.map((c) => c.header)],
-    body,
-    foot: [footRow],
-    styles: bodyStyle,
-    headStyles: headStyle,
-    footStyles: { ...footStyle, fillColor: PDF.grandTotalTint },
-    // A payment-source sub-row gets the same faint tint as its Excel
-    // counterpart — never a font change, just enough to read as nested. A
-    // sub-row is the one whose Order Reference cell is blank. Plain
-    // alternating-row striping would be meaningless here (a "row" is an
-    // order or one of its sub-rows depending on how many came before it),
-    // so this replaces it rather than layering on top.
-    didParseCell: (data) => {
-      // `raw` is typed as the union of every row shape autoTable accepts;
-      // every row this table builds is the plain array below, so narrowing
-      // to that is safe and keeps the index lookup honest.
-      const raw = data.row.raw
-      const isSubRow =
-        data.section === 'body' && Array.isArray(raw) && raw[refColumnIndex] === ''
-      if (isSubRow) {
-        // An internal transfer identifies itself by the reference cell the
-        // shared row builder stamps, so the two documents cannot disagree
-        // about which payments are internal.
-        // Both forms of internal money identify themselves in the reference
-        // cell the shared row builder stamps — "INTERNAL TRANSFER" for a
-        // recorded wallet movement, "OFF {ref}" for a remainder carried off
-        // another order's credit. Reading it here keeps the PDF's colouring
-        // tied to the same fact the workbook and the screen use.
-        const refCell = Array.isArray(raw) ? String(raw[depositRefIndex] ?? '').toUpperCase() : ''
-        const internal = refCell === 'INTERNAL TRANSFER' || refCell.startsWith('OFF ')
-        data.cell.styles.fillColor = internal ? PDF.internalTint : PDF.subRowTint
-        if (internal) data.cell.styles.textColor = PDF.internal
-        return
-      }
-      if (data.section === 'body' && data.column.index === refColumnIndex) {
-        data.cell.styles.fontStyle = 'bold'
-      }
-      /**
-       * Signed money reads green or red in the body and in the totals bar
-       * alike — the one place in these documents where colour means anything.
-       *
-       * Positive is order value MINUS money received, so it is a shortfall and
-       * reads red; negative means more arrived than was billed and reads
-       * green. Transfers take neither: money moving between two orders is not
-       * a gain or a loss to anybody. See paintOwed.
-       */
-      const signed =
-        data.section === 'foot'
-          ? ({
-              [diffCol]: summary.totalDifferential,
-              [transfersCol]: summary.totalTransferred,
-            } as Record<number, number>)
-          : signedAt[data.row.index]
-      const value = signed?.[data.column.index]
-      if (typeof value === 'number' && Math.abs(value) >= 0.005) {
-        data.cell.styles.textColor =
-          data.column.index === transfersCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
-      }
-    },
-  })
-
   if (pfiStock.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let stockY = (doc as any).lastAutoTable.finalY + 8
+    let stockY = cursorY
     doc.setFontSize(12)
     doc.setTextColor(0, 122, 85)
     doc.text('PFI STOCK SUMMARY', 14, stockY)
@@ -1006,7 +922,245 @@ export async function exportFinanceReportPdf(
         }
       },
     })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    cursorY = (doc as any).lastAutoTable.finalY + 6
   }
+
+  // Each row is laid out by walking COLUMNS and asking each one whether this
+  // row kind fills it — so a column can be added, moved, or switched between
+  // order and funding scope without any index arithmetic here needing to
+  // follow it.
+  const cellsFor = (scope: ColumnScope, values: Record<string, string | number>) =>
+    PDF_COLUMNS.map((c) => (c.scope === scope ? (values[c.key] ?? '') : ''))
+
+  /**
+   * The two lines behind a stacked cell, keyed by row then column.
+   *
+   * autotable cannot set two weights inside one cell, so those cells are drawn
+   * by hand in didDrawCell. The cell's own text is left as two blank lines so
+   * autotable still reserves the right height — clearing it outright would
+   * collapse the row to one line and the second would be drawn outside it.
+   */
+  const stacked: Array<Record<number, [string, string]>> = []
+
+  /**
+   * The unit an order's quantity is in, resolved through its batch.
+   *
+   * A finance report row carries no product unit of its own, and the report
+   * has always assumed litres — wrong for the cooking-gas batches, which are
+   * kilograms. The batch knows, so the batch is asked. Where it cannot be
+   * resolved the figure is printed bare: the product name sits directly
+   * beneath it and says what it is, which is better than a confident "L" on
+   * a quantity of gas.
+   */
+  const unitByPfi = new Map(pfiStock.map((p) => [p.pfiNumber, unitNames(p.productUnit).short]))
+  const qtyWithUnit = (o: FinanceReportOrder, n: number) => {
+    const short = o.pfiNumber ? unitByPfi.get(o.pfiNumber) : undefined
+    return short ? `${n.toLocaleString()} ${short}` : n.toLocaleString()
+  }
+
+  const body: (string | number)[][] = []
+  /**
+   * The signed value behind a printed cell, keyed by body row then column.
+   *
+   * With the brackets gone there is no sign left in the string to read, so
+   * colour comes off the number itself. Written in lockstep with `body`, so a
+   * row's figures are found by that row's own index.
+   */
+  const signedAt: Array<Record<number, number>> = []
+  const indexOfCol = (key: string) => PDF_COLUMNS.findIndex((c) => c.key === key)
+  const diffCol = indexOfCol('differential')
+  const transfersCol = indexOfCol('transfers')
+
+  rows.forEach((o, i) => {
+    const v = rowValues(o, i)
+    const orderRow = cellsFor('order', {
+      sn: v.sn,
+      date: v.date ? format(v.date, DATE_PATTERN) : '—',
+      ref: v.ref,
+      // Blank placeholders: the real content is drawn in didDrawCell, and the
+      // height is reserved by the two lines set on the cell in didParseCell.
+      customerBlock: '',
+      qtyBlock: '',
+      rate: naira(v.rate),
+      salesValue: naira(v.salesValue),
+      differential: Math.abs(v.differential) < 0.005 ? '—' : plain(v.differential),
+    })
+    // cellsFor() only fills the columns of the scope it was asked for, so the
+    // legacy amount — which lives in two funding-scope columns but belongs on
+    // the ORDER line — is written in by hand. Without it the Amount Paid
+    // column in the PDF would not sum to the total printed above it, while
+    // the workbook's would: the two documents disagreeing on the same figure.
+    const legacy = legacyAmount(o)
+    if (legacy > 0) {
+      if (indexOfCol('amount') >= 0) orderRow[indexOfCol('amount')] = naira(legacy)
+      if (indexOfCol('depositRef') >= 0) orderRow[indexOfCol('depositRef')] = 'NO BANK RECORD'
+    }
+    body.push(orderRow)
+    signedAt[body.length - 1] = { [diffCol]: v.differential }
+    stacked[body.length - 1] = {
+      [indexOfCol('customerBlock')]: [v.customer, v.company],
+      [indexOfCol('qtyBlock')]: [qtyWithUnit(o, v.qty), v.product],
+    }
+
+    // The same rows as the workbook, built from the same function, so the two
+    // documents cannot say different things.
+    for (const p of visiblePayments(o)) {
+      const pv = paymentRowValues(p)
+      body.push(
+        cellsFor('funding', {
+          depositDate: pv.depositDate ? format(pv.depositDate, DATE_PATTERN) : '—',
+          depositor: pv.depositor,
+          depositRef: pv.depositRef,
+          amount: pv.amount == null ? '' : naira(pv.amount),
+          transfers: pv.transfers == null ? '' : plain(pv.transfers),
+        }),
+      )
+      if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
+    }
+  })
+
+  // Indexed by key, not position, so this can't silently point at the wrong
+  // cell if a column is ever inserted before one of these.
+  const footRow = new Array(PDF_COLUMNS.length).fill('')
+  const footAt = (key: string, value: string) => {
+    const idx = PDF_COLUMNS.findIndex((c) => c.key === key)
+    if (idx >= 0) footRow[idx] = value
+  }
+  footAt('ref', `Total (${rows.length})`)
+  footAt('qty', summary.totalQuantity.toLocaleString())
+  footAt('salesValue', naira(summary.totalSalesValue))
+  footAt('amount', naira(summary.totalBankPaid))
+  footAt('differential', plain(summary.totalDifferential))
+  footAt('transfers', plain(summary.totalTransferred))
+
+  const refColumnIndex = PDF_COLUMNS.findIndex((c) => c.key === 'ref')
+  const depositRefIndex = PDF_COLUMNS.findIndex((c) => c.key === 'depositRef')
+
+  autoTable(doc, {
+    startY: cursorY,
+    head: [PDF_COLUMNS.map((c) => c.header)],
+    body,
+    foot: [footRow],
+    /**
+     * The totals bar belongs at the end of the report, not at the foot of
+     * every page.
+     *
+     * autotable repeats a foot on each page by default, which on a six-page
+     * report prints the same grand total six times — each one looking like
+     * that page's subtotal, and none of them being one.
+     */
+    showFoot: 'lastPage',
+    styles: bodyStyle,
+    headStyles: headStyle,
+    footStyles: { ...footStyle, fillColor: PDF.grandTotalTint },
+    columnStyles: Object.fromEntries(
+      PDF_COLUMNS.map((c, i) => [i, { cellWidth: c.width }]),
+    ),
+    // A payment-source sub-row gets the same faint tint as its Excel
+    // counterpart — never a font change, just enough to read as nested. A
+    // sub-row is the one whose Order Reference cell is blank. Plain
+    // alternating-row striping would be meaningless here (a "row" is an
+    // order or one of its sub-rows depending on how many came before it),
+    // so this replaces it rather than layering on top.
+    didParseCell: (data) => {
+      // `raw` is typed as the union of every row shape autoTable accepts;
+      // every row this table builds is the plain array below, so narrowing
+      // to that is safe and keeps the index lookup honest.
+      const raw = data.row.raw
+      const isSubRow =
+        data.section === 'body' && Array.isArray(raw) && raw[refColumnIndex] === ''
+      if (isSubRow) {
+        // An internal transfer identifies itself by the reference cell the
+        // shared row builder stamps, so the two documents cannot disagree
+        // about which payments are internal.
+        // Both forms of internal money identify themselves in the reference
+        // cell the shared row builder stamps — "INTERNAL TRANSFER" for a
+        // recorded wallet movement, "OFF {ref}" for a remainder carried off
+        // another order's credit. Reading it here keeps the PDF's colouring
+        // tied to the same fact the workbook and the screen use.
+        const refCell = Array.isArray(raw) ? String(raw[depositRefIndex] ?? '').toUpperCase() : ''
+        const internal = refCell === 'INTERNAL TRANSFER' || refCell.startsWith('OFF ')
+        data.cell.styles.fillColor = internal ? PDF.internalTint : PDF.subRowTint
+        if (internal) data.cell.styles.textColor = PDF.internal
+        return
+      }
+      if (data.section === 'body' && data.column.index === refColumnIndex) {
+        data.cell.styles.fontStyle = 'bold'
+      }
+      // Two blank lines, so the row is tall enough for the two real ones
+      // didDrawCell paints over them. Emptying the cell instead would collapse
+      // the row and the second line would land in the row beneath.
+      if (data.section === 'body' && STACKED.has(PDF_COLUMNS[data.column.index]?.key)) {
+        data.cell.text = ['', '']
+      }
+      /**
+       * Signed money reads green or red in the body and in the totals bar
+       * alike — the one place in these documents where colour means anything.
+       *
+       * Positive is order value MINUS money received, so it is a shortfall and
+       * reads red; negative means more arrived than was billed and reads
+       * green. Transfers take neither: money moving between two orders is not
+       * a gain or a loss to anybody. See paintOwed.
+       */
+      const signed =
+        data.section === 'foot'
+          ? ({
+              [diffCol]: summary.totalDifferential,
+              [transfersCol]: summary.totalTransferred,
+            } as Record<number, number>)
+          : signedAt[data.row.index]
+      const value = signed?.[data.column.index]
+      if (typeof value === 'number' && Math.abs(value) >= 0.005) {
+        data.cell.styles.textColor =
+          data.column.index === transfersCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
+      }
+    },
+    /**
+     * The two stacked columns, drawn by hand.
+     *
+     * autotable applies one font weight per cell, and the whole point of these
+     * is two: the customer with their company beneath it in bold, the quantity
+     * in bold with its product beneath. Their cell text was blanked above, so
+     * there is nothing underneath to collide with.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didDrawCell: (data: any) => {
+      if (data.section !== 'body') return
+      const key = PDF_COLUMNS[data.column.index]?.key
+      if (!STACKED.has(key)) return
+
+      const pair = stacked[data.row.index]?.[data.column.index]
+      if (!pair) return
+      const [top, bottom] = pair
+      if (!top && !bottom) return
+
+      const face = satoshi ? 'Satoshi' : 'helvetica'
+      const x = data.cell.x + data.cell.padding('left')
+      const width = data.cell.width - data.cell.padding('horizontal')
+
+      // Truncated rather than wrapped: these cells sit on a fixed-height row,
+      // and a third line would be drawn over the row below it.
+      const fit = (text: string) => {
+        let t = String(text || '')
+        while (t && doc.getTextWidth(t) > width) t = t.slice(0, -1)
+        return t === text ? t : t.replace(/.$/, '…')
+      }
+
+      doc.setTextColor(...PDF.ink)
+      doc.setFont(face, 'normal')
+      doc.setFontSize(6.6)
+      if (top) doc.text(fit(top), x, data.cell.y + 3.1)
+
+      doc.setFont(face, 'bold')
+      doc.setFontSize(6.4)
+      if (bottom) doc.text(fit(bottom), x, data.cell.y + 6.1)
+
+      doc.setFont(face, 'normal')
+      doc.setFontSize(pdfStyles.body.fontSize)
+    },
+  })
 
   drawPdfFooters(doc, `Soroman Finance Report · ${filters.periodLabel}`)
   doc.save(`${buildFilename(filters)}.pdf`)
