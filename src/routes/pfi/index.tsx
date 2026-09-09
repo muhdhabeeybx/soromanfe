@@ -77,13 +77,20 @@ function serialOf(pfiNumber: string | null | undefined): [number, string] {
  * genuinely less urgent than one selling today, and putting the pipeline at
  * the top of the list would push the trading book below the fold.
  */
-const STATUS_RANK: Record<string, number> = { active: 0, not_started: 1, finished: 2 }
 
+/**
+ * Newest serial first, and nothing else.
+ *
+ * This used to rank by status before serial, so every active batch sorted
+ * above every closed one regardless of number. That reads well when the page
+ * is a work queue and badly when it is a register — PFI/46 sitting below
+ * PFI/31 because one is closed makes the list impossible to scan for a number
+ * you already know, which is how it is actually used.
+ *
+ * Status is still visible on every card and still filterable, so nothing is
+ * lost except an ordering that fought the numbering.
+ */
 function compareSerial(a: PfiWithFinancials, b: PfiWithFinancials): number {
-  const aRank = STATUS_RANK[a.status] ?? 3
-  const bRank = STATUS_RANK[b.status] ?? 3
-  if (aRank !== bRank) return aRank - bRank
-
   const [an, al] = serialOf(a.pfiNumber)
   const [bn, bl] = serialOf(b.pfiNumber)
   if (an !== bn) return bn - an
@@ -703,6 +710,38 @@ function PFIDashboard() {
                           <p className="truncate text-sm font-semibold">
                             {qty(f.sold, p.productUnit)}
                           </p>
+                        </div>
+                        {/*
+                          What has actually left the tank, beside what has been
+                          paid for — the movements ledger, which ticket
+                          generation writes to, rather than anything derived
+                          from an order's status.
+                          
+                          The two are different questions and the gap between
+                          them is the useful part: paid but not yet loaded is
+                          stock somebody is waiting on, and loaded beyond paid
+                          is product gone out against money that has not
+                          landed. Named only when they disagree, because on a
+                          batch where they agree the difference is nothing and
+                          a permanent "0 L" would be read as a figure.
+                        */}
+                        <div className="min-w-0">
+                          <p className="text-xs text-muted-foreground">
+                            Total {unitNames(p.productUnit).plural.toLowerCase()} loaded
+                          </p>
+                          <p className="truncate text-sm font-semibold">
+                            {qty(f.movementQty, p.productUnit)}
+                          </p>
+                          {Math.abs(f.sold - f.movementQty) >= 1 && (
+                            <p className={cn(
+                              'truncate text-xs',
+                              f.movementQty < f.sold ? 'text-warning' : 'text-info',
+                            )}>
+                              {f.movementQty < f.sold
+                                ? `${qty(f.sold - f.movementQty, p.productUnit)} paid, not loaded`
+                                : `${qty(f.movementQty - f.sold, p.productUnit)} loaded, not paid`}
+                            </p>
+                          )}
                         </div>
                       </div>
 
