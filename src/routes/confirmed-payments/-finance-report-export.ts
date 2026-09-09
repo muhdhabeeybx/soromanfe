@@ -10,7 +10,7 @@ import {
   ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   writeTitleBlock, writeSectionHeading,
-  pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, triggerDownload,
+  pdfStyles, drawPdfHeader, drawPdfFooters, pdfNaira, pdfNairaIso, applySatoshi, triggerDownload,
 } from '#/lib/report-theme'
 
 /**
@@ -124,12 +124,21 @@ export interface PfiStockRow {
   pfiNumber: string
   locationName: string
   productName: string
-  /** The tank quantity, printed under that name. See PfiStockSummary above. */
+  /** What measured into the tank when the batch landed. */
   initialStock: number
   /** Litres sold within the report's current filters — not all-time. */
   volumeSoldPeriod: number
+  /**
+   * What those litres were billed at, over the same filters.
+   *
+   * Volume alone cannot be read as performance: a period that moved more
+   * litres at a worse price is not a better period, and the two columns beside
+   * each other are what makes that visible at a glance.
+   */
+  salesValuePeriod: number
   volumeSoldAllTime: number
   volumeRemaining: number
+  /** Every naira this batch has ever billed, not just the period's. */
   revenue: number
 }
 
@@ -365,7 +374,7 @@ function summaryColumns(
     { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_PLAIN, signed: true },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
   ]
-  if (summary.initialStock != null) cols.push({ header: 'Tank Quantity (PFI)', value: summary.initialStock, fmt: QTY })
+  if (summary.initialStock != null) cols.push({ header: 'Initial Stock (PFI)', value: summary.initialStock, fmt: QTY })
   if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance After (PFI)', value: summary.tankBalanceAfter, fmt: QTY })
   return cols
 }
@@ -592,7 +601,15 @@ export async function exportFinanceReportExcel(
     cursor = writeSectionHeading(ws, cursor, 'PFI STOCK SUMMARY')
     cursor += 1
 
-    const stockHeaders = ['PFI', 'Location', 'Product', 'Tank Quantity', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']
+    // Named by the window each figure covers. "Volume Sold (Period)" left the
+    // reader hunting for which period, and an all-time revenue sitting beside
+    // a month's volume read as the same span.
+    const per = filters.periodLabel
+    const stockHeaders = [
+      'PFI', 'Location', 'Product', 'Initial Stock',
+      `Volume Sold (${per})`, `Sales Value (${per})`,
+      'Volume Sold (All Time)', 'Volume Remaining', 'Total Revenue (All Time)',
+    ]
     const stockHeaderRow = ws.getRow(cursor)
     stockHeaderRow.values = stockHeaders
     stockHeaderRow.height = ROW_HEIGHT.header
@@ -605,21 +622,24 @@ export async function exportFinanceReportExcel(
     cursor++
 
     let periodTotal = 0
+    let valueTotal = 0
     for (const p of pfiStock) {
       const row = ws.getRow(cursor)
       row.values = [
         up(p.pfiNumber), up(p.locationName), up(p.productName),
-        p.initialStock, p.volumeSoldPeriod, p.volumeSoldAllTime, p.volumeRemaining, p.revenue,
+        p.initialStock, p.volumeSoldPeriod, p.salesValuePeriod,
+        p.volumeSoldAllTime, p.volumeRemaining, p.revenue,
       ]
       periodTotal += p.volumeSoldPeriod
-      for (let i = 1; i <= 8; i++) {
+      valueTotal += p.salesValuePeriod
+      for (let i = 1; i <= 9; i++) {
         const cell = row.getCell(i)
         cell.border = ALL_BORDERS
-        if (i >= 4 && i <= 7) cell.numFmt = QTY
-        if (i === 8) cell.numFmt = NGN
+        if (i === 4 || i === 5 || i === 7 || i === 8) cell.numFmt = QTY
+        if (i === 6 || i === 9) cell.numFmt = NGN
         // Negative remaining stock is a real deficit — the batch was
         // charged for more than the tank actually received.
-        if (i === 7 && p.volumeRemaining < 0) cell.font = { color: { argb: XL.loss } }
+        if (i === 8 && p.volumeRemaining < 0) cell.font = { color: { argb: XL.loss } }
       }
       cursor++
     }
@@ -631,8 +651,10 @@ export async function exportFinanceReportExcel(
     stockTotalRow.getCell(1).value = stockTotalLabel(pfiStock.length)
     stockTotalRow.getCell(5).value = periodTotal
     stockTotalRow.getCell(5).numFmt = QTY
+    stockTotalRow.getCell(6).value = valueTotal
+    stockTotalRow.getCell(6).numFmt = NGN
     stockTotalRow.height = ROW_HEIGHT.total
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= 9; i++) {
       const cell = stockTotalRow.getCell(i)
       cell.border = TOTAL_BORDERS
       cell.fill = TOTAL_FILL
@@ -658,6 +680,16 @@ export async function exportFinanceReportPdf(
   const autoTable = (await import('jspdf-autotable')).default
 
   const doc = new jsPDF({ orientation: 'landscape' })
+
+  /**
+   * Set in Satoshi, the company's own face.
+   *
+   * Awaited before a single character is drawn: jsPDF resolves a font at draw
+   * time, so registering it later would leave the header in Helvetica and the
+   * tables in Satoshi. If the face cannot be loaded the report still prints,
+   * in Helvetica — and keeps the ₦ sign, since only Satoshi lacks the glyph.
+   */
+  const satoshi = await applySatoshi(doc)
   const startY = drawPdfHeader(
     doc,
     'Payments Report',
@@ -669,7 +701,21 @@ export async function exportFinanceReportPdf(
     ].join('   ·   '),
   )
 
-  const naira = pdfNaira
+  // Satoshi has no naira glyph, so a document set in it writes the ISO form
+  // rather than a box beside every figure. See applySatoshi.
+  const naira = satoshi ? pdfNairaIso : pdfNaira
+
+  /**
+   * autotable picks its own font and ignores whatever the document is set to,
+   * so the face has to be handed to every table explicitly. Without this the
+   * headings come out in Satoshi and the tables beneath them in Helvetica,
+   * which is the tell that makes a generated document look assembled rather
+   * than designed.
+   */
+  const face = satoshi ? { font: 'Satoshi' } : {}
+  const bodyStyle = { ...pdfStyles.body, ...face }
+  const headStyle = { ...pdfStyles.head, ...face }
+  const footStyle = { ...pdfStyles.foot, ...face }
   /**
    * Signed money without the brackets — colour carries the sign, matching the
    * screen and the workbook. Every other money column here is positive by
@@ -818,9 +864,9 @@ export async function exportFinanceReportPdf(
     head: [COLUMNS.map((c) => c.header)],
     body,
     foot: [footRow],
-    styles: pdfStyles.body,
-    headStyles: pdfStyles.head,
-    footStyles: { ...pdfStyles.foot, fillColor: PDF.grandTotalTint },
+    styles: bodyStyle,
+    headStyles: headStyle,
+    footStyles: { ...footStyle, fillColor: PDF.grandTotalTint },
     // A payment-source sub-row gets the same faint tint as its Excel
     // counterpart — never a font change, just enough to read as nested. A
     // sub-row is the one whose Order Reference cell is blank. Plain
@@ -886,21 +932,32 @@ export async function exportFinanceReportPdf(
     stockY += 4
 
     const periodTotal = pfiStock.reduce((s, p) => s + p.volumeSoldPeriod, 0)
+    const valueTotal = pfiStock.reduce((s, p) => s + p.salesValuePeriod, 0)
     autoTable(doc, {
       startY: stockY,
-      head: [['PFI', 'Location', 'Product', 'Tank Quantity', 'Volume Sold (Period)', 'Total Volume Sold', 'Volume Remaining', 'Revenue']],
+      head: [[
+        'PFI', 'Location', 'Product', 'Initial Stock',
+        `Volume Sold (${filters.periodLabel})`, `Sales Value (${filters.periodLabel})`,
+        'Volume Sold (All Time)', 'Volume Remaining', 'Total Revenue (All Time)',
+      ]],
       body: pfiStock.map((p) => [
         up(p.pfiNumber), up(p.locationName), up(p.productName),
         p.initialStock.toLocaleString(), p.volumeSoldPeriod.toLocaleString(),
-        p.volumeSoldAllTime.toLocaleString(), p.volumeRemaining.toLocaleString(), naira(p.revenue),
+        naira(p.salesValuePeriod), p.volumeSoldAllTime.toLocaleString(),
+        p.volumeRemaining.toLocaleString(), naira(p.revenue),
       ]),
       // Only the period-sold column is totalled — initial stock and
       // remaining are per-PFI positions in mixed batches, summing them
       // across PFIs would not mean anything.
-      foot: [['', '', stockTotalLabel(pfiStock.length), '', periodTotal.toLocaleString(), '', '', '']],
-      styles: { ...pdfStyles.body, fontSize: 7 },
-      headStyles: pdfStyles.head,
-      footStyles: pdfStyles.foot,
+      // Both period columns are totalled; the all-time and position columns
+      // are not, for the reason given on the workbook's own total row.
+      foot: [[
+        '', '', stockTotalLabel(pfiStock.length), '',
+        periodTotal.toLocaleString(), naira(valueTotal), '', '', '',
+      ]],
+      styles: { ...bodyStyle, fontSize: 7 },
+      headStyles: headStyle,
+      footStyles: footStyle,
       // A batch charged for more BL than the tank received shows a negative
       // remaining — a real deficit, worth the same red flag it gets on screen.
       didParseCell: (data) => {

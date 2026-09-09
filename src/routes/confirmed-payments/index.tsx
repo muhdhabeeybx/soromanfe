@@ -31,7 +31,7 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate, narrationText,
   transferOrigin, visiblePayments, legacyAmount,
-  orderPaidInto, orderCompany, orderAmountPaid, orderDifferential,
+  orderPaidInto, orderCompany, orderAmountPaid, orderDifferential, orderSalesValue,
   isTransferLeg, isUnreconciled, isSystemDecided,
   useRemoveOrderPayment,
   useReverseOrderTransfer,
@@ -695,9 +695,13 @@ function FinanceReportPage() {
   // reconciliation note below, just not as its own line in the block.
   const pfiStock: PfiStockRow[] = useMemo(() => {
     const soldByPfi = new Map<number, number>()
+    const valueByPfi = new Map<number, number>()
     for (const o of rows) {
       if (o.pfiId == null) continue
       soldByPfi.set(o.pfiId, (soldByPfi.get(o.pfiId) || 0) + Number(o.quantity || 0))
+      // The same rate × litres the report's own Sales Value column uses, so a
+      // PFI's line here and its rows above cannot disagree.
+      valueByPfi.set(o.pfiId, (valueByPfi.get(o.pfiId) || 0) + orderSalesValue(o))
     }
     return listedPfis.map((p) => ({
       pfiNumber: p.pfiNumber,
@@ -705,6 +709,7 @@ function FinanceReportPage() {
       productName: p.productName || '—',
       initialStock: p.startingQtyLitres ?? 0,
       volumeSoldPeriod: soldByPfi.get(Number(p.id ?? p._id)) || 0,
+      salesValuePeriod: valueByPfi.get(Number(p.id ?? p._id)) || 0,
       volumeSoldAllTime: p.financials?.sold ?? 0,
       volumeRemaining: p.financials?.remaining ?? 0,
       revenue: p.financials?.revenue ?? 0,
@@ -957,11 +962,18 @@ function FinanceReportPage() {
                     <TableHead>PFI</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Tank Quantity</TableHead>
-                    <TableHead className="text-right">Volume Sold (Period)</TableHead>
-                    <TableHead className="text-right">Total Volume Sold</TableHead>
+                    {/* Named by what they actually cover. "Volume Sold
+                        (Period)" made a reader hunt for which period, and
+                        "Tank Quantity" and "Revenue" gave no clue that one is
+                        a starting position and the other is all-time — so a
+                        month's volume sat beside a lifetime's money and read
+                        as the same window. */}
+                    <TableHead className="text-right">Initial stock</TableHead>
+                    <TableHead className="text-right">Volume sold ({periodLabel})</TableHead>
+                    <TableHead className="text-right">Sales value ({periodLabel})</TableHead>
+                    <TableHead className="text-right">Volume sold (all time)</TableHead>
                     <TableHead className="text-right">Volume Remaining</TableHead>
-                    <TableHead className="text-right">Revenue</TableHead>
+                    <TableHead className="text-right">Total revenue (all time)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -972,22 +984,27 @@ function FinanceReportPage() {
                       <TableCell className="text-muted-foreground">{p.productName}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">{p.initialStock.toLocaleString()} L</TableCell>
                       <TableCell className="text-right whitespace-nowrap font-medium">{p.volumeSoldPeriod.toLocaleString()} L</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{p.volumeSoldAllTime.toLocaleString()} L</TableCell>
+                      <TableCell className="text-right whitespace-nowrap font-medium">{naira(p.salesValuePeriod)}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap text-muted-foreground">{p.volumeSoldAllTime.toLocaleString()} L</TableCell>
                       <TableCell className={cn('text-right whitespace-nowrap', p.volumeRemaining < 0 && 'text-destructive')}>
                         {p.volumeRemaining.toLocaleString()} L
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{naira(p.revenue)}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap text-muted-foreground">{naira(p.revenue)}</TableCell>
                     </TableRow>
                   ))}
-                  {/* Only the period-sold column is totalled — initial stock
-                      and remaining are per-PFI positions in mixed batches,
-                      summing them across PFIs would not mean anything. */}
+                  {/* Only the period columns are totalled — initial stock and
+                      remaining are per-PFI positions in mixed batches, and the
+                      all-time figures cover different spans per batch, so
+                      summing either across PFIs would not mean anything. */}
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
                     <TableCell colSpan={4} className="text-xs text-muted-foreground">
-                      Total ({pfiStock.length} PFI{pfiStock.length === 1 ? '' : 's'})
+                      Total ({pfiStock.length} PFI{pfiStock.length === 1 ? '' : 's'}) · {periodLabel}
                     </TableCell>
                     <TableCell className="text-right font-semibold whitespace-nowrap">
                       {pfiStock.reduce((s, p) => s + p.volumeSoldPeriod, 0).toLocaleString()} L
+                    </TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap">
+                      {naira(pfiStock.reduce((s, p) => s + p.salesValuePeriod, 0))}
                     </TableCell>
                     <TableCell colSpan={3} />
                   </TableRow>

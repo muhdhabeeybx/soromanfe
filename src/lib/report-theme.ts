@@ -215,6 +215,55 @@ export function paintSigned(cell: any, value: number) {
   else if (value < 0) cell.font = { ...(cell.font || {}), color: { argb: XL.loss } }
 }
 
+/**
+ * Set the document in Satoshi, the face the rest of the company uses.
+ *
+ * Opt-in per report rather than automatic, and it must be awaited BEFORE any
+ * text is drawn or autotable runs — jsPDF resolves a font name at draw time,
+ * so a document that adds the face halfway through comes out half in Helvetica.
+ *
+ * ── The naira glyph ────────────────────────────────────────────────────────
+ *
+ * Satoshi has no U+20A6. It is absent from the face, not lost to subsetting,
+ * so a report set in Satoshi that prints "₦" puts an empty box beside every
+ * figure on it. A caller that switches must also switch its money formatting
+ * to the ISO form — pdfNairaIso below — which is why this is opt-in: doing it
+ * globally would silently break the seven reports that have not.
+ *
+ * Named applySatoshi, not useSatoshi: a `use` prefix makes every React lint
+ * rule treat it as a hook, and it is a plain function called from an export.
+ *
+ * Returns false when the face could not be loaded, and the caller carries on
+ * in Helvetica. A report that renders in the wrong typeface is a blemish; one
+ * that fails to render at all is a person unable to do their job.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function applySatoshi(doc: any): Promise<boolean> {
+  try {
+    const { SATOSHI_REGULAR_B64, SATOSHI_BOLD_B64 } = await import('#/lib/satoshi-pdf-font')
+    doc.addFileToVFS('Satoshi-Regular.ttf', SATOSHI_REGULAR_B64)
+    doc.addFont('Satoshi-Regular.ttf', 'Satoshi', 'normal')
+    doc.addFileToVFS('Satoshi-Bold.ttf', SATOSHI_BOLD_B64)
+    doc.addFont('Satoshi-Bold.ttf', 'Satoshi', 'bold')
+    doc.setFont('Satoshi', 'normal')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Money for a document set in Satoshi: "NGN 1,234.56", never "₦1,234.56".
+ *
+ * The ISO form is standard on financial documents anyway, so this reads as a
+ * deliberate convention rather than a workaround for a missing glyph.
+ */
+export function pdfNairaIso(value: unknown): string {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 'NGN 0.00'
+  return `NGN ${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 // ── autotable presets ─────────────────────────────────────────────────────
 
 export const pdfStyles = {
@@ -264,12 +313,16 @@ export function drawPdfHeader(doc: any, title: string, subtitle: string): number
   doc.setFillColor(...PDF.brandGreen)
   doc.rect(0, 0, pageWidth, 3, 'F')
 
+  // Whatever face the document is already in — a caller that called
+  // useSatoshi() must not have its title silently reset to Helvetica.
+  const face = doc.getFont?.()?.fontName || 'helvetica'
+
   doc.setFontSize(15)
   doc.setTextColor(...PDF.brandGreen)
-  doc.setFont('helvetica', 'bold')
+  doc.setFont(face, 'bold')
   doc.text(title, 14, 15)
 
-  doc.setFont('helvetica', 'normal')
+  doc.setFont(face, 'normal')
   doc.setFontSize(8.5)
   doc.setTextColor(...PDF.inkSoft)
   doc.text(subtitle, 14, 21)
