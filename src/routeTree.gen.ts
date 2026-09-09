@@ -50,6 +50,7 @@ import { Route as DeliveryInventoryIndexRouteImport } from './routes/delivery-in
 import { Route as DeliveryOperationsIndexRouteImport } from './routes/delivery-operations/index'
 import { Route as DeliveryOperationsAllocateTrucksRouteImport } from './routes/delivery-operations/allocate-trucks'
 import { Route as DeliveryOperationsAllocationDetailsRouteImport } from './routes/delivery-operations/allocation-details'
+import { Route as DeliveryOperationsBatchRouteImport } from './routes/delivery-operations/batch'
 import { Route as DeliveryOperationsDetailsRouteImport } from './routes/delivery-operations/details'
 import { Route as DepositsIndexRouteImport } from './routes/deposits/index'
 import { Route as DepositsDetailsRouteImport } from './routes/deposits/details'
@@ -334,6 +335,11 @@ const DeliveryOperationsAllocationDetailsRoute =
     path: '/delivery-operations/allocation-details',
     getParentRoute: () => rootRouteImport,
   } as any)
+const DeliveryOperationsBatchRoute = DeliveryOperationsBatchRouteImport.update({
+  id: '/delivery-operations/batch',
+  path: '/delivery-operations/batch',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryOperationsDetailsRoute =
   DeliveryOperationsDetailsRouteImport.update({
     id: '/delivery-operations/details',
@@ -717,6 +723,7 @@ export interface FileRoutesByFullPath {
   '/delivery-customer/form': typeof DeliveryCustomerFormRoute
   '/delivery-operations/allocate-trucks': typeof DeliveryOperationsAllocateTrucksRoute
   '/delivery-operations/allocation-details': typeof DeliveryOperationsAllocationDetailsRoute
+  '/delivery-operations/batch': typeof DeliveryOperationsBatchRoute
   '/delivery-operations/details': typeof DeliveryOperationsDetailsRoute
   '/deposits/details': typeof DepositsDetailsRoute
   '/deposits/manual-deposit': typeof DepositsManualDepositRoute
@@ -831,6 +838,7 @@ export interface FileRoutesByTo {
   '/delivery-customer/form': typeof DeliveryCustomerFormRoute
   '/delivery-operations/allocate-trucks': typeof DeliveryOperationsAllocateTrucksRoute
   '/delivery-operations/allocation-details': typeof DeliveryOperationsAllocationDetailsRoute
+  '/delivery-operations/batch': typeof DeliveryOperationsBatchRoute
   '/delivery-operations/details': typeof DeliveryOperationsDetailsRoute
   '/deposits/details': typeof DepositsDetailsRoute
   '/deposits/manual-deposit': typeof DepositsManualDepositRoute
@@ -946,6 +954,7 @@ export interface FileRoutesById {
   '/delivery-customer/form': typeof DeliveryCustomerFormRoute
   '/delivery-operations/allocate-trucks': typeof DeliveryOperationsAllocateTrucksRoute
   '/delivery-operations/allocation-details': typeof DeliveryOperationsAllocationDetailsRoute
+  '/delivery-operations/batch': typeof DeliveryOperationsBatchRoute
   '/delivery-operations/details': typeof DeliveryOperationsDetailsRoute
   '/deposits/details': typeof DepositsDetailsRoute
   '/deposits/manual-deposit': typeof DepositsManualDepositRoute
@@ -1062,6 +1071,7 @@ export interface FileRouteTypes {
     | '/delivery-customer/form'
     | '/delivery-operations/allocate-trucks'
     | '/delivery-operations/allocation-details'
+    | '/delivery-operations/batch'
     | '/delivery-operations/details'
     | '/deposits/details'
     | '/deposits/manual-deposit'
@@ -1176,6 +1186,7 @@ export interface FileRouteTypes {
     | '/delivery-customer/form'
     | '/delivery-operations/allocate-trucks'
     | '/delivery-operations/allocation-details'
+    | '/delivery-operations/batch'
     | '/delivery-operations/details'
     | '/deposits/details'
     | '/deposits/manual-deposit'
@@ -1290,6 +1301,7 @@ export interface FileRouteTypes {
     | '/delivery-customer/form'
     | '/delivery-operations/allocate-trucks'
     | '/delivery-operations/allocation-details'
+    | '/delivery-operations/batch'
     | '/delivery-operations/details'
     | '/deposits/details'
     | '/deposits/manual-deposit'
@@ -1405,6 +1417,7 @@ export interface RootRouteChildren {
   DeliveryCustomerFormRoute: typeof DeliveryCustomerFormRoute
   DeliveryOperationsAllocateTrucksRoute: typeof DeliveryOperationsAllocateTrucksRoute
   DeliveryOperationsAllocationDetailsRoute: typeof DeliveryOperationsAllocationDetailsRoute
+  DeliveryOperationsBatchRoute: typeof DeliveryOperationsBatchRoute
   DeliveryOperationsDetailsRoute: typeof DeliveryOperationsDetailsRoute
   DepositsDetailsRoute: typeof DepositsDetailsRoute
   DepositsManualDepositRoute: typeof DepositsManualDepositRoute
@@ -1785,6 +1798,13 @@ declare module '@tanstack/react-router' {
       path: '/delivery-operations/allocation-details'
       fullPath: '/delivery-operations/allocation-details'
       preLoaderRoute: typeof DeliveryOperationsAllocationDetailsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/delivery-operations/batch': {
+      id: '/delivery-operations/batch'
+      path: '/delivery-operations/batch'
+      fullPath: '/delivery-operations/batch'
+      preLoaderRoute: typeof DeliveryOperationsBatchRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/delivery-operations/details': {
@@ -2310,6 +2330,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeliveryOperationsAllocateTrucksRoute: DeliveryOperationsAllocateTrucksRoute,
   DeliveryOperationsAllocationDetailsRoute:
     DeliveryOperationsAllocationDetailsRoute,
+  DeliveryOperationsBatchRoute: DeliveryOperationsBatchRoute,
   DeliveryOperationsDetailsRoute: DeliveryOperationsDetailsRoute,
   DepositsDetailsRoute: DepositsDetailsRoute,
   DepositsManualDepositRoute: DepositsManualDepositRoute,

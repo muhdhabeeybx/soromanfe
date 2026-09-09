@@ -10,8 +10,7 @@ import {
   Plus, Search, Download,
   Truck, Droplets, CheckCircle2,
   X, Tag, Settings, Calendar,
-  Loader2, Split,
-} from 'lucide-react'
+  Loader2, Split, Package } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -470,6 +469,14 @@ function DeliveryOperationsPage() {
             <Button variant="outline" className="gap-2 cursor-pointer" onClick={() => setManageCodesOpen(true)}>
               <Settings className="size-4" /> Manage Codes
             </Button>
+            {/* Creating the batch comes before allocating trucks to it, so it
+                sits to the left of that button and carries the plain style —
+                the accent stays on the action people take most. */}
+            <Link to="/delivery-operations/batch" search={{ id: undefined }}>
+              <Button variant="outline" className="gap-2 cursor-pointer">
+                <Package className="size-4" /> New Batch
+              </Button>
+            </Link>
             <Link to="/delivery-operations/allocate-trucks">
               <Button className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer">
                 <Plus className="size-4" /> Allocate Trucks
