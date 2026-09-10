@@ -1,15 +1,13 @@
-import { useState } from 'react'
-import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { ArrowLeft, Loader2, Truck } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Button } from '#/components/ui/button'
-import { Input } from '#/components/ui/input'
-import { Label } from '#/components/ui/label'
-import { NativeSelect } from '#/components/ui/native-select'
+import {
+  Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
+} from '#/components/ui/empty'
 import { DeliveryBatchPanel } from '#/components/DeliveryBatchPanel'
-import { useCreatePfi, usePfiDetail, useDepotsForFilter } from '#/lib/hooks/usePfis'
-import { useProductList } from '#/lib/hooks/useProducts'
+import { usePfiDetail } from '#/lib/hooks/usePfis'
 import { routeGuard } from '#/lib/route-guard'
 import { PANEL, PANEL_BODY, PANEL_RAIL, MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
@@ -23,75 +21,72 @@ export const Route = createFileRoute('/delivery-operations/batch')({
 })
 
 /**
- * Create a delivery batch, then say where it may be sold and what carried it.
+ * One delivery batch: where it may be sold, and what each truck carried.
  *
  * A delivery allocation is a PFI — the same table, the same finance report
- * line, the same expense chart — so this creates one with pfi_type
- * 'delivery' rather than inventing a parallel record. What makes it a
- * delivery batch is the two things a cargo has no use for: an allowlist of
+ * line, the same expense chart — so it is not a parallel record. What makes it
+ * a delivery batch is the two things a cargo has no use for: an allowlist of
  * depots that may sell from it, and a manifest of what each truck loaded.
  *
- * ── Why creation comes first, in its own step ──────────────────────────────
+ * ── This page no longer creates anything ──────────────────────────────────
  *
- * Locations and trucks both hang off a PFI id, and there is no id until the
- * batch exists. Collecting all three on one form would mean holding a
- * manifest in memory and replaying it after the create succeeded — and
- * failing halfway would lose it. So the batch is created with the little it
- * needs, and everything else is edited against a row that already exists and
- * saves on its own.
+ * It used to, on a form that took a name and a depot and left the trucks to a
+ * second step, because locations and trucks are addressed by a PFI id and
+ * there is no id until the batch exists. That sequencing is real, but staging
+ * it across two screens was the wrong place to solve it: it made the primary
+ * action on the inventory page lead somewhere that could not finish the job.
+ * Creating a batch is now one dialog on that page, and the sequencing lives in
+ * useCreateDeliveryBatch. What is left here is what a batch page should be —
+ * the batch as it stands, and the two things about it that are edited after
+ * the fact.
  *
- * The quantity is deliberately absent from this form. It is not typed; it is
- * the sum of what the trucks loaded, and it appears once there is a manifest.
+ * The quantity is deliberately not editable. It is not typed; it is the sum of
+ * what the trucks loaded, rebuilt server-side whenever the manifest is saved.
  */
 function DeliveryBatchPage() {
-  const navigate = useNavigate()
   const { id } = Route.useSearch()
 
-  const { data: depots = [] } = useDepotsForFilter()
-  const { data: productData } = useProductList()
-  const products = productData?.products ?? productData ?? []
-
-  const createPfi = useCreatePfi()
   // usePfiDetail answers with the batch plus its expenses, movements and
   // orders; only the batch itself is wanted here.
   const { data: detail, isLoading } = usePfiDetail(id ?? null)
   const pfi = detail?.pfi
 
-  const [pfiNumber, setPfiNumber] = useState('')
-  const [depotId, setDepotId] = useState('')
-  const [productId, setProductId] = useState('')
-  const [description, setDescription] = useState('')
-
-  const canCreate = pfiNumber.trim().length > 0 && depotId !== '' && !createPfi.isPending
-
-  const create = async () => {
-    const res = await createPfi.mutateAsync({
-      pfiNumber: pfiNumber.trim(),
-      pfiType: 'delivery',
-      locationId: Number(depotId),
-      productId: productId ? Number(productId) : undefined,
-      description: description.trim(),
-      // Zero until the manifest says otherwise. See the note above.
-      startingQtyLitres: 0,
-    })
-    const created = res?.data?.pfi ?? res?.data
-    if (created?.id) {
-      navigate({ to: '/delivery-operations/batch', search: { id: Number(created.id) } })
-    }
+  if (id == null) {
+    return (
+      <div className="animate-fade-in space-y-6">
+        <PageHeader
+          eyebrow="Delivery Inventory"
+          title="Delivery batch"
+          description="Open a batch from the inventory to edit its locations and manifest."
+        />
+        <Empty className="py-16">
+          <EmptyHeader>
+            <EmptyMedia><Truck /></EmptyMedia>
+            <EmptyTitle>No batch chosen</EmptyTitle>
+            <EmptyDescription>
+              Batches are created from the inventory page, where New Batch takes the code, the
+              depot, the trucks and what each one loaded in one go.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Link to="/delivery-operations">
+              <Button>
+                <ArrowLeft data-icon="inline-start" />
+                Back to inventory
+              </Button>
+            </Link>
+          </EmptyContent>
+        </Empty>
+      </div>
+    )
   }
-
-  const heading = id ? (pfi?.pfiNumber || 'Delivery batch') : 'New delivery batch'
 
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader
         eyebrow="Delivery Inventory"
-        title={heading}
-        description={
-          id
-            ? 'Where this batch may be sold, and what each truck actually carried.'
-            : 'A delivery batch is a PFI. Name it and say where it loads, then add its locations and trucks.'
-        }
+        title={pfi?.pfiNumber || 'Delivery batch'}
+        description="Where this batch may be sold, and what each truck actually carried."
         actions={
           <div className="flex gap-2">
             <Link to="/delivery-operations">
@@ -100,16 +95,17 @@ function DeliveryBatchPage() {
                 Back to inventory
               </Button>
             </Link>
-            {/* Allocating trucks to customers is the one thing done to a batch
-                that is a sale rather than a fact about the batch, so it keeps
-                its own screen — but it is reached from the batch it belongs
-                to, not from a header three levels up that has no idea which
-                batch you meant. */}
-            {id && (
-              <Link to="/delivery-operations/allocate-trucks">
+            {/* Selling a load is a different job from recording one, and it is
+                done per truck — a customer, a rate, a destination, an offload
+                date. That is the allocation register, keyed by this batch's
+                code. This button used to point at the old Allocate Trucks
+                screen under the label "Allocate to customers", which is not
+                what that screen did. */}
+            {pfi?.pfiNumber && (
+              <Link to="/delivery-operations/allocation-details" search={{ code: pfi.pfiNumber }}>
                 <Button>
                   <Truck data-icon="inline-start" />
-                  Allocate to customers
+                  Sell these loads
                 </Button>
               </Link>
             )}
@@ -117,74 +113,7 @@ function DeliveryBatchPage() {
         }
       />
 
-      {!id ? (
-        <section className={PANEL}>
-          <div className={PANEL_RAIL}>
-            <span className={MICRO}>The batch</span>
-          </div>
-          <div className={cn(PANEL_BODY, 'grid gap-4 sm:grid-cols-2')}>
-            <div className="space-y-1.5">
-              <Label htmlFor="pfiNumber">Batch name</Label>
-              <Input
-                id="pfiNumber"
-                value={pfiNumber}
-                onChange={(e) => setPfiNumber(e.target.value)}
-                placeholder="PFI-25C"
-              />
-              <p className={cn(MICRO, 'text-muted-foreground')}>
-                Whatever the desk calls it. It is the PFI number, so it appears under this name
-                everywhere a batch does.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="depot">Loaded from</Label>
-              <NativeSelect id="depot" value={depotId} onChange={(e) => setDepotId(e.target.value)}>
-                <option value="">Select the depot it loads at…</option>
-                {depots.map((d) => (
-                  <option key={String(d.id ?? d._id)} value={String(d.id ?? d._id)}>{d.name}</option>
-                ))}
-              </NativeSelect>
-              <p className={cn(MICRO, 'text-muted-foreground')}>
-                Where the trucks load. Which locations may sell from it comes next.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="product">Product</Label>
-              <NativeSelect id="product" value={productId} onChange={(e) => setProductId(e.target.value)}>
-                <option value="">Select a product…</option>
-                {(products as Array<{ id?: number | string; _id?: string; name: string }>).map((p) => (
-                  <option key={String(p.id ?? p._id)} value={String(p.id ?? p._id)}>{p.name}</option>
-                ))}
-              </NativeSelect>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="description">Note</Label>
-              <Input
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional"
-              />
-            </div>
-
-            <div className="sm:col-span-2 flex items-center justify-between gap-3 border-t border-foreground/10 pt-4">
-              {/* Said plainly, because a form with no quantity field on it
-                  otherwise reads as one that is missing something. */}
-              <p className="text-xs text-muted-foreground">
-                No quantity here — a delivery batch is worth what its trucks loaded, so it is
-                filled in by the manifest on the next step.
-              </p>
-              <Button disabled={!canCreate} onClick={create}>
-                {createPfi.isPending && <Loader2 className="animate-spin" />}
-                Create batch
-              </Button>
-            </div>
-          </div>
-        </section>
-      ) : isLoading ? (
+      {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="size-5 animate-spin" /></div>
       ) : (
         <>

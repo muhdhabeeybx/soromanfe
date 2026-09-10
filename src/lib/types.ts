@@ -273,14 +273,22 @@ export interface LpgStationItem {
 }
 
 /**
- * The two kinds of batch, which share almost nothing beyond a number.
+ * The three kinds of batch, which share almost nothing beyond a number.
  *
  * A coastal batch arrives by sea: it is billed on the BL figure from the
  * shipping papers, measured again in the tank, and carries a vessel and a
  * surveyor. A gantry batch is an allocation bought at the loading gantry and
  * split into tickets — one quantity, no BL, no vessel, no surveyor.
+ *
+ * A delivery batch is loaded onto trucks at one depot and sold at several, so
+ * it is the only one with an allowlist of depots that may sell from it and a
+ * manifest of what each truck carried — and its quantity is the sum of that
+ * manifest rather than a figure anybody types. The value has been written to
+ * the column since Sman-Backend migration 0027; this union had not caught up,
+ * so every screen that reads a delivery batch was comparing against a member
+ * TypeScript believed could not exist.
  */
-export type PfiType = 'coastal' | 'gantry'
+export type PfiType = 'coastal' | 'gantry' | 'delivery'
 
 /**
  * A batch's trading life.

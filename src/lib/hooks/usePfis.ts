@@ -979,3 +979,180 @@ export function useSetPfiTrucks(pfiId: number | null) {
     onError: (err) => toast.error(getErrorMessage(err)),
   })
 }
+
+/** One truck as the New Batch dialog collects it, before it is anything. */
+export interface DeliveryBatchTruck {
+  truckId?: number | null
+  plateNumber: string
+  capacity?: number | null
+  loadedQty: number
+}
+
+export interface DeliveryBatchDraft {
+  /** Omit to append to `pfiId` instead of creating a batch. */
+  pfiNumber?: string
+  /** Set to append trucks to a batch that already exists. */
+  pfiId?: number
+  /** The depot the trucks load at. Required when creating. */
+  locationId?: number
+  productId?: number
+  /** Names, for the operations rows — those columns hold text, not ids. */
+  depotName?: string
+  productName?: string
+  description?: string
+  dateAllocated: string
+  /** Depots that may sell from the batch. Replaces the existing allowlist. */
+  sellAtDepotIds?: number[]
+  trucks: DeliveryBatchTruck[]
+}
+
+/** Thrown once the batch itself exists, so the caller can offer to open it. */
+export class DeliveryBatchPartial extends Error {
+  // Assigned in the body rather than declared as constructor parameters:
+  // `erasableSyntaxOnly` is on, and parameter properties emit real code.
+  readonly pfiId: number
+  readonly step: string
+
+  constructor(pfiId: number, step: string, cause: unknown) {
+    super(`Batch created, but ${step} failed: ${getErrorMessage(cause)}`)
+    this.name = 'DeliveryBatchPartial'
+    this.pfiId = pfiId
+    this.step = step
+  }
+}
+
+/**
+ * Create a delivery batch and everything that hangs off it, in one call.
+ *
+ * Locations, the manifest and the operations rows all need a PFI id, and there
+ * is no id until the batch exists — which is why this used to be a two-step
+ * form: create, then edit. That was the wrong trade. Nobody allocates trucks
+ * as a separate errand later; the trucks are the reason the batch is being
+ * created, and a form that takes the name and then asks you to come back is a
+ * form that lost the thing you opened it for.
+ *
+ * So the steps are sequenced here rather than staged across two screens. The
+ * batch is created first because everything else is addressed by its id, and
+ * if a later step fails the id is thrown out with the error — the batch is
+ * real by then, and the caller can send you to it rather than making you
+ * retype a manifest against a row that already exists.
+ *
+ * ── The manifest and the operations rows are both written ─────────────────
+ *
+ * They are not duplicates. `pfi_trucks` is the manifest: it is what the batch
+ * quantity is rebuilt from, server-side. `delivery_inventory` is the
+ * operational record of each load — the row that gets a customer, a
+ * destination, a rate and an offload date, and the row the inventory page
+ * lists. A batch written to only one of them is either a batch with no
+ * quantity or a batch that never appears on the page it belongs to, so both
+ * are written from the same truck list, here, where they cannot disagree.
+ */
+export function useCreateDeliveryBatch() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (draft: DeliveryBatchDraft) => {
+      let pfiId = draft.pfiId
+
+      if (pfiId == null) {
+        const res = await api.post('/pfis', {
+          pfiNumber: draft.pfiNumber,
+          pfiType: 'delivery',
+          locationId: draft.locationId,
+          productId: draft.productId,
+          description: draft.description,
+          pfiDate: draft.dateAllocated,
+          // Rebuilt from the manifest below. Never typed — see the note above
+          // DeliveryBatchPanel on why a batch is worth what its trucks loaded.
+          startingQtyLitres: 0,
+        })
+        const created = res.data?.data?.pfi ?? res.data?.data
+        if (!created?.id) throw new Error('The batch was created but came back without an id')
+        pfiId = Number(created.id)
+      }
+
+      const code = (draft.pfiNumber || '').trim().toUpperCase().replace(/\s+/g, '-') || undefined
+
+      // Past this line the batch exists, so every failure carries its id.
+      const step = async <T,>(what: string, run: () => Promise<T>) => {
+        try {
+          return await run()
+        } catch (err) {
+          throw new DeliveryBatchPartial(pfiId!, what, err)
+        }
+      }
+
+      if (draft.sellAtDepotIds?.length) {
+        await step('saving its locations', () =>
+          api.put(`/pfis/${pfiId}/locations`, { depotIds: draft.sellAtDepotIds }),
+        )
+      }
+
+      if (draft.trucks.length > 0) {
+        // Appending, not replacing: PUT /trucks takes the whole manifest, so
+        // trucks already on an existing batch have to be sent back with the
+        // new ones or the save would delete them.
+        const existing = draft.pfiId == null
+          ? []
+          : ((await step('reading its manifest', () => api.get(`/pfis/${pfiId}/trucks`)))
+              .data?.data?.trucks ?? []) as PfiTruck[]
+
+        await step('saving the manifest', () =>
+          api.put(`/pfis/${pfiId}/trucks`, {
+            trucks: [
+              ...existing.map((t) => ({
+                truckId: t.truckId ?? null,
+                plateNumber: t.plateNumber,
+                capacity: t.capacity ?? null,
+                loadedQty: t.loadedQty,
+              })),
+              ...draft.trucks.map((t) => ({
+                truckId: t.truckId ?? null,
+                plateNumber: t.plateNumber,
+                capacity: t.capacity ?? null,
+                loadedQty: t.loadedQty,
+              })),
+            ],
+          }),
+        )
+
+        await step('creating the truck records', () =>
+          Promise.all(
+            draft.trucks.map((t) =>
+              api.post('/delivery-inventory', {
+                // Both casings, as every other caller of this endpoint sends:
+                // the serialiser answers in camel and accepts either.
+                allocation_code: code, allocationCode: code,
+                pfi_id: pfiId, pfiId,
+                truck: t.truckId != null ? String(t.truckId) : undefined,
+                truck_id: t.truckId ?? undefined, truckId: t.truckId ?? undefined,
+                truck_number: t.plateNumber, truckNumber: t.plateNumber,
+                depot: draft.depotName || undefined,
+                pfi_product: draft.productName || undefined,
+                pfiProduct: draft.productName || undefined,
+                // What went on, not what it holds. The old screen wrote
+                // capacity here, which overstated every truck that loaded
+                // short — and most of them do.
+                quantity_allocated: t.loadedQty, quantityAllocated: t.loadedQty,
+                date_allocated: draft.dateAllocated, dateAllocated: draft.dateAllocated,
+                loading_status: 'loaded', loadingStatus: 'loaded',
+              }),
+            ),
+          ),
+        )
+      }
+
+      return { pfiId: pfiId! }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+      queryClient.invalidateQueries({ queryKey: ['pfi-locations'] })
+      queryClient.invalidateQueries({ queryKey: ['pfi-trucks'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}

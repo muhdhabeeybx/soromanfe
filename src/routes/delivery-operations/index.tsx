@@ -1,12 +1,20 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { Fragment, useState, useMemo, useCallback, useEffect } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { PageHeader } from '#/components/PageHeader'
 import { FilterBar } from '#/components/FilterBar'
 import { NativeSelect } from '#/components/ui/native-select'
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '#/components/ui/table'
+import { StatusChip } from '#/components/ui/status-chip'
+import {
+  Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
+} from '#/components/ui/empty'
+import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
-import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Tag, Settings, Calendar, Loader2, Split } from 'lucide-react'
+import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings, ChevronRight, Loader2, Split } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -24,6 +32,7 @@ import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
 import { ManageCodesDialog } from '#/components/delivery-operations/ManageCodesDialog'
+import { NewBatchDialog } from '#/components/delivery-operations/NewBatchDialog'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/delivery-operations/')({
@@ -36,24 +45,6 @@ export const Route = createFileRoute('/delivery-operations/')({
 // ═══════════════════════════════════════════════════════════════════════════
 
 const fmtQty = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 })
-
-const CODE_PALETTE = [
-  { header: 'bg-muted', row: 'border-l-sky-300', badge: 'bg-muted text-foreground border-border' },
-  { header: 'bg-accent/10', row: 'border-l-emerald-300', badge: 'bg-accent/10 text-accent border-accent/40' },
-  { header: 'bg-warning/10', row: 'border-l-orange-300', badge: 'bg-warning/10 text-warning border-warning/40' },
-  { header: 'bg-muted', row: 'border-l-violet-300', badge: 'bg-muted text-foreground border-border' },
-  { header: 'bg-muted', row: 'border-l-pink-300', badge: 'bg-muted text-foreground border-border' },
-  { header: 'bg-warning/10', row: 'border-l-amber-300', badge: 'bg-warning/10 text-warning border-warning/40' },
-  { header: 'bg-accent/10', row: 'border-l-teal-300', badge: 'bg-accent/10 text-accent border-accent/40' },
-  { header: 'bg-muted', row: 'border-l-indigo-300', badge: 'bg-muted text-foreground border-border' },
-]
-
-const getCodeTheme = (code: string) => {
-  if (!code) return null
-  let hash = 0
-  for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) >>> 0
-  return CODE_PALETTE[hash % CODE_PALETTE.length]
-}
 
 // 'other' is every row whose status is neither loaded nor offloaded — the
 // `empty` rows had no filter that could reach them before.
@@ -127,6 +118,13 @@ function DeliveryOperationsPage() {
     try { return JSON.parse(localStorage.getItem('dsl_trip_codes') || '[]') } catch { return [] }
   })
   const [manageCodesOpen, setManageCodesOpen] = useState(false)
+  const [newBatchOpen, setNewBatchOpen] = useState(false)
+  /**
+   * Which batch is open, by code. One at a time, deliberately: the point of
+   * the summary rows is that batches can be compared down a column, and every
+   * batch expanded at once is the wall of cards this replaced.
+   */
+  const [openBatch, setOpenBatch] = useState<string | null>(null)
 
   // Persist codes
   useEffect(() => {
@@ -466,22 +464,27 @@ function DeliveryOperationsPage() {
           that batch's manifest. Three buttons made them read as three separate
           jobs to be done in an order nobody had written down.
 
-          Creating a batch is now the only entry point, and everything done TO
-          a batch — its locations, its trucks, its allocations — lives on that
-          batch's own page, reached by opening it. Manage Codes goes with them:
-          a code with no batch behind it was a label waiting for something to
-          label.
+          Creating a batch is now the only entry point, and it opens a dialog
+          that can finish the job — code, depot, product, date, the trucks and
+          what each one loaded, and the depots allowed to sell from it. The
+          first cut of this led to a create page that took a name and left the
+          trucks to a second screen, which meant the primary action on this
+          page could not do the thing the page is for. Everything done to a
+          batch AFTERWARDS — editing its manifest, its locations, allocating
+          it to customers — still lives on that batch's own page, reached by
+          opening it.
         */
         actions={
           <div className="flex gap-2">
             <Button variant="outline" className="gap-2 cursor-pointer" onClick={exportCSV} disabled={filtered.length === 0}>
               <Download className="size-4" /> Export
             </Button>
-            <Link to="/delivery-operations/batch" search={{ id: undefined }}>
-              <Button className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer">
-                <Plus className="size-4" /> New Batch
-              </Button>
-            </Link>
+            <Button
+              className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer"
+              onClick={() => setNewBatchOpen(true)}
+            >
+              <Plus className="size-4" /> New Batch
+            </Button>
           </div>
         }
       />
@@ -588,192 +591,232 @@ function DeliveryOperationsPage() {
         </div>
       )}
 
-      {/* Allocation Cards */}
+      {/*
+        Batches as rows, not as a wall of cards.
+
+        Every batch used to be a full-width card carrying six stacked sections
+        — a code badge, a product pill, a "PFI Reference" list, a boxed volume
+        figure, status chips and a date footer — in a grid declared
+        grid-cols-1 sm:grid-cols-1 lg:grid-cols-1, so one batch filled most of
+        a screen and comparing two meant scrolling between them. The card was
+        also tinted by a hash of its own code, which put every batch on a
+        different background for no reason a reader could act on, and painted
+        the product name text-accent on bg-accent/80.
+
+        A batch is a handful of figures. Figures belong in aligned columns:
+        the same eight facts, one row each, in the table idiom every other
+        list page in the app already uses. Opening a row shows the trucks
+        underneath it — the thing the card could never do, because it had no
+        room left.
+      */}
       {isLoading ? (
         <div className="flex items-center justify-center py-24">
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-card rounded-xl border border-border p-16 text-center">
-          <Truck className="size-10 mx-auto text-muted-foreground mb-3" />
-          <p className="text-muted-foreground font-normal">
-            {hasAnyFilter ? 'No records match your filters' : 'No truck records yet'}
-          </p>
-          <p className="text-sm text-muted-foreground/70 mt-1">
-            {hasAnyFilter
-              ? 'Try adjusting your search, filters, or date range.'
-              : 'Click "Allocate Trucks" to start tracking deliveries.'}
-          </p>
-          {hasAnyFilter && (
-            <Button variant="outline" size="sm" className="mt-3 gap-1.5 cursor-pointer" onClick={clearAllFilters}>
-              <X className="size-3.5" /> Clear all filters
-            </Button>
-          )}
-        </div>
+        <Empty className="py-16">
+          <EmptyHeader>
+            <EmptyMedia><Truck /></EmptyMedia>
+            <EmptyTitle>{hasAnyFilter ? 'No records match your filters' : 'No truck records yet'}</EmptyTitle>
+            <EmptyDescription>
+              {hasAnyFilter
+                ? 'Try adjusting your search, filters, or date range.'
+                : 'Create a batch and tick the trucks that carried it.'}
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            {hasAnyFilter ? (
+              <Button variant="outline" size="sm" onClick={clearAllFilters}>
+                <X data-icon="inline-start" /> Clear all filters
+              </Button>
+            ) : (
+              <Button onClick={() => setNewBatchOpen(true)}>
+                <Plus data-icon="inline-start" /> New batch
+              </Button>
+            )}
+          </EmptyContent>
+        </Empty>
       ) : (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-1 lg:grid-cols-1 gap-4">
-            {grouped.map(([code, records]) => {
-              const theme = code ? getCodeTheme(code) : null
-              const totalQty = records.reduce((s, r) => s + r.qty, 0)
-              const loadedCount = records.filter(r => r.status.key === 'loaded').length
-              const soldCount = records.filter(r => r.status.key === 'offloaded').length
-              const loadedQty = records.filter(r => r.status.key === 'loaded').reduce((s, r) => s + r.qty, 0)
-              const soldQty = records.filter(r => r.status.key === 'offloaded').reduce((s, r) => s + r.qty, 0)
-              // Neither loaded nor sold. Without this chip a card could read
-              // "36 trucks" over two chips that counted none of them.
-              const otherRecords = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
-              const otherQty = otherRecords.reduce((s, r) => s + r.qty, 0)
-              const unit = records[0]?.unitLabel || 'Litres'
-              // Trucks on this batch sold to more than one customer. Worth
-              // saying on the card: the volume above is whole trucks, and a
-              // split one is read differently once you open it.
-              const splitRecords = records.filter(r => r.split.isSplit)
-              const splitQty = splitRecords.reduce((sum, r) => sum + r.qty, 0)
-
-              const distinctPfis = [...new Set(records.map(r => r.pfiLabel).filter(Boolean))]
-              const distinctProducts = [...new Set(records.map(r => r.product).filter(Boolean))]
-              const distinctDepots = [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
-              const distinctDestinations = [...new Set(records.map(r => r.destination).filter(Boolean))]
-
-              const latestDate = records.reduce((max, r) => {
-                const d = r.dateOffloaded || r.dateLoaded || ''
-                return d > max ? d : max
-              }, '')
-
-              return (
-                <Link
-                  key={code || '__none__'}
-                  to="/delivery-operations/allocation-details"
-                  search={{ code }}
-                  className="block group"
-                >
-                  <div className={cn(
-                    'bg-card rounded-xl border border-border p-5 transition-all cursor-pointer space-y-3 duration-250 ease-luxe',
-                    ' hover:border-accent/40 dark:hover:border-accent hover:-translate-y-0.5',
-                    theme && `${theme.header}`
-                  )}>
-                    {/* Top: Code + Truck Count */}
-                    <div className="flex items-start justify-between">
-                      {code ? (
-                        <span className={cn('inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border', theme?.badge || 'bg-muted text-muted-foreground border-border')}>
-                          <Tag className="size-3" /> {code}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border bg-muted text-muted-foreground border-border">
-                          <Tag className="size-3" /> No Code
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground bg-card/90 px-2.5 py-1 rounded-lg border border-border/80">
-                        <Truck className="size-3.5 text-accent" />
-                        {records.length} {records.length === 1 ? 'truck' : 'trucks'}
-                      </span>
-                    </div>
-
-                    {/* Product & Depot */}
-                    {(distinctProducts.length > 0 || distinctDepots.length > 0) && (
-                      <div className="flex items-center justify-between gap-2 text-xs pt-0.5">
-                        {distinctProducts.length > 0 && (
-                          <span className="font-semibold text-accent bg-accent/80 dark:bg-accent/60 px-2 py-0.5 rounded text-xs">
-                            {distinctProducts.join(', ')}
-                          </span>
-                        )}
-                        {distinctDepots.length > 0 && (
-                          <span className="truncate text-muted-foreground font-normal text-xs">
-                            📍 {distinctDepots.join(', ')}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* PFI Reference */}
-                    <div>
-                      <div className="text-xs font-semibold text-muted-foreground uppercase mb-1">PFI Reference</div>
-                      {distinctPfis.length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {distinctPfis.slice(0, 3).map(pfi => (
-                            <span key={pfi} className="text-xs font-semibold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border">
-                              {pfi}
-                            </span>
-                          ))}
-                          {distinctPfis.length > 3 && (
-                            <span className="text-xs text-muted-foreground">+{distinctPfis.length - 3} more</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </div>
-
-                    {/* Total Quantity / Volume */}
-                    <div className="space-y-1.5 bg-muted/80 dark:bg-foreground/60 p-2.5 rounded-lg border border-border/70 dark:border-border">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-normal text-muted-foreground">Total Volume</span>
-                        <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground dark:text-muted-foreground">
-                          <Droplets className="size-3.5 text-muted-foreground" />
-                          {fmtQty(totalQty)} {unit}
-                        </span>
-                      </div>
-                      {splitRecords.length > 0 && (
-                        <div className="flex items-center justify-between border-t border-border/50 pt-1.5">
-                          <span className="flex items-center gap-1 text-xs font-normal text-blue-700 dark:text-blue-300">
-                            <Split className="size-3" />
-                            {splitRecords.length} split {splitRecords.length === 1 ? 'load' : 'loads'}
-                          </span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            {fmtQty(splitQty)} {unit} across {splitRecords.reduce((n, r) => n + r.split.shares.length, 0)} customers
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Status Badges */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {loadedCount > 0 && (
-                        <span className="text-xs font-normal text-warning bg-warning/10 px-2 py-0.5 rounded-full border border-warning/40 dark:border-warning/20">
-                          {loadedCount} in transit ({fmtQty(loadedQty)} L)
-                        </span>
-                      )}
-                      {soldCount > 0 && (
-                        <span className="text-xs font-normal text-accent bg-accent/10 px-2 py-0.5 rounded-full border border-accent/40 dark:border-accent/20">
-                          {soldCount} sold ({fmtQty(soldQty)} L)
-                        </span>
-                      )}
-                      {otherRecords.length > 0 && (
-                        <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full border border-border">
-                          {otherRecords.length} {STATUS_DISPLAY.empty.label.toLowerCase()} ({fmtQty(otherQty)} L)
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Latest Date & Destination Footer */}
-                    {latestDate && (
-                      <div className="pt-2.5 border-t border-border/60 flex items-center justify-between text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <Calendar className="size-3" />
-                          {(() => { try { return format(parseISO(latestDate), 'dd MMM yyyy') } catch { return latestDate } })()}
-                        </span>
-                        {distinctDestinations.length > 0 && (
-                          <span className="truncate max-w-[140px] text-xs text-muted-foreground/80 font-normal" title={distinctDestinations.join(', ')}>
-                            To: {distinctDestinations[0]} {distinctDestinations.length > 1 ? `+${distinctDestinations.length - 1}` : ''}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </Link>
-              )
-            })}
+        <section className={PANEL}>
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>Batches</span>
+            <span className={cn(MICRO, 'text-muted-foreground')}>
+              {filtered.length} truck{filtered.length === 1 ? '' : 's'} in {grouped.length} batch{grouped.length === 1 ? '' : 'es'}
+            </span>
           </div>
 
-          <p className="text-xs text-muted-foreground text-right">
-            {filtered.length} record{filtered.length !== 1 ? 's' : ''} in {grouped.length} allocation{grouped.length !== 1 ? 's' : ''}
-          </p>
-        </>
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/60 hover:bg-muted/60">
+                <TableHead className="w-8" />
+                <TableHead className="font-semibold text-muted-foreground">Batch</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">Product</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">Loaded at</TableHead>
+                <TableHead className="text-right font-semibold text-muted-foreground">Trucks</TableHead>
+                <TableHead className="text-right font-semibold text-muted-foreground">Volume</TableHead>
+                <TableHead className="text-right font-semibold text-warning">In transit</TableHead>
+                <TableHead className="text-right font-semibold text-accent">Sold</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">Last movement</TableHead>
+                <TableHead className="w-8" />
+              </TableRow>
+            </TableHeader>
+
+            <TableBody>
+              {grouped.map(([code, records]) => {
+                const key = code || '__none__'
+                const isOpen = openBatch === key
+                const unit = records[0]?.unitLabel || 'Litres'
+                const totalQty = records.reduce((s, r) => s + r.qty, 0)
+
+                const loaded = records.filter(r => r.status.key === 'loaded')
+                const sold = records.filter(r => r.status.key === 'offloaded')
+                // Neither loaded nor sold. Counted separately or the two
+                // columns above could read 0 and 0 over a batch of 36 trucks.
+                const other = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
+
+                const products = [...new Set(records.map(r => r.product).filter(Boolean))]
+                const depots = [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
+                const latestDate = records.reduce((max, r) => {
+                  const d = r.dateOffloaded || r.dateLoaded || ''
+                  return d > max ? d : max
+                }, '')
+
+                return (
+                  <Fragment key={key}>
+                    <TableRow
+                      className="cursor-pointer bg-card"
+                      onClick={() => setOpenBatch(isOpen ? null : key)}
+                    >
+                      <TableCell className="pr-0 text-muted-foreground">
+                        <ChevronRight className={cn('size-4 transition-transform duration-250 ease-luxe', isOpen && 'rotate-90')} />
+                      </TableCell>
+                      <TableCell>
+                        {/* The code links out; the rest of the row expands.
+                            Two things to do with a batch, and clicking the
+                            name of it is the one that means "open it". */}
+                        <Link
+                          to="/delivery-operations/allocation-details"
+                          search={{ code }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-semibold uppercase underline-offset-4 hover:underline"
+                        >
+                          {code || 'No code'}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {products.length ? products.join(', ') : '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[180px] truncate text-muted-foreground" title={depots.join(', ')}>
+                        {depots.length ? depots.join(', ') : '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{records.length}</TableCell>
+                      {/* The unit is the batch's own, not a hard-coded L —
+                          this page carries LPG in kilograms too. */}
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {fmtQty(totalQty)} <span className="font-normal text-muted-foreground">{unit}</span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {loaded.length ? (
+                          <>
+                            <span className="font-semibold text-warning">{loaded.length}</span>
+                            <span className="text-muted-foreground"> · {fmtQty(loaded.reduce((s, r) => s + r.qty, 0))}</span>
+                          </>
+                        ) : <span className="text-muted-foreground/50">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {sold.length ? (
+                          <>
+                            <span className="font-semibold text-accent">{sold.length}</span>
+                            <span className="text-muted-foreground"> · {fmtQty(sold.reduce((s, r) => s + r.qty, 0))}</span>
+                          </>
+                        ) : <span className="text-muted-foreground/50">—</span>}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {latestDate
+                          ? (() => { try { return format(parseISO(latestDate), 'dd MMM yyyy') } catch { return latestDate } })()
+                          : '—'}
+                      </TableCell>
+                      <TableCell className="pl-0">
+                        {other.length > 0 && (
+                          <StatusChip tone="inert" title={`${other.length} ${STATUS_DISPLAY.empty.label.toLowerCase()}`}>
+                            {other.length}
+                          </StatusChip>
+                        )}
+                      </TableCell>
+                    </TableRow>
+
+                    {isOpen && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={10} className="bg-muted/30 p-0">
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="hover:bg-transparent">
+                                <TableHead className="pl-12 font-semibold text-muted-foreground">Truck</TableHead>
+                                <TableHead className="font-semibold text-muted-foreground">Driver</TableHead>
+                                <TableHead className="font-semibold text-muted-foreground">Customer</TableHead>
+                                <TableHead className="font-semibold text-muted-foreground">Destination</TableHead>
+                                <TableHead className="text-right font-semibold text-muted-foreground">Quantity</TableHead>
+                                <TableHead className="text-right font-semibold text-muted-foreground">Rate</TableHead>
+                                <TableHead className="font-semibold text-muted-foreground">Status</TableHead>
+                                <TableHead className="font-semibold text-muted-foreground">Loaded</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {records.map((r) => (
+                                <TableRow key={r._id || r.id} className="hover:bg-muted/50">
+                                  <TableCell className="pl-12 font-semibold">{r.truckPlate || '—'}</TableCell>
+                                  <TableCell className="text-muted-foreground">{r.driverName || '—'}</TableCell>
+                                  <TableCell className="max-w-[200px] truncate" title={r.split.isSplit ? formatShareList(r.split) : r.custName}>
+                                    {r.split.isSplit ? (
+                                      <span className="inline-flex items-center gap-1.5">
+                                        <Split className="size-3 shrink-0 text-muted-foreground" />
+                                        {r.split.shares.length} customers
+                                      </span>
+                                    ) : (r.custName || <span className="text-muted-foreground/50">Unassigned</span>)}
+                                  </TableCell>
+                                  <TableCell className="max-w-[160px] truncate text-muted-foreground" title={r.destination}>
+                                    {r.destination || '—'}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">{fmtQty(r.qty)}</TableCell>
+                                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                                    {r.rate > 0 ? r.rate.toLocaleString() : '—'}
+                                  </TableCell>
+                                  <TableCell>
+                                    <StatusChip tone={
+                                      r.status.key === 'offloaded' ? 'accent'
+                                        : r.status.key === 'loaded' ? 'warning' : 'inert'
+                                    }>
+                                      {r.status.label}
+                                    </StatusChip>
+                                  </TableCell>
+                                  <TableCell className="text-muted-foreground">
+                                    {r.dateLoaded
+                                      ? (() => { try { return format(parseISO(r.dateLoaded), 'dd MMM yyyy') } catch { return r.dateLoaded } })()
+                                      : '—'}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </section>
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* Dialogs */}
+      <NewBatchDialog
+        open={newBatchOpen}
+        onOpenChange={setNewBatchOpen}
+        existingCodes={deliveryCodes}
+      />
+
       <ManageCodesDialog
         open={manageCodesOpen}
         onOpenChange={setManageCodesOpen}

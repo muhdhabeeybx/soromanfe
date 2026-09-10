@@ -3,7 +3,8 @@ import api from '#/lib/api/http'
 import { fetchAllPages } from '#/lib/api/fetch-all-pages'
 import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
-import type { DeliverySale } from '#/lib/types'
+import { normalizePlate, toNum } from '#/lib/sales-ledger-utils'
+import type { DeliveryInventory, DeliverySale } from '#/lib/types'
 
 export function useDeliverySalesList(params?: {
   search?: string
@@ -93,6 +94,51 @@ export function useTransferOverpayment() {
   })
 }
 
+/**
+ * Close the load this sale was recorded against.
+ *
+ * A rate or a payment is only ever entered against a truck that has already
+ * delivered, so recording one is the moment the load stops being in transit.
+ * Nobody was doing that by hand — marking a truck offloaded lives on a
+ * different screen from taking its money — so the In Transit count carried
+ * loads that had been paid for weeks earlier.
+ *
+ * ── It will not guess ─────────────────────────────────────────────────────
+ *
+ * The plate is matched, then the allocation code where the sale carries one,
+ * and the write happens only when that leaves exactly one open load. A truck
+ * that ran the same code twice has two open rows and no way to tell from a
+ * payment which trip it settles; picking one would silently close the wrong
+ * trip, which is worse than closing neither. Nothing is lost by declining —
+ * statusOf reads a load with money on it as sold regardless of this column,
+ * so the screens are right either way. This only keeps the stored value from
+ * drifting away from them.
+ */
+async function closeLoadFor(sale: Partial<DeliverySale>): Promise<void> {
+  const paid = toNum(sale.rate) > 0 || Math.abs(toNum(sale.paymentAmount)) > 0
+  if (!paid || !sale.truckNumber) return
+
+  const res = await api.get('/delivery-inventory', {
+    params: { truck_number: sale.truckNumber },
+  })
+  const rows = (res.data.data?.loadings || res.data.data?.inventory || res.data.data || []) as DeliveryInventory[]
+
+  const plate = normalizePlate(sale.truckNumber)
+  const code = (sale.allocationCode || '').trim().toUpperCase()
+  const open = rows.filter(r =>
+    normalizePlate(r.truckNumber) === plate &&
+    r.loadingStatus !== 'offloaded' &&
+    (!code || (r.allocationCode || '').trim().toUpperCase() === code),
+  )
+  if (open.length !== 1) return
+
+  const target = open[0]
+  await api.patch(`/delivery-inventory/${target._id || target.id}`, {
+    loadingStatus: 'offloaded',
+    dateOffloaded: sale.dateOfPayment || sale.dateLoaded || new Date().toISOString().slice(0, 10),
+  })
+}
+
 export function useCreateDeliverySale() {
   const queryClient = useQueryClient()
   const toast = useToast()
@@ -101,6 +147,14 @@ export function useCreateDeliverySale() {
     retry: false,
     mutationFn: async (data: Partial<DeliverySale>) => {
       const res = await api.post('/delivery-sales', data)
+      // Deliberately swallowed: the sale is written and must not be reported
+      // as failed because the tidying after it did not land. The screens read
+      // the load as sold from the sale itself either way.
+      try {
+        await closeLoadFor(data)
+      } catch {
+        // no-op
+      }
       return res.data
     },
     onSuccess: () => {
@@ -122,6 +176,14 @@ export function useUpdateDeliverySale() {
     retry: false,
     mutationFn: async ({ id, data }: { id: string; data: Partial<DeliverySale> }) => {
       const res = await api.patch(`/delivery-sales/${id}`, data)
+      // A rate typed onto a row that had none is the same event as recording
+      // one — see closeLoadFor. The patch body carries only what changed, so
+      // the sale as it now stands is read back off the response.
+      try {
+        await closeLoadFor({ ...(res.data?.data?.sale ?? res.data?.data ?? {}), ...data })
+      } catch {
+        // no-op
+      }
       return res.data
     },
     onSuccess: () => {

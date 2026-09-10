@@ -82,10 +82,44 @@ export const STATUS_DISPLAY: Record<LoadingStatusKey, StatusDisplay> = {
   unknown: { key: 'unknown', label: 'Unrecorded', cls: 'bg-muted text-muted-foreground border-border' },
 }
 
-export function statusOf(entry: { loadingStatus?: string | null }): StatusDisplay {
+/**
+ * A load carrying money is sold, whatever the column says.
+ *
+ * `loading_status` is set by hand — a truck was marked offloaded on the
+ * operations screen, or it was not. Recording the sale is a different screen,
+ * so the two drifted constantly in one direction: a truck with a rate and a
+ * payment against it, still sitting in the In Transit count because nobody
+ * went back to flip a status that the payment had already made untrue.
+ *
+ * A rate or a payment is only ever entered against a load that has been
+ * delivered, so it is the more reliable of the two facts and it wins here.
+ * The stored value still decides everything else — `empty` stays `empty`, and
+ * a load with no money on it is read exactly as before.
+ *
+ * useCreateDeliverySale writes the column too, so rows recorded from now on
+ * agree with this on their own. This is what makes the ones already in the
+ * table read correctly without a mass update behind everybody's back.
+ */
+export function statusOf(
+  entry: { loadingStatus?: string | null },
+  sales: DeliverySale[] = [],
+): StatusDisplay {
+  if (sales.some(hasMoneyOn)) return STATUS_DISPLAY.offloaded
   const raw = String(entry?.loadingStatus || '').toLowerCase()
   if (raw === 'loaded' || raw === 'offloaded' || raw === 'empty') return STATUS_DISPLAY[raw]
   return STATUS_DISPLAY.unknown
+}
+
+/**
+ * Is there a rate or a payment on this sale?
+ *
+ * A ledger row can exist with neither — assigning a customer to a truck
+ * writes one before any figure is known — and that is not yet a sale. The
+ * negative leg of a transfer is money leaving, so its amount is read as an
+ * absolute: a truck whose surplus was moved away was still sold.
+ */
+export function hasMoneyOn(sale: DeliverySale): boolean {
+  return toNum(sale.rate) > 0 || Math.abs(toNum(sale.paymentAmount)) > 0
 }
 
 // ── Field resolution ──────────────────────────────────────────────────────
@@ -194,7 +228,7 @@ export interface ResolvedLoading {
 /** Everything above, applied to one allocation. */
 export function resolveLoading(entry: DeliveryInventory, ctx: ResolveContext = {}): ResolvedLoading {
   const sales = ctx.sales ?? []
-  const status = statusOf(entry)
+  const status = statusOf(entry, sales)
   return {
     status,
     truckPlate: entry.truckNumber || ctx.truck?.plateNumber || '',
