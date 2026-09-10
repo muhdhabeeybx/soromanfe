@@ -386,12 +386,19 @@ function DeliveryOperationsPage() {
       })
     })
 
-    const latest = (g: BatchGroup) => g.records.reduce((max, r) => {
-      const d = r.dateOffloaded || r.dateLoaded || ''
-      return d > max ? d : max
-    }, '')
-
-    return [...map.values()].sort((a, b) => latest(b).localeCompare(latest(a)))
+    /**
+     * Z to A by code, not newest first.
+     *
+     * Batches are looked for by name — somebody has PFI-40B written on a
+     * waybill in their hand — and a list ordered by last movement moves a
+     * batch every time a truck on it is touched, so the row is never twice in
+     * the same place. Codes are compared numerically as well as
+     * alphabetically, or PFI-9C would outrank PFI-40B on the strength of its
+     * first digit.
+     */
+    return [...map.values()].sort((a, b) =>
+      b.code.localeCompare(a.code, undefined, { numeric: true, sensitivity: 'base' }),
+    )
   }, [filtered, allPfis])
 
   // ═══════════════════════════════════════════════════════════════════════════
