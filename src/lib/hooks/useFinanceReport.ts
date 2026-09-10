@@ -304,6 +304,46 @@ export interface FinanceReportTotals {
 }
 
 /**
+ * Where one customer stands overall — every order of theirs money has landed
+ * on, all time, whatever period the report is filtered to.
+ *
+ * The report answers "what happened in this window". This answers the question
+ * the desk asks straight after: the overpayment on that PFI in August — is it
+ * still sitting there, or has it been used since? A period-scoped figure
+ * cannot say, because the order that consumed the surplus is usually outside
+ * the period.
+ *
+ * These figures move on their own. `received` on the server is every payment
+ * row including transfer legs, so the moment surplus is moved off one order
+ * onto another, the overpayment and the shortfall both fall out of these
+ * totals together. Nothing here is a stored balance to be kept in step.
+ */
+export interface CustomerDifferential {
+  customerId: number
+  customerName: string
+  customerCompanyName: string
+  /** Every order of theirs money has landed on — Paid and Part Paid, all time. */
+  orderCount: number
+  /** Of those, how many are still out of balance in either direction. */
+  openOrderCount: number
+  totalValue: number
+  totalReceived: number
+  /** Their money sitting on orders beyond what those orders cost. */
+  overpaid: number
+  /** Money still owed across their orders. */
+  underpaid: number
+  /**
+   * Positive is owed to Soroman, negative is held for the customer.
+   *
+   * Kept alongside the two sides rather than replacing them: a customer ₦5m
+   * over on one order and ₦5m under on another is two problems, not zero —
+   * the same reasoning that keeps totalSurplus and totalShortfall unnetted.
+   */
+  net: number
+  lastOrderAt: string | null
+}
+
+/**
  * Unpaginated by design — the whole filtered set in one fetch, newest first.
  * The default date filter the page applies (today) is what keeps this fast;
  * widening the range fetches more, on purpose.
@@ -316,6 +356,11 @@ export function useFinanceReport(params: FinanceReportParams) {
       return res.data?.data as {
         orders: FinanceReportOrder[]
         totals: FinanceReportTotals
+        /**
+         * The all-time position of the customers listed above — only those,
+         * so the block stays about the report it sits under.
+         */
+        customerDifferentials: CustomerDifferential[]
       }
     },
     placeholderData: (prev) => prev,

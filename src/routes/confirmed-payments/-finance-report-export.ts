@@ -4,7 +4,7 @@ import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
   orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
-  type FinanceReportOrder, type OrderPayment,
+  type FinanceReportOrder, type OrderPayment, type CustomerDifferential,
 } from '#/lib/hooks/useFinanceReport'
 import {
   XL, PDF, NGN, QTY, DATE_FMT, DATE_PATTERN,
@@ -597,6 +597,8 @@ export async function exportFinanceReportExcel(
   summary: FinanceReportSummary,
   filters: FinanceReportFilters,
   pfiStock: PfiStockRow[] = [],
+  /** All-time, and deliberately not filtered by the period — see the block below. */
+  customerDifferentials: CustomerDifferential[] = [],
 ) {
   const rows = chronological(unsortedRows)
   const ExcelJS = (await import('exceljs')).default
@@ -743,6 +745,117 @@ export async function exportFinanceReportExcel(
     }
   }
 
+  /**
+   * Where the customers on this report stand overall.
+   *
+   * Everything above this point describes a window — a day, a week, one PFI.
+   * This does not: it is every order these customers have ever had money on,
+   * whatever period or batch it belonged to. Without it, an overpayment seen
+   * in the rows above cannot be told apart from one that was transferred onto
+   * another order weeks later, because the order that consumed it falls
+   * outside the export entirely.
+   *
+   * Over and under are printed side by side and never netted into each other.
+   * A customer ₦5m over on one order and ₦5m under on another is two problems,
+   * and a single netted column would show neither.
+   */
+  if (customerDifferentials.length > 0) {
+    cursor += 3
+    cursor = writeSectionHeading(ws, cursor, 'CUSTOMER DIFFERENTIALS — ALL TIME')
+
+    ws.getCell(cursor, 1).value =
+      `Every order these customers have had money on — not limited to ${filters.periodLabel}, `
+      + 'and not limited to the PFI, location or product filtered above. Overpaid is money of '
+      + 'theirs still sitting on orders; underpaid is money still owed. Both fall as surplus is '
+      + 'transferred onto other orders.'
+    ws.getCell(cursor, 1).font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
+    cursor += 2
+
+    const custHeaders = [
+      'Customer', 'Company', 'Orders (All Time)', 'Out of Balance',
+      'Overpaid', 'Underpaid', 'Net', 'Direction',
+    ]
+    /**
+     * The first two columns were sized for "S/N" and a date, and a customer
+     * name written into them is clipped to nothing. Widened the same way the
+     * summary block above widens what it occupies — capped, so one long
+     * company name cannot push the sheet's first column off the page.
+     */
+    const widen = (index: number, longest: number) => {
+      const col = ws.getColumn(index)
+      col.width = Math.min(34, Math.max(col.width || 10, longest + 2))
+    }
+    widen(1, Math.max(10, ...customerDifferentials.map((c) => (c.customerName || '').length)))
+    widen(2, Math.max(10, ...customerDifferentials.map((c) => (c.customerCompanyName || '').length)))
+    const custHeaderRow = ws.getRow(cursor)
+    custHeaderRow.values = custHeaders
+    custHeaderRow.height = ROW_HEIGHT.header
+    custHeaderRow.eachCell((cell: any) => {
+      cell.font = HEADER_FONT
+      cell.fill = HEADER_FILL
+      cell.border = ALL_BORDERS
+      cell.alignment = { vertical: 'middle', wrapText: true }
+    })
+    cursor++
+
+    let overTotal = 0
+    let underTotal = 0
+    for (const c of customerDifferentials) {
+      const row = ws.getRow(cursor)
+      row.values = [
+        up(c.customerName || '—'),
+        up(c.customerCompanyName || '—'),
+        c.orderCount,
+        c.openOrderCount,
+        c.overpaid,
+        c.underpaid,
+        Math.abs(c.net),
+        // The sign spelled out rather than left to a minus somewhere in the
+        // column: "held" is the customer's money sitting with us, "owed" is
+        // ours sitting with them, and the two are read by different people.
+        Math.abs(c.net) < 0.005 ? 'Square' : c.net > 0 ? 'Owed to Soroman' : 'Held for customer',
+      ]
+      overTotal += c.overpaid
+      underTotal += c.underpaid
+      for (let i = 1; i <= custHeaders.length; i++) {
+        const cell = row.getCell(i)
+        cell.border = ALL_BORDERS
+        if (i >= 3 && i <= 7) cell.alignment = { horizontal: 'right' }
+        if (i >= 5 && i <= 7) cell.numFmt = NGN_PLAIN
+      }
+      // Green on money held for the customer, red on money owed — the same
+      // reading as the Differential column, via the same helper, so a positive
+      // never comes out green here while it reads red twenty rows above.
+      if (c.overpaid >= 0.005) paintOwed(row.getCell(5), -c.overpaid)
+      if (c.underpaid >= 0.005) paintOwed(row.getCell(6), c.underpaid)
+      paintOwed(row.getCell(7), c.net)
+      cursor++
+    }
+
+    const custTotalRow = ws.getRow(cursor)
+    custTotalRow.getCell(1).value =
+      `Total (${customerDifferentials.length} customer${customerDifferentials.length === 1 ? '' : 's'}) · all time`
+    custTotalRow.getCell(5).value = overTotal
+    custTotalRow.getCell(6).value = underTotal
+    custTotalRow.getCell(7).value = Math.abs(underTotal - overTotal)
+    custTotalRow.getCell(8).value =
+      Math.abs(underTotal - overTotal) < 0.005
+        ? 'Square'
+        : underTotal > overTotal ? 'Owed to Soroman' : 'Held for customers'
+    custTotalRow.height = ROW_HEIGHT.total
+    for (let i = 1; i <= custHeaders.length; i++) {
+      const cell = custTotalRow.getCell(i)
+      cell.border = TOTAL_BORDERS
+      cell.fill = TOTAL_FILL
+      cell.font = TOTAL_FONT
+      if (i >= 5 && i <= 7) {
+        cell.numFmt = NGN_PLAIN
+        cell.alignment = { horizontal: 'right' }
+      }
+    }
+    cursor++
+  }
+
   const buf = await wb.xlsx.writeBuffer()
   triggerDownload(
     new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
@@ -755,6 +868,8 @@ export async function exportFinanceReportPdf(
   summary: FinanceReportSummary,
   filters: FinanceReportFilters,
   pfiStock: PfiStockRow[] = [],
+  /** All-time, and deliberately not filtered by the period — see the block below. */
+  customerDifferentials: CustomerDifferential[] = [],
 ) {
   const rows = chronological(unsortedRows)
   const { jsPDF } = await import('jspdf')
@@ -1182,6 +1297,98 @@ export async function exportFinanceReportPdf(
       doc.setFontSize(pdfStyles.body.fontSize)
     },
   })
+
+  /**
+   * Where the customers above stand overall — its own table under the rows,
+   * on a fresh page.
+   *
+   * Not folded into the preamble the way Stock by PFI is: that block describes
+   * the same window as the rows and belongs beside them, this one deliberately
+   * describes a different span. Printing an all-time figure inside a summary
+   * headed "For 8 Sep 2026" is how a reader ends up believing a customer
+   * overpaid ₦135m today.
+   *
+   * Over and under stay in separate columns and are never netted into each
+   * other, for the reason the workbook gives: a customer over on one order and
+   * under on another has two problems, and one netted column shows neither.
+   */
+  if (customerDifferentials.length > 0) {
+    doc.addPage()
+    const custStartY = drawPdfHeader(
+      doc,
+      'Customer Differentials — All Time',
+      'Every order these customers have had money on · not limited to '
+        + `${filters.periodLabel.toLowerCase()}, the PFI, the location or the product filtered above`,
+    )
+
+    const overTotal = customerDifferentials.reduce((sum, c) => sum + c.overpaid, 0)
+    const underTotal = customerDifferentials.reduce((sum, c) => sum + c.underpaid, 0)
+    const netTotal = underTotal - overTotal
+
+    /**
+     * The signed figure behind each printed cell, so colour can be read off
+     * the number rather than a sign that is no longer in the string. Overpaid
+     * is handed in negative — money held FOR the customer — which is what
+     * makes it green under the same rule the Differential column uses.
+     */
+    const custSigned: Array<Record<number, number>> = []
+    const custBody = customerDifferentials.map((c) => {
+      custSigned.push({ 4: -c.overpaid, 5: c.underpaid, 6: c.net })
+      return [
+        up(c.customerName || '—'),
+        up(c.customerCompanyName || '—'),
+        c.orderCount.toLocaleString(),
+        c.openOrderCount.toLocaleString(),
+        c.overpaid < 0.005 ? '—' : plain(c.overpaid),
+        c.underpaid < 0.005 ? '—' : plain(c.underpaid),
+        Math.abs(c.net) < 0.005
+          ? 'Square'
+          // The direction spelled out: "held" is the customer's money sitting
+          // with us, "owed" is ours sitting with them, and a reader should not
+          // have to recover that from the sign of a number.
+          : `${plain(c.net)} ${c.net > 0 ? 'owed' : 'held'}`,
+      ]
+    })
+
+    autoTable(doc, {
+      startY: custStartY,
+      head: [['Customer', 'Company', 'Orders', 'Out of Balance', 'Overpaid', 'Underpaid', 'Net']],
+      body: custBody,
+      foot: [[
+        `Total (${customerDifferentials.length} customer${customerDifferentials.length === 1 ? '' : 's'})`,
+        '', '', '',
+        plain(overTotal),
+        plain(underTotal),
+        Math.abs(netTotal) < 0.005 ? '—' : `${plain(netTotal)} ${netTotal > 0 ? 'owed' : 'held'}`,
+      ]],
+      styles: { ...bodyStyle, fontSize: 7.5, cellPadding: 1.6 },
+      headStyles: { ...headStyle, fontSize: 7.5 },
+      footStyles: { ...footStyle, fontSize: 7.5 },
+      columnStyles: {
+        0: { cellWidth: 'auto' },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 16, halign: 'right' },
+        3: { cellWidth: 22, halign: 'right' },
+        4: { cellWidth: 34, halign: 'right' },
+        5: { cellWidth: 34, halign: 'right' },
+        6: { cellWidth: 42, halign: 'right' },
+      },
+      didParseCell: (data) => {
+        if (data.section === 'foot') {
+          if (data.column.index === 4) data.cell.styles.textColor = PDF.gain
+          if (data.column.index === 5) data.cell.styles.textColor = PDF.loss
+          if (data.column.index === 6 && Math.abs(netTotal) >= 0.005) {
+            data.cell.styles.textColor = netTotal > 0 ? PDF.loss : PDF.gain
+          }
+          return
+        }
+        if (data.section !== 'body') return
+        const value = custSigned[data.row.index]?.[data.column.index]
+        if (value == null || Math.abs(value) < 0.005) return
+        data.cell.styles.textColor = value > 0 ? PDF.loss : PDF.gain
+      },
+    })
+  }
 
   drawPdfFooters(doc, `Soroman Finance Report · ${filters.periodLabel}`)
   doc.save(`${buildFilename(filters)}.pdf`)

@@ -608,6 +608,21 @@ function FinanceReportPage() {
 
   const rows = useMemo(() => data?.orders || [], [data])
   const totals = data?.totals
+
+  /**
+   * The all-time standing of the customers listed above — computed on the
+   * server over their whole book, so it does not move when the date range
+   * does. See CustomerDifferential.
+   */
+  const customerDifferentials = useMemo(() => data?.customerDifferentials || [], [data])
+  const customerDifferentialTotals = useMemo(
+    () => ({
+      overpaid: customerDifferentials.reduce((s, c) => s + c.overpaid, 0),
+      underpaid: customerDifferentials.reduce((s, c) => s + c.underpaid, 0),
+      net: customerDifferentials.reduce((s, c) => s + c.net, 0),
+    }),
+    [customerDifferentials],
+  )
   const hasFilters = !!(
     search || paymentStatus !== 'received' || reconciliation || confirmationBasis ||
     locationId || pfiId || productId || datePreset !== 'today'
@@ -738,8 +753,8 @@ function FinanceReportPage() {
     if (!rows.length) return
     setExporting(kind)
     try {
-      if (kind === 'excel') await exportFinanceReportExcel(rows, summary, exportFilters, pfiStock)
-      else await exportFinanceReportPdf(rows, summary, exportFilters, pfiStock)
+      if (kind === 'excel') await exportFinanceReportExcel(rows, summary, exportFilters, pfiStock, customerDifferentials)
+      else await exportFinanceReportPdf(rows, summary, exportFilters, pfiStock, customerDifferentials)
     } finally {
       setExporting(null)
     }
@@ -1201,6 +1216,116 @@ function FinanceReportPage() {
           </div>
         )}
       </div>
+
+      {/*
+        Where the customers on this report stand overall.
+
+        The table above is a window — a day, a week, one PFI. The question the
+        desk asks the moment it sees an overpayment is not answered by a
+        window: is that money still sitting there, or has it since been moved
+        onto another order? The order that consumed it is almost always
+        outside the period, so the figures here are deliberately ALL TIME and
+        ignore every filter but the customers themselves.
+
+        Nothing here is a stored balance. The server measures each order as
+        value less everything paid onto it, transfer legs included — the same
+        arithmetic as the Differential column — so moving surplus from one
+        order to another reduces the overpayment and the shortfall in the same
+        instant, with nothing to recompute.
+      */}
+      {!isLoading && !isError && customerDifferentials.length > 0 && (
+        <section className={PANEL}>
+          <div className={PANEL_RAIL}>
+            <span className={MICRO}>Customer differentials · all time</span>
+          </div>
+          <div className={cn(PANEL_BODY, 'space-y-3')}>
+            <p className="text-xs text-muted-foreground">
+              {customerDifferentials.length === 1
+                ? 'Every order this customer has had money on,'
+                : `Every order these ${customerDifferentials.length} customers have had money on,`}
+              {' '}not just {periodLabel.toLowerCase()} — and not just the PFI or location filtered above.
+              Overpaid is their money still sitting on orders; underpaid is money still owed.
+              Both fall as surplus is transferred onto other orders.
+            </p>
+            <div className="overflow-x-auto rounded-lg border border-foreground/15">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Company</TableHead>
+                    <TableHead className="text-right">Orders</TableHead>
+                    <TableHead className="text-right">Out of balance</TableHead>
+                    <TableHead className="text-right">Overpaid</TableHead>
+                    <TableHead className="text-right">Underpaid</TableHead>
+                    <TableHead className="text-right">Net</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {customerDifferentials.map((c) => (
+                    <TableRow key={c.customerId}>
+                      <TableCell className="font-medium">{c.customerName || '—'}</TableCell>
+                      <TableCell className="max-w-[12rem] truncate text-muted-foreground">
+                        {c.customerCompanyName || '—'}
+                      </TableCell>
+                      <TableCell className="text-right text-muted-foreground">{c.orderCount.toLocaleString()}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{c.openOrderCount.toLocaleString()}</TableCell>
+                      {/* The two sides stated separately and never netted into
+                          each other: a customer over on one order and under on
+                          another has two problems, not none. Net says where
+                          they land only once both have been read. */}
+                      <TableCell className="text-right whitespace-nowrap">
+                        {c.overpaid < 0.005
+                          ? <span className="text-muted-foreground">—</span>
+                          : <span className="font-medium text-accent">{naira(c.overpaid)}</span>}
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
+                        {c.underpaid < 0.005
+                          ? <span className="text-muted-foreground">—</span>
+                          : <span className="font-medium text-destructive">{naira(c.underpaid)}</span>}
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
+                        {Math.abs(c.net) < 0.005
+                          ? <span className="text-muted-foreground">Square</span>
+                          : (
+                            <span className={cn('font-semibold', c.net > 0 ? 'text-destructive' : 'text-accent')}>
+                              {naira(Math.abs(c.net))}
+                              <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                                {c.net > 0 ? 'owed' : 'held'}
+                              </span>
+                            </span>
+                          )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow className="bg-muted/40 hover:bg-muted/40">
+                    <TableCell colSpan={4} className="text-xs text-muted-foreground">
+                      Total ({customerDifferentials.length} customer{customerDifferentials.length === 1 ? '' : 's'}) · all time
+                    </TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap text-accent">
+                      {naira(customerDifferentialTotals.overpaid)}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold whitespace-nowrap text-destructive">
+                      {naira(customerDifferentialTotals.underpaid)}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-semibold whitespace-nowrap',
+                        Math.abs(customerDifferentialTotals.net) < 0.005
+                          ? 'text-muted-foreground'
+                          : customerDifferentialTotals.net > 0 ? 'text-destructive' : 'text-accent',
+                      )}
+                    >
+                      {Math.abs(customerDifferentialTotals.net) < 0.005
+                        ? '—'
+                        : naira(Math.abs(customerDifferentialTotals.net))}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </section>
+      )}
 
       <OrderDetailDialog
         order={viewing}
