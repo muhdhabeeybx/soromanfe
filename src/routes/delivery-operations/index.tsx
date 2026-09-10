@@ -19,11 +19,12 @@ import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import {
   Plus, Search, Truck, Droplets, CheckCircle2, X, Settings, Wallet,
-  ChevronRight, Loader2, Trash2, AlertTriangle, FileSpreadsheet, FileText,
+  ChevronRight, Loader2, Trash2, AlertTriangle, FileSpreadsheet, FileText, RotateCcw,
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import {
   useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryBatch,
+  useDeliveryBatchStatuses, useSetDeliveryBatchStatus,
 } from '#/lib/hooks/useDeliveryInventory'
 import { useRoles } from '#/lib/hooks/useRoles'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -93,6 +94,17 @@ interface BatchGroup {
   records: TruckRecord[]
   /** The PFI behind the code, where there is one. */
   pfi?: Pfi
+  /**
+   * Closed, or still running.
+   *
+   * A batch has no row of its own — it is the loads sharing a code — so this
+   * comes from delivery_batches, keyed by that code, and a code with no entry
+   * there is active. Closing it says the delivery desk is finished with it and
+   * deliberately leaves the PFI behind it alone; see migration 0028.
+   */
+  status: 'active' | 'completed'
+  closedAt: string | null
+  closedBy: string
 }
 
 /**
@@ -154,6 +166,10 @@ function DeliveryOperationsPage() {
   // ── Mutations ───────────────────────────────────────────────────────────
   const updateInventory = useUpdateDeliveryInventory()
   const deleteBatch = useDeleteDeliveryBatch()
+  const { data: batchStatuses } = useDeliveryBatchStatuses()
+  const setBatchStatus = useSetDeliveryBatchStatus()
+  /** The batch a close or reopen has been asked for, awaiting confirmation. */
+  const [closingBatch, setClosingBatch] = useState<BatchGroup | null>(null)
   // Deleting a batch takes its whole trading record with it, so it sits behind
   // the same role that gates deleting an order.
   const { isSuperAdmin: canDelete } = useRoles()
@@ -167,6 +183,12 @@ function DeliveryOperationsPage() {
   const [customerFilter, setCustomerFilter] = useState('')
   const [truckFilter, setTruckFilter] = useState('')
   const [codeFilter, setCodeFilter] = useState('')
+  /**
+   * Active batches or closed ones. Defaults to active: a register whose whole
+   * point is what is running should not open on a list that is mostly
+   * finished, and the finished ones are one select away.
+   */
+  const [batchStatusFilter, setBatchStatusFilter] = useState<'active' | 'completed' | 'all'>('active')
   const [customerTypeFilter, setCustomerTypeFilter] = useState<'all' | 'filling_station' | 'normal'>('all')
 
   // ── Allocation Codes ────────────────────────────────────────────────────
@@ -279,7 +301,7 @@ function DeliveryOperationsPage() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const hasDateFilter = !!(dateFrom || dateTo)
-  const hasAnyFilter = !!(searchQuery || hasDateFilter || statusFilter !== 'all' || pfiFilter || customerFilter || truckFilter || codeFilter || customerTypeFilter !== 'all')
+  const hasAnyFilter = !!(searchQuery || hasDateFilter || statusFilter !== 'all' || pfiFilter || customerFilter || truckFilter || codeFilter || customerTypeFilter !== 'all' || batchStatusFilter !== 'active')
 
   const filtered = useMemo(() => {
     let list = [...truckRecords]
@@ -371,7 +393,16 @@ function DeliveryOperationsPage() {
     filtered.forEach(r => {
       const code = r.code || ''
       const key = norm(code)
-      const group = map.get(key) ?? { key, code, records: [] }
+      const group = map.get(key) ?? {
+        key,
+        code,
+        records: [],
+        // Keyed by the same normalised code the register groups on, so
+        // "pfi-40b" and "PFI-40B " cannot end up one open and one closed.
+        status: (batchStatuses?.[key]?.status ?? 'active') as 'active' | 'completed',
+        closedAt: batchStatuses?.[key]?.closedAt ?? null,
+        closedBy: batchStatuses?.[key]?.closedBy ?? '',
+      }
       group.records.push(r)
       map.set(key, group)
     })
@@ -405,10 +436,20 @@ function DeliveryOperationsPage() {
      * alphabetically, or PFI-9C would outrank PFI-40B on the strength of its
      * first digit.
      */
-    return [...map.values()].sort((a, b) =>
+    /**
+     * The status filter is applied here rather than over the truck rows,
+     * because it is a fact about the batch and not about any load on it.
+     * Everything downstream — the totals, the export — then describes the
+     * same set the table shows.
+     */
+    const visible = [...map.values()].filter(
+      (g) => batchStatusFilter === 'all' || g.status === batchStatusFilter,
+    )
+
+    return visible.sort((a, b) =>
       b.code.localeCompare(a.code, undefined, { numeric: true, sensitivity: 'base' }),
     )
-  }, [filtered, allPfis])
+  }, [filtered, allPfis, batchStatuses, batchStatusFilter])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Derived / Summaries
@@ -501,6 +542,9 @@ function DeliveryOperationsPage() {
     setTruckFilter('')
     setCodeFilter('')
     setCustomerTypeFilter('all')
+    // Back to the register's own default, not to "all" — clearing filters
+    // should leave the page as it opens, and it opens on what is running.
+    setBatchStatusFilter('active')
   }
 
   /**
@@ -710,6 +754,19 @@ function DeliveryOperationsPage() {
           {distinctAllocationCodes.map((code) => <option key={code} value={code}>{code}</option>)}
         </NativeSelect>
 
+        {/* Open or closed. Named for the batch rather than for its loads —
+            the select two along filters trucks by where they are, and the two
+            would otherwise read as the same question asked twice. */}
+        <NativeSelect
+          className="w-40" aria-label="Filter by batch status"
+          value={batchStatusFilter}
+          onChange={(e) => setBatchStatusFilter(e.target.value as 'active' | 'completed' | 'all')}
+        >
+          <option value="active">Active batches</option>
+          <option value="completed">Completed batches</option>
+          <option value="all">All batches, any status</option>
+        </NativeSelect>
+
         {activeChips.length > 0 && (
           <Button variant="ghost" size="sm" onClick={clearAllFilters}>
             <X data-icon="inline-start" />
@@ -826,13 +883,15 @@ function DeliveryOperationsPage() {
                 <TableHead className="text-right font-semibold text-accent">Paid</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">Balance</TableHead>
                 <TableHead className="w-8" />
+                <TableHead className="w-8" />
                 {canDelete && <TableHead className="w-8" />}
               </TableRow>
             </TableHeader>
 
             <TableBody>
-              {grouped.map(({ key, code, records, pfi }) => {
+              {grouped.map(({ key, code, records, pfi, status, closedAt, closedBy }) => {
                 const isOpen = openBatch === key
+                const isClosed = status === 'completed'
                 const unit = records[0]?.unitLabel || pfi?.productUnit || 'Litres'
                 const totalQty = records.reduce((s, r) => s + r.qty, 0)
 
@@ -871,14 +930,35 @@ function DeliveryOperationsPage() {
                         {/* The name links out; the rest of the row expands.
                             Two things to do with a batch, and clicking the name
                             of it is the one that means "open it". */}
-                        <Link
-                          to="/delivery-operations/allocation-details"
-                          search={{ code }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="font-semibold uppercase underline-offset-4 hover:underline"
-                        >
-                          {code || 'No code'}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to="/delivery-operations/allocation-details"
+                            search={{ code }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={cn(
+                              'font-semibold uppercase underline-offset-4 hover:underline',
+                              // A closed batch is still worth opening — it is
+                              // the record of what happened — but it should
+                              // not compete with the running ones for
+                              // attention while scanning the register.
+                              isClosed && 'text-muted-foreground',
+                            )}
+                          >
+                            {code || 'No code'}
+                          </Link>
+                          {isClosed && (
+                            <StatusChip
+                              tone="inert"
+                              title={
+                                closedBy
+                                  ? `Closed by ${closedBy}${closedAt ? ` on ${format(parseISO(closedAt), 'dd MMM yyyy')}` : ''}`
+                                  : 'Closed'
+                              }
+                            >
+                              Completed
+                            </StatusChip>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {products.length ? products.join(', ') : '—'}
@@ -947,6 +1027,26 @@ function DeliveryOperationsPage() {
                           </StatusChip>
                         )}
                       </TableCell>
+                      <TableCell className="pl-0">
+                        {/* Closing is not deleting: the batch and everything
+                            on it stays exactly where it is, and the register
+                            simply stops offering it as work in hand. Which is
+                            why it needs no permission check and no blockers —
+                            it takes nothing away, and it is reversible from
+                            the same button. */}
+                        <Button
+                          variant="ghost" size="icon-sm"
+                          className={isClosed ? 'text-muted-foreground' : 'text-accent hover:bg-accent/10 hover:text-accent'}
+                          title={isClosed ? `Reopen ${code || 'this batch'}` : `Close ${code || 'this batch'}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setClosingBatch({ key, code, records, pfi, status, closedAt, closedBy })
+                          }}
+                        >
+                          {isClosed ? <RotateCcw /> : <CheckCircle2 />}
+                          <span className="sr-only">{isClosed ? 'Reopen' : 'Close'} {code}</span>
+                        </Button>
+                      </TableCell>
                       {canDelete && (
                         <TableCell className="pl-0">
                           {/* Offered on every batch and refused inside the
@@ -957,7 +1057,7 @@ function DeliveryOperationsPage() {
                             variant="ghost" size="icon-sm"
                             className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                             title={`Delete ${code || 'this batch'}`}
-                            onClick={(e) => { e.stopPropagation(); setDeletingBatch({ key, code, records, pfi }) }}
+                            onClick={(e) => { e.stopPropagation(); setDeletingBatch({ key, code, records, pfi, status, closedAt, closedBy }) }}
                           >
                             <Trash2 />
                             <span className="sr-only">Delete {code}</span>
@@ -968,7 +1068,7 @@ function DeliveryOperationsPage() {
 
                     {isOpen && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={canDelete ? 14 : 13} className="bg-muted/30 p-0">
+                        <TableCell colSpan={canDelete ? 15 : 14} className="bg-muted/30 p-0">
                           <Table>
                             <TableHeader>
                               <TableRow className="hover:bg-transparent">
@@ -1150,6 +1250,97 @@ function DeliveryOperationsPage() {
         onOpenChange={setNewBatchOpen}
         existingCodes={deliveryCodes}
       />
+
+      {/* ── Closing a batch, and reopening it ──────────────────────────── */}
+      <Dialog
+        open={closingBatch !== null}
+        onOpenChange={(open) => { if (!open && !setBatchStatus.isPending) setClosingBatch(null) }}
+      >
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const batch = closingBatch
+            if (!batch) return null
+            const closing = batch.status !== 'completed'
+            // Worth saying out loud before closing: a batch with trucks still
+            // out, or money still owed, is usually not finished. Stated, never
+            // blocked — the desk knows things the register does not, and a
+            // close is undone with the same button.
+            const unsold = batch.records.filter((r) => r.status.key !== 'offloaded').length
+            const owed = batch.records.reduce((sum, r) => sum + r.money.balance, 0)
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>
+                    {closing ? `Close ${batch.code || 'this batch'}?` : `Reopen ${batch.code || 'this batch'}?`}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {closing
+                      ? 'The batch and every truck, sale and payment on it stay exactly as they are. It moves out of the active list, and you can reopen it at any time.'
+                      : 'The batch goes back to the active list. Nothing else about it changes.'}
+                  </DialogDescription>
+                </DialogHeader>
+
+                {closing && (unsold > 0 || owed > 0.005) && (
+                  <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                    <span>
+                      {unsold > 0 && (
+                        <>This batch still has <strong>{unsold} truck{unsold === 1 ? '' : 's'}</strong> not marked sold. </>
+                      )}
+                      {owed > 0.005 && (
+                        <><strong>{naira(owed)}</strong> is still owed on it. </>
+                      )}
+                      You can close it anyway.
+                    </span>
+                  </div>
+                )}
+
+                {!closing && batch.closedBy && (
+                  <p className="text-sm text-muted-foreground">
+                    Closed by {batch.closedBy}
+                    {batch.closedAt ? ` on ${format(parseISO(batch.closedAt), 'dd MMM yyyy')}` : ''}.
+                  </p>
+                )}
+
+                {/* The PFI is deliberately left alone, and the dialog says so
+                    rather than letting somebody discover it. Finishing a PFI
+                    moves the finance report's stock summary, so it is a
+                    decision taken on the PFI itself. */}
+                {batch.pfi && (
+                  <p className="text-xs text-muted-foreground">
+                    {batch.pfi.pfiNumber} stays {batch.pfi.status === 'finished' ? 'finished' : 'as it is'} on the PFI
+                    register — closing a batch here does not change its PFI.
+                  </p>
+                )}
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    disabled={setBatchStatus.isPending}
+                    onClick={() => setClosingBatch(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={setBatchStatus.isPending}
+                    onClick={async () => {
+                      await setBatchStatus.mutateAsync({
+                        code: batch.code,
+                        status: closing ? 'completed' : 'active',
+                      })
+                      setClosingBatch(null)
+                    }}
+                  >
+                    {setBatchStatus.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                    {closing ? 'Close batch' : 'Reopen batch'}
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* ── Deleting a whole batch ─────────────────────────────────────── */}
       <Dialog

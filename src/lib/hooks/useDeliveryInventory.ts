@@ -245,6 +245,21 @@ export function useDeleteDeliveryBatch() {
           failed.push(id)
         }
       }
+      /**
+       * Clear any closed status the code carried.
+       *
+       * The status is keyed by the code, not by a row that has just been
+       * deleted — so without this, raising a new batch under the same code
+       * later would find it already closed, with nothing on screen to say
+       * why. Best-effort: the batch is gone either way, and failing the
+       * delete over its status would be the wrong trade.
+       */
+      try {
+        await api.patch(`/delivery-inventory/batches/${encodeURIComponent(label)}`, { status: 'active' })
+      } catch {
+        // Nothing to tell the user: the batch itself is deleted.
+      }
+
       return { label, deleted: inventoryIds.length - failed.length, failed: failed.length }
     },
     onSuccess: (res) => {
@@ -255,7 +270,67 @@ export function useDeleteDeliveryBatch() {
       }
       queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
       queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-batch-statuses'] })
       queryClient.invalidateQueries({ queryKey: ['pfis'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+// ── Closing a batch ─────────────────────────────────────────────────────────
+
+/**
+ * A delivery batch's status.
+ *
+ * A batch is a code and the loads recorded under it — there is no batch row —
+ * so this is keyed by the code, trimmed and upper-cased the same way the
+ * register groups them. A code with no entry here is active, which is why
+ * nothing had to be backfilled when this was added.
+ */
+export interface DeliveryBatchStatus {
+  code: string
+  status: 'active' | 'completed'
+  /** Null on an active batch: reopening clears the last close rather than keeping it. */
+  closedAt: string | null
+  closedBy: string
+  note: string
+}
+
+/** Every batch that has been closed, keyed by code. */
+export function useDeliveryBatchStatuses() {
+  return useQuery({
+    queryKey: ['delivery-batch-statuses'],
+    queryFn: async () => {
+      const res = await api.get('/delivery-inventory/batches')
+      return (res.data?.data?.batches || {}) as Record<string, DeliveryBatchStatus>
+    },
+  })
+}
+
+/**
+ * Close a batch, or reopen it.
+ *
+ * Deliberately does NOT touch the status of the PFI behind the batch, where
+ * there is one. `pfis.status` drives the finance report's stock summary, the
+ * expense chart and the PFI register; finishing a PFI is a decision taken on
+ * the PFI, where its consequences are visible. See migration 0028.
+ */
+export function useSetDeliveryBatchStatus() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    mutationFn: async ({ code, status, note }: {
+      code: string
+      status: 'active' | 'completed'
+      note?: string
+    }) => {
+      const res = await api.patch(`/delivery-inventory/batches/${encodeURIComponent(code)}`, { status, note })
+      return { code, status, batch: res.data?.data?.batch as DeliveryBatchStatus }
+    },
+    onSuccess: ({ code, status }) => {
+      toast.success(status === 'completed' ? `${code} closed` : `${code} reopened`)
+      queryClient.invalidateQueries({ queryKey: ['delivery-batch-statuses'] })
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   })
