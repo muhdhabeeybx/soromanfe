@@ -12,9 +12,12 @@ import {
   Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
 } from '#/components/ui/empty'
 import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
+// The same formatter the PFI screens use, so a rate reads identically
+// wherever it appears — sign before the symbol, two decimals always.
+import { naira } from '#/routes/pfi/-pfi-utils'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
-import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings, ChevronRight, Loader2, Split } from 'lucide-react'
+import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings, ChevronRight, Loader2 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
@@ -274,6 +277,20 @@ function DeliveryOperationsPage() {
   }, [truckRecords, statusFilter, pfiFilter, customerFilter, truckFilter, codeFilter, dateFrom, dateTo, searchQuery, customerTypeFilter])
 
   // Group filtered records by allocation code
+  /**
+   * The unit the figures are in, named once in the headers rather than on
+   * every cell.
+   *
+   * Null when the filtered set holds more than one — LPG is in kilograms and
+   * fuel in litres, and a column headed "(Litres)" over a mixed list would be
+   * wrong about half of it. Then the header stays bare and the cells carry
+   * their own unit, which is the only honest way round.
+   */
+  const pageUnit = useMemo(() => {
+    const units = new Set(filtered.map(r => r.unitLabel).filter(Boolean))
+    return units.size === 1 ? [...units][0] : null
+  }, [filtered])
+
   const grouped = useMemo((): [string, TruckRecord[]][] => {
     const map = new Map<string, TruckRecord[]>()
     filtered.forEach(r => {
@@ -550,7 +567,7 @@ function DeliveryOperationsPage() {
         </NativeSelect>
 
         <NativeSelect
-          className="w-44" aria-label="Filter by allocation code"
+          className="w-44" aria-label="Filter by PFI"
           value={codeFilter} onChange={(e) => setCodeFilter(e.target.value)}
         >
           <option value="">All batches</option>
@@ -639,23 +656,35 @@ function DeliveryOperationsPage() {
       ) : (
         <section className={PANEL}>
           <div className={PANEL_RAIL}>
-            <span className={MICRO}>Batches</span>
+            <span className={MICRO}>PFIs</span>
             <span className={cn(MICRO, 'text-muted-foreground')}>
-              {filtered.length} truck{filtered.length === 1 ? '' : 's'} in {grouped.length} batch{grouped.length === 1 ? '' : 'es'}
+              {filtered.length} truck{filtered.length === 1 ? '' : 's'} in {grouped.length} PFI{grouped.length === 1 ? '' : 's'}
             </span>
           </div>
 
           <Table>
             <TableHeader>
+              {/* A count and the volume behind it are two facts, so they get
+                  two columns. Reading "3 · 45,000" in one cell meant neither
+                  figure could be scanned down its own column, which is the
+                  only reason to have put them in a table. */}
               <TableRow className="bg-muted/60 hover:bg-muted/60">
                 <TableHead className="w-8" />
-                <TableHead className="font-semibold text-muted-foreground">Batch</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">PFI</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Product</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Loaded at</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">Trucks</TableHead>
-                <TableHead className="text-right font-semibold text-muted-foreground">Volume</TableHead>
+                <TableHead className="text-right font-semibold text-muted-foreground">
+                  Volume{pageUnit ? ` (${pageUnit})` : ''}
+                </TableHead>
                 <TableHead className="text-right font-semibold text-warning">In transit</TableHead>
+                <TableHead className="text-right font-semibold text-warning">
+                  Qty{pageUnit ? ` (${pageUnit})` : ''}
+                </TableHead>
                 <TableHead className="text-right font-semibold text-accent">Sold</TableHead>
+                <TableHead className="text-right font-semibold text-accent">
+                  Qty{pageUnit ? ` (${pageUnit})` : ''}
+                </TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Last movement</TableHead>
                 <TableHead className="w-8" />
               </TableRow>
@@ -692,8 +721,8 @@ function DeliveryOperationsPage() {
                       </TableCell>
                       <TableCell>
                         {/* The code links out; the rest of the row expands.
-                            Two things to do with a batch, and clicking the
-                            name of it is the one that means "open it". */}
+                            Two things to do with a PFI, and clicking the name
+                            of it is the one that means "open it". */}
                         <Link
                           to="/delivery-operations/allocation-details"
                           search={{ code }}
@@ -710,24 +739,37 @@ function DeliveryOperationsPage() {
                         {depots.length ? depots.join(', ') : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{records.length}</TableCell>
-                      {/* The unit is the batch's own, not a hard-coded L —
-                          this page carries LPG in kilograms too. */}
+                      {/* The unit rides in the header when the whole page is
+                          in one, and on the cell when it is not — this page
+                          carries LPG in kilograms as well as fuel in litres,
+                          so neither placement is right for both. */}
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {fmtQty(totalQty)} <span className="font-normal text-muted-foreground">{unit}</span>
+                        {fmtQty(totalQty)}
+                        {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
+                        {loaded.length
+                          ? <span className="font-semibold text-warning">{loaded.length}</span>
+                          : <span className="text-muted-foreground/50">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
                         {loaded.length ? (
                           <>
-                            <span className="font-semibold text-warning">{loaded.length}</span>
-                            <span className="text-muted-foreground"> · {fmtQty(loaded.reduce((s, r) => s + r.qty, 0))}</span>
+                            {fmtQty(loaded.reduce((s, r) => s + r.qty, 0))}
+                            {!pageUnit && <span> {unit}</span>}
                           </>
                         ) : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
+                        {sold.length
+                          ? <span className="font-semibold text-accent">{sold.length}</span>
+                          : <span className="text-muted-foreground/50">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
                         {sold.length ? (
                           <>
-                            <span className="font-semibold text-accent">{sold.length}</span>
-                            <span className="text-muted-foreground"> · {fmtQty(sold.reduce((s, r) => s + r.qty, 0))}</span>
+                            {fmtQty(sold.reduce((s, r) => s + r.qty, 0))}
+                            {!pageUnit && <span> {unit}</span>}
                           </>
                         ) : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
@@ -747,7 +789,7 @@ function DeliveryOperationsPage() {
 
                     {isOpen && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={10} className="bg-muted/30 p-0">
+                        <TableCell colSpan={12} className="bg-muted/30 p-0">
                           <Table>
                             <TableHeader>
                               <TableRow className="hover:bg-transparent">
@@ -755,47 +797,111 @@ function DeliveryOperationsPage() {
                                 <TableHead className="font-semibold text-muted-foreground">Driver</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Customer</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Destination</TableHead>
-                                <TableHead className="text-right font-semibold text-muted-foreground">Quantity</TableHead>
+                                <TableHead className="text-right font-semibold text-muted-foreground">
+                                  Quantity{pageUnit ? ` (${pageUnit})` : ''}
+                                </TableHead>
                                 <TableHead className="text-right font-semibold text-muted-foreground">Rate</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Status</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Loaded</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {records.map((r) => (
-                                <TableRow key={r._id || r.id} className="hover:bg-muted/50">
-                                  <TableCell className="pl-12 font-semibold">{r.truckPlate || '—'}</TableCell>
-                                  <TableCell className="text-muted-foreground">{r.driverName || '—'}</TableCell>
-                                  <TableCell className="max-w-[200px] truncate" title={r.split.isSplit ? formatShareList(r.split) : r.custName}>
-                                    {r.split.isSplit ? (
-                                      <span className="inline-flex items-center gap-1.5">
-                                        <Split className="size-3 shrink-0 text-muted-foreground" />
-                                        {r.split.shares.length} customers
-                                      </span>
-                                    ) : (r.custName || <span className="text-muted-foreground/50">Unassigned</span>)}
-                                  </TableCell>
-                                  <TableCell className="max-w-[160px] truncate text-muted-foreground" title={r.destination}>
-                                    {r.destination || '—'}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">{fmtQty(r.qty)}</TableCell>
-                                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                                    {r.rate > 0 ? r.rate.toLocaleString() : '—'}
-                                  </TableCell>
-                                  <TableCell>
-                                    <StatusChip tone={
-                                      r.status.key === 'offloaded' ? 'accent'
-                                        : r.status.key === 'loaded' ? 'warning' : 'inert'
-                                    }>
-                                      {r.status.label}
-                                    </StatusChip>
-                                  </TableCell>
-                                  <TableCell className="text-muted-foreground">
-                                    {r.dateLoaded
-                                      ? (() => { try { return format(parseISO(r.dateLoaded), 'dd MMM yyyy') } catch { return r.dateLoaded } })()
-                                      : '—'}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
+                              {records.map((r) => {
+                                const loadedOn = r.dateLoaded
+                                  ? (() => { try { return format(parseISO(r.dateLoaded), 'dd MMM yyyy') } catch { return r.dateLoaded } })()
+                                  : '—'
+                                const tone = r.status.key === 'offloaded' ? 'accent'
+                                  : r.status.key === 'loaded' ? 'warning' : 'inert'
+
+                                return (
+                                  <Fragment key={r._id || r.id}>
+                                    <TableRow className="hover:bg-muted/50">
+                                      <TableCell className="pl-12 font-semibold">{r.truckPlate || '—'}</TableCell>
+                                      <TableCell className="text-muted-foreground">{r.driverName || '—'}</TableCell>
+                                      {/* On a split load the truck's own row
+                                          holds the whole truck — its total,
+                                          its status, its date — and each
+                                          customer gets a row of its own
+                                          beneath. Naming a count here instead
+                                          ("2 customers") put the answer behind
+                                          a second click on a page whose entire
+                                          job is to say who has what. */}
+                                      <TableCell
+                                        className="max-w-[200px] truncate"
+                                        title={r.split.isSplit ? formatShareList(r.split) : r.custName}
+                                      >
+                                        {r.split.isSplit
+                                          ? <span className="text-muted-foreground">Split across {r.split.shares.length}</span>
+                                          : (r.custName || <span className="text-muted-foreground/50">Unassigned</span>)}
+                                      </TableCell>
+                                      <TableCell className="max-w-[160px] truncate text-muted-foreground" title={r.destination}>
+                                        {r.split.isSplit ? '' : (r.destination || '—')}
+                                      </TableCell>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {fmtQty(r.qty)}
+                                        {!pageUnit && <span className="font-normal text-muted-foreground"> {r.unitLabel}</span>}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                                        {r.split.isSplit ? '' : r.rate > 0 ? naira(r.rate) : '—'}
+                                      </TableCell>
+                                      <TableCell><StatusChip tone={tone}>{r.status.label}</StatusChip></TableCell>
+                                      <TableCell className="text-muted-foreground">{loadedOn}</TableCell>
+                                    </TableRow>
+
+                                    {/* Same row, same columns, same type — a
+                                        share is a line of this truck's load,
+                                        not a different kind of thing that
+                                        needs its own styling to prove it. The
+                                        left rule is what says these belong to
+                                        the truck above rather than sitting
+                                        beside it. */}
+                                    {r.split.isSplit && r.split.shares.map((share, i) => (
+                                      <TableRow key={`${r._id || r.id}-${i}`} className="hover:bg-muted/50">
+                                        <TableCell />
+                                        <TableCell />
+                                        <TableCell className="max-w-[200px] truncate border-l-2 border-foreground/15 pl-3">
+                                          {share.customerName || <span className="text-muted-foreground/50">Unassigned</span>}
+                                        </TableCell>
+                                        <TableCell className="max-w-[160px] truncate text-muted-foreground" title={share.destination}>
+                                          {share.destination || '—'}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums">
+                                          {fmtQty(share.quantity)}
+                                          {!pageUnit && <span className="text-muted-foreground"> {r.unitLabel}</span>}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                                          {share.rate > 0 ? naira(share.rate) : '—'}
+                                        </TableCell>
+                                        <TableCell />
+                                        <TableCell />
+                                      </TableRow>
+                                    ))}
+
+                                    {/* Loaded but sold to nobody yet. Shown as
+                                        a share because that is what it is —
+                                        the part of the truck still to be
+                                        assigned — and leaving it out made the
+                                        shares fail to add up to the truck. */}
+                                    {r.split.isSplit && r.split.unassigned > 0 && (
+                                      <TableRow className="hover:bg-muted/50">
+                                        <TableCell />
+                                        <TableCell />
+                                        <TableCell className="border-l-2 border-foreground/15 pl-3 text-muted-foreground/50">
+                                          Unassigned
+                                        </TableCell>
+                                        <TableCell />
+                                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                                          {fmtQty(r.split.unassigned)}
+                                          {!pageUnit && <span> {r.unitLabel}</span>}
+                                        </TableCell>
+                                        <TableCell />
+                                        <TableCell />
+                                        <TableCell />
+                                      </TableRow>
+                                    )}
+                                  </Fragment>
+                                )
+                              })}
                             </TableBody>
                           </Table>
                         </TableCell>

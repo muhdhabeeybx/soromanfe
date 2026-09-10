@@ -187,10 +187,10 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
   })
 
   const problem =
-    mode === 'new' && !normalizedCode ? 'Give the batch a code'
+    mode === 'new' && !normalizedCode ? 'Give the PFI a number'
     : codeTaken ? `${normalizedCode} is already in use`
     : mode === 'new' && !depotId ? 'Say which depot it loads at'
-    : mode === 'existing' && !existingPfiId ? 'Choose the batch to add to'
+    : mode === 'existing' && !existingPfiId ? 'Choose the PFI to add to'
     : pickedIds.length === 0 ? 'Pick at least one truck'
     : missingQty.length > 0 ? `${missingQty.length} truck${missingQty.length === 1 ? ' has' : 's have'} no quantity`
     : overloaded.length > 0 ? `${overloaded.length} truck${overloaded.length === 1 ? '' : 's'} loaded beyond capacity`
@@ -246,9 +246,9 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>New delivery batch</DialogTitle>
+          <DialogTitle>New delivery PFI</DialogTitle>
           <DialogDescription>
-            Name it, say where it loaded, and tick the trucks that carried it. The batch quantity
+            Name it, say where it loaded, and tick the trucks that carried it. The PFI's quantity
             is the sum of what they loaded.
           </DialogDescription>
         </DialogHeader>
@@ -266,7 +266,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
                   mode === m ? 'bg-background font-semibold shadow-none' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
-                {m === 'new' ? 'New batch' : 'Add to an existing batch'}
+                {m === 'new' ? 'New PFI' : 'Add to an existing PFI'}
               </button>
             ))}
           </div>
@@ -274,7 +274,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
           {mode === 'new' ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="batch-code">Batch code</Label>
+                <Label htmlFor="batch-code">PFI number</Label>
                 <Input
                   id="batch-code"
                   value={code}
@@ -285,7 +285,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
                 <p className={cn(MICRO, codeTaken ? 'text-destructive' : 'text-muted-foreground')}>
                   {codeTaken
                     ? 'Already in use — add to it on the other tab instead.'
-                    : 'It is the PFI number, so the batch appears under this name everywhere.'}
+                    : 'Must be unique. The PFI appears under this name everywhere a batch does.'}
                 </p>
               </div>
 
@@ -317,12 +317,12 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="batch-existing">Batch</Label>
+                <Label htmlFor="batch-existing">PFI</Label>
                 <NativeSelect
                   id="batch-existing" value={existingPfiId}
                   onChange={(e) => setExistingPfiId(e.target.value)}
                 >
-                  <option value="">Select a batch…</option>
+                  <option value="">Select a PFI…</option>
                   {deliveryBatches.map((p) => (
                     <option key={String(p.id ?? p._id)} value={String(p.id ?? p._id)}>
                       {p.pfiNumber}{p.locationName ? ` · ${p.locationName}` : ''}
@@ -451,7 +451,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
               <div className="border-b border-foreground/15 px-4 py-3">
                 <p className="text-sm font-semibold">Locations that may sell from it</p>
                 <p className={cn(MICRO, 'text-muted-foreground')}>
-                  Optional. Leave it empty and the batch is sellable only at the depot it loaded at.
+                  Optional. Leave it empty and the PFI is sellable only at the depot it loaded at.
                 </p>
               </div>
               <div className="grid gap-1 p-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -500,7 +500,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
             </Button>
             <Button onClick={submit} disabled={!!problem || createBatch.isPending}>
               {createBatch.isPending && <Loader2 className="animate-spin" />}
-              {mode === 'new' ? 'Create batch' : 'Add trucks'}
+              {mode === 'new' ? 'Create PFI' : 'Add trucks'}
             </Button>
           </div>
         </DialogFooter>
