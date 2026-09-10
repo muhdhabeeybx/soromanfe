@@ -803,7 +803,6 @@ export async function exportFinanceReportPdf(
    * construction, so they stay on pdfNaira.
    */
   const plain = (n: number) => pdfNaira(Math.abs(n))
-  const summaryCols = summaryColumns(summary, filters)
   const displayValue = (c: { value: string | number; fmt?: string }) => {
     if (typeof c.value !== 'number') return c.value
     if (c.fmt === NGN) return naira(c.value)
@@ -812,120 +811,142 @@ export async function exportFinanceReportPdf(
     return c.value.toLocaleString()
   }
 
-  const signedSummaryIndexes = summaryCols
-    .map((c, i) => (c.signed ? i : -1))
-    .filter((i) => i >= 0)
-  // Transferred is signed but is not a gain or a loss — see paintOwed.
-  const transferSummaryIndexes = summaryCols
-    .map((c, i) => (/Transferred/i.test(c.header) ? i : -1))
-    .filter((i) => i >= 0)
-
-  autoTable(doc, {
-    startY,
-    head: [summaryCols.map((c) => c.header)],
-    body: [summaryCols.map((c) => displayValue(c))],
-    styles: { ...pdfStyles.body, fontSize: 7.5 },
-    headStyles: { ...pdfStyles.head, fillColor: PDF.brandGreen, fontSize: 7.5 },
-    bodyStyles: pdfStyles.summaryBody,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    didParseCell: (data: any) => {
-      if (data.section !== 'body') return
-      if (!signedSummaryIndexes.includes(data.column.index)) return
-      // Off the value, never the printed text. These cells used to be tested
-      // for a leading bracket, which `toLocaleString` never wrote — so the
-      // test never matched and every figure took one colour regardless.
-      const value = summaryCols[data.column.index]?.value
-      if (typeof value !== 'number' || Math.abs(value) < 0.005) return
-      if (transferSummaryIndexes.includes(data.column.index)) {
-        data.cell.styles.textColor = PDF.internal
-        return
-      }
-      data.cell.styles.textColor = value > 0 ? PDF.loss : PDF.gain
-    },
-  })
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let cursorY = (doc as any).lastAutoTable.finalY + 6
   /**
-   * The two columns lifted out of the rows.
+   * One table, not three blocks.
+   *
+   * The page carried a totals table across the top, two floating lines of text
+   * under it for the accounts and the recorders, and then a second PFI Stock
+   * Summary table — three things to find before reaching the orders, and two
+   * of them called a summary. Everything the reader needs before the rows now
+   * sits in a single label/value table, which is also the only shape that can
+   * hold a bank account name and a figure in the same list without one of them
+   * setting the column width for the other.
+   *
+   * The workbook keeps its wide across-the-page tables. It scrolls, so width
+   * costs it nothing, and the two documents are read differently enough that
+   * matching them here would make the PDF worse rather than the pair
+   * consistent.
+   */
+  type SummaryRow = {
+    label: string
+    text: string
+    /** The number behind the text, when its sign should colour the cell. */
+    signed?: number
+    /** Transferred is signed but is neither a gain nor a loss — see paintOwed. */
+    transfer?: boolean
+    /** A full-width divider naming what follows, not a label/value pair. */
+    section?: boolean
+  }
+
+  const summaryRows: SummaryRow[] = []
+
+  for (const c of summaryColumns(summary, filters)) {
+    // Report for, Location and PFI are printed verbatim in the header two
+    // lines above; in a single-column list they would sit directly beneath
+    // themselves.
+    if (['Report for', 'Location', 'PFI'].includes(c.header)) continue
+    summaryRows.push({
+      label: c.header,
+      text: String(displayValue(c)),
+      signed: c.signed && typeof c.value === 'number' ? c.value : undefined,
+      transfer: /Transferred/i.test(c.header),
+    })
+  }
+
+  /**
+   * The two columns that were lifted out of the rows, now rows of their own.
    *
    * Both repeated the same handful of values down hundreds of rows and cost
-   * two columns of page width to do it. As a set they are read in one glance
-   * and answer the questions actually asked of them: which accounts did the
-   * money land in, and who keyed it.
+   * two columns of page width to do it. As a set they answer the questions
+   * actually asked of them: which accounts did the money land in, and who
+   * keyed it.
    */
   const accountsUsed = [...new Set(rows.flatMap((o) => o.paidInto || []).filter(Boolean))]
   const recordedBy = [...new Set(
     rows.flatMap((o) => (o.payments || []).map((pay) => paymentRecorder(pay))).filter(Boolean),
   )]
-
-  for (const [label, items] of [['Paid into', accountsUsed], ['Recorded by', recordedBy]] as const) {
-    if (!items.length) continue
-    doc.setFontSize(7.5)
-    doc.setTextColor(...PDF.inkSoft)
-    doc.text(`${label}:  ${items.join('   \u00b7   ')}`, 14, cursorY, {
-      maxWidth: doc.internal.pageSize.getWidth() - 28,
+  if (accountsUsed.length) {
+    summaryRows.push({
+      label: accountsUsed.length === 1 ? 'Paid Into' : `Paid Into (${accountsUsed.length})`,
+      text: accountsUsed.join(',   '),
     })
-    doc.setTextColor(...PDF.ink)
-    cursorY += 5
+  }
+  if (recordedBy.length) {
+    summaryRows.push({
+      label: recordedBy.length === 1 ? 'Recorded By' : `Recorded By (${recordedBy.length})`,
+      text: recordedBy.join(',   '),
+    })
   }
 
   const note = extraFilterNote(filters)
-  if (note) {
-    doc.setFontSize(8)
-    doc.setTextColor(100)
-    doc.text(note, 14, cursorY)
-    doc.setTextColor(0)
-    cursorY += 5
-  }
+  if (note) summaryRows.push({ label: 'Filters', text: note })
 
+  /**
+   * Each batch on one row rather than nine columns of its own table.
+   *
+   * A batch's four figures read perfectly well as one line, and folding them
+   * in this way is what lets the whole preamble be a single table however many
+   * batches the period touched. The per-batch positions are still per-batch —
+   * nothing is summed across them, for the reason the workbook's total row
+   * gives: initial stock and remaining are positions in mixed batches and
+   * adding them together would not mean anything.
+   */
   if (pfiStock.length > 0) {
-    let stockY = cursorY
-    doc.setFontSize(12)
-    doc.setTextColor(0, 122, 85)
-    doc.text('PFI STOCK SUMMARY', 14, stockY)
-    doc.setTextColor(0)
-    stockY += 4
-
-    const periodTotal = totalByUnit(pfiStock)
-    const valueTotal = pfiStock.reduce((s, p) => s + p.salesValuePeriod, 0)
-    autoTable(doc, {
-      startY: stockY,
-      head: [[
-        'PFI', 'Location', 'Product', 'Initial Stock',
-        `Volume Sold (${filters.periodLabel})`, `Sales Value (${filters.periodLabel})`,
-        'Volume Sold (All Time)', 'Volume Remaining', 'Total Revenue (All Time)',
-      ]],
-      body: pfiStock.map((p) => [
-        up(p.pfiNumber), up(p.locationName), up(p.productName),
-        qtyText(p.initialStock, p.productUnit), qtyText(p.volumeSoldPeriod, p.productUnit),
-        naira(p.salesValuePeriod), qtyText(p.volumeSoldAllTime, p.productUnit),
-        qtyText(p.volumeRemaining, p.productUnit), naira(p.revenue),
-      ]),
-      // Only the period-sold column is totalled — initial stock and
-      // remaining are per-PFI positions in mixed batches, summing them
-      // across PFIs would not mean anything.
-      // Both period columns are totalled; the all-time and position columns
-      // are not, for the reason given on the workbook's own total row.
-      foot: [[
-        '', '', stockTotalLabel(pfiStock.length), '',
-        periodTotal, naira(valueTotal), '', '', '',
-      ]],
-      styles: { ...bodyStyle, fontSize: 7 },
-      headStyles: headStyle,
-      footStyles: footStyle,
-      // A batch charged for more BL than the tank received shows a negative
-      // remaining — a real deficit, worth the same red flag it gets on screen.
-      didParseCell: (data) => {
-        if (data.section === 'body' && data.column.index === 6 && String(data.cell.raw).trim().startsWith('-')) {
-          data.cell.styles.textColor = PDF.loss
-        }
-      },
-    })
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    cursorY = (doc as any).lastAutoTable.finalY + 6
+    summaryRows.push({ label: `Stock by PFI (${pfiStock.length})`, text: '', section: true })
+    for (const p of pfiStock) {
+      summaryRows.push({
+        label: up(p.pfiNumber),
+        text: [
+          up(p.productName),
+          `initial ${qtyText(p.initialStock, p.productUnit)}`,
+          `sold ${qtyText(p.volumeSoldPeriod, p.productUnit)} for ${naira(p.salesValuePeriod)}`,
+          `remaining ${qtyText(p.volumeRemaining, p.productUnit)}`,
+          `all-time ${qtyText(p.volumeSoldAllTime, p.productUnit)} for ${naira(p.revenue)}`,
+        ].join('   ·   '),
+        // A batch charged for more BL than the tank received shows a negative
+        // remaining — a real deficit, worth the same red flag it gets on screen.
+        signed: p.volumeRemaining < 0 ? 1 : undefined,
+      })
+    }
   }
+
+  autoTable(doc, {
+    startY,
+    head: [['Summary', '']],
+    body: summaryRows.map((r) => [r.label, r.text]),
+    styles: { ...bodyStyle, fontSize: 7.5, cellPadding: 1.4 },
+    headStyles: { ...headStyle, fillColor: PDF.brandGreen, fontSize: 7.5 },
+    columnStyles: {
+      // Fixed on the label so a long bank account name pushes the value
+      // column rather than squeezing every label in the table.
+      0: { cellWidth: 46, fontStyle: 'bold' },
+      1: { cellWidth: 'auto' },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (data: any) => {
+      if (data.section !== 'body') return
+      const row = summaryRows[data.row.index]
+      if (!row) return
+      if (row.section) {
+        // Drawn as one band across both columns: it names a group, and a
+        // label/value pair is not what it is.
+        // The brand tint the workbook keeps for a closing total — the one
+        // fill in the palette that reads as "this is a heading, not a row".
+        data.cell.styles.fillColor = PDF.grandTotalTint
+        data.cell.styles.fontStyle = 'bold'
+        data.cell.styles.textColor = PDF.brandGreen
+        return
+      }
+      if (data.column.index !== 1 || row.signed == null) return
+      if (Math.abs(row.signed) < 0.005) return
+      data.cell.styles.textColor = row.transfer
+        ? PDF.internal
+        : row.signed > 0 ? PDF.loss : PDF.gain
+    },
+  })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cursorY = (doc as any).lastAutoTable.finalY + 6
 
   // Each row is laid out by walking COLUMNS and asking each one whether this
   // row kind fills it — so a column can be added, moved, or switched between
