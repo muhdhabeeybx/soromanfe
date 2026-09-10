@@ -450,8 +450,11 @@ function summaryColumns(
     { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_PLAIN, signed: true },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
   ]
-  if (summary.initialStock != null) cols.push({ header: 'Initial Stock (PFI)', value: summary.initialStock, fmt: QTY })
-  if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance After (PFI)', value: summary.tankBalanceAfter, fmt: QTY })
+  // The same two words the screen uses. Both only exist when a PFI is
+  // selected, and the PFI is named two cells to the left, so the "(PFI)" they
+  // carried was restating the filter rather than labelling the figure.
+  if (summary.initialStock != null) cols.push({ header: 'Initial Stock', value: summary.initialStock, fmt: QTY })
+  if (summary.tankBalanceAfter != null) cols.push({ header: 'Tank Balance Now', value: summary.tankBalanceAfter, fmt: QTY })
   return cols
 }
 

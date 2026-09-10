@@ -958,8 +958,11 @@ function FinanceReportPage() {
           />
           {selectedPfi && (
             <>
-              <SummaryItem label="Tank quantity (PFI)" value={`${(summary.initialStock ?? 0).toLocaleString()} L`} />
-              <SummaryItem label="Tank balance after (PFI)" value={`${(summary.tankBalanceAfter ?? 0).toLocaleString()} L`} />
+              {/* Named the way the desk says them out loud. Both only appear
+                  with a PFI selected, so the "(PFI)" each carried was telling
+                  the reader something the filter above already had. */}
+              <SummaryItem label="Initial stock" value={`${(summary.initialStock ?? 0).toLocaleString()} L`} />
+              <SummaryItem label="Tank balance now" value={`${(summary.tankBalanceAfter ?? 0).toLocaleString()} L`} />
             </>
           )}
         </div>
