@@ -17,9 +17,15 @@ import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
-import { Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings, ChevronRight, Loader2 } from 'lucide-react'
+import {
+  Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings,
+  ChevronRight, Loader2, Trash2, AlertTriangle,
+} from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
-import { useDeliveryInventoryList, useUpdateDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
+import {
+  useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryBatch,
+} from '#/lib/hooks/useDeliveryInventory'
+import { useRoles } from '#/lib/hooks/useRoles'
 import { useDeliverySalesList } from '#/lib/hooks/useDeliverySales'
 import { usePfiList } from '#/lib/hooks/usePfis'
 import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
@@ -36,6 +42,9 @@ import type { Pfi } from '#/lib/hooks/usePfis'
 
 import { ManageCodesDialog } from '#/components/delivery-operations/ManageCodesDialog'
 import { NewBatchDialog } from '#/components/delivery-operations/NewBatchDialog'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '#/components/ui/dialog'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/delivery-operations/')({
@@ -80,6 +89,26 @@ interface BatchGroup {
   pfi?: Pfi
 }
 
+/**
+ * What a batch has on it that a delete must not quietly take away.
+ *
+ * A truck row is safe to remove while it is only a record that a truck went
+ * out. The moment it carries a customer, a rate or a payment it is part of the
+ * trading record, and deleting the batch would take a sale and its money with
+ * it. Counted rather than merely flagged, so the dialog can say how much.
+ */
+function deleteBlockers(records: TruckRecord[]) {
+  const sold = records.filter((r) => r.split.shares.length > 0 || r.custName)
+  const rated = records.filter((r) => r.rate > 0)
+  const paid = records.filter((r) => r.split.shares.some((sh) => sh.totalPaid > 0))
+  return {
+    sold: sold.length,
+    rated: rated.length,
+    paid: paid.length,
+    blocked: sold.length > 0 || rated.length > 0 || paid.length > 0,
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Component
 // ═══════════════════════════════════════════════════════════════════════════
@@ -118,6 +147,10 @@ function DeliveryOperationsPage() {
 
   // ── Mutations ───────────────────────────────────────────────────────────
   const updateInventory = useUpdateDeliveryInventory()
+  const deleteBatch = useDeleteDeliveryBatch()
+  // Deleting a batch takes its whole trading record with it, so it sits behind
+  // the same role that gates deleting an order.
+  const { isSuperAdmin: canDelete } = useRoles()
 
   // ── Filters & Search ────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
@@ -142,6 +175,8 @@ function DeliveryOperationsPage() {
    * batch expanded at once is the wall of cards this replaced.
    */
   const [openBatch, setOpenBatch] = useState<string | null>(null)
+  /** The batch a delete has been asked for, awaiting confirmation. */
+  const [deletingBatch, setDeletingBatch] = useState<BatchGroup | null>(null)
 
   // Persist codes
   useEffect(() => {
@@ -306,32 +341,19 @@ function DeliveryOperationsPage() {
   }, [filtered])
 
   /**
-   * One row per batch — and an allocation code IS a batch.
+   * One row per batch, and a batch is something that has been loaded.
    *
-   * The page grouped truck rows by `allocation_code` and stopped there, so a
-   * batch existed only once something had been loaded against its code. That
-   * made a PFI and a code two different kinds of thing on a page where they
-   * mean the same one: PFI-43B was raised, carried no trucks yet, and simply
-   * was not here — with nowhere to click to put trucks on it.
+   * Grouped by allocation code over the truck rows — which is also what makes
+   * "the batches raised here" true by construction: loading happens on this
+   * page, so a batch appears once it has been. A delivery PFI raised in the
+   * PFI module carries no loads until somebody adds them here, and until then
+   * it belongs to that module rather than to this list.
    *
-   * So the list is the union of both identities:
-   *
-   *   codes with truck rows    exactly as before. The legacy codes are the
-   *                            record of how this was done before PFIs, and
-   *                            nothing here rewrites or renames them.
-   *   delivery PFIs            included whether or not anything is loaded
-   *                            against them, so a new batch is visible the
-   *                            moment it exists.
-   *
-   * Matched by pfi_id first and by name second, because both links exist in
-   * the data: PFI-14B, PFI-19B and PFI-24B already carry a pfi_id on their
-   * rows, while PFI-25C, PFI-36C and PFI-40B are name-only. A batch that
-   * matches either way appears once, not twice.
-   *
-   * Truck-less PFIs are held back once a filter that only reads truck rows is
-   * on — a status of "In transit" over a batch with no trucks is a row that
-   * cannot answer the question being asked. A batch filter still finds them,
-   * since that filter is about the batch rather than its loads.
+   * The PFI behind a code is attached where there is one, but never creates a
+   * row of its own. It is matched by pfi_id first and by name second, because
+   * both links exist in the data — PFI-14B, PFI-19B and PFI-24B carry a pfi_id
+   * on their rows while PFI-25C, PFI-36C and PFI-40B are name-only — and it is
+   * what lets a batch be deleted as one thing rather than as a pile of rows.
    */
   const grouped = useMemo((): BatchGroup[] => {
     const map = new Map<string, BatchGroup>()
@@ -345,34 +367,15 @@ function DeliveryOperationsPage() {
       map.set(key, group)
     })
 
-    // Only truck-level filters suppress an empty batch; the batch filter does
-    // the opposite and is how you go looking for one.
-    const truckFiltered = !!(
-      searchQuery || hasDateFilter || statusFilter !== 'all'
-      || customerFilter || truckFilter || customerTypeFilter !== 'all'
-    )
-
     for (const pfi of allPfis) {
       if (pfi.pfiType !== 'delivery') continue
       const number = String(pfi.pfiNumber || '')
       if (!number) continue
-      const key = norm(number)
-
-      // Already here under its own name, or under a code whose rows point at
-      // it. Either way it is the same batch and keeps the group it has.
-      const byName = map.get(key)
-      const byId = byName ?? [...map.values()].find(
+      const byName = map.get(norm(number))
+      const match = byName ?? [...map.values()].find(
         (g) => g.records.some((r) => r.pfiId != null && String(r.pfiId) === String(pfi.id)),
       )
-      if (byId) {
-        byId.pfi = pfi
-        continue
-      }
-
-      if (truckFiltered) continue
-      if (pfiFilter && norm(pfiFilter) !== key) continue
-      if (codeFilter && norm(codeFilter) !== key) continue
-      map.set(key, { key, code: number, records: [], pfi })
+      if (match) match.pfi = pfi
     }
 
     map.forEach(({ records }) => {
@@ -388,17 +391,8 @@ function DeliveryOperationsPage() {
       return d > max ? d : max
     }, '')
 
-    // A batch with nothing loaded yet has no date to sort on, so it leads the
-    // list rather than sinking to the bottom — it is the one still waiting on
-    // somebody.
-    return [...map.values()].sort((a, b) => {
-      if (!a.records.length !== !b.records.length) return a.records.length ? 1 : -1
-      return latest(b).localeCompare(latest(a))
-    })
-  }, [
-    filtered, allPfis, searchQuery, hasDateFilter, statusFilter,
-    customerFilter, truckFilter, customerTypeFilter, pfiFilter, codeFilter,
-  ])
+    return [...map.values()].sort((a, b) => latest(b).localeCompare(latest(a)))
+  }, [filtered, allPfis])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Derived / Summaries
@@ -766,14 +760,13 @@ function DeliveryOperationsPage() {
                 </TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Last movement</TableHead>
                 <TableHead className="w-8" />
+                {canDelete && <TableHead className="w-8" />}
               </TableRow>
             </TableHeader>
 
             <TableBody>
               {grouped.map(({ key, code, records, pfi }) => {
                 const isOpen = openBatch === key
-                /** Nothing loaded yet — a batch waiting on its trucks. */
-                const empty = records.length === 0
                 const unit = records[0]?.unitLabel || pfi?.productUnit || 'Litres'
                 const totalQty = records.reduce((s, r) => s + r.qty, 0)
 
@@ -783,15 +776,8 @@ function DeliveryOperationsPage() {
                 // columns above could read 0 and 0 over a batch of 36 trucks.
                 const other = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
 
-                // Off the truck rows where there are any, off the PFI where
-                // there are not — an empty batch still knows its own product
-                // and the depot it loads at.
-                const products = records.length
-                  ? [...new Set(records.map(r => r.product).filter(Boolean))]
-                  : [pfi?.productName].filter(Boolean) as string[]
-                const depots = records.length
-                  ? [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
-                  : [pfi?.locationName].filter(Boolean) as string[]
+                const products = [...new Set(records.map(r => r.product).filter(Boolean))]
+                const depots = [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
                 const latestDate = records.reduce((max, r) => {
                   const d = r.dateOffloaded || r.dateLoaded || ''
                   return d > max ? d : max
@@ -800,43 +786,24 @@ function DeliveryOperationsPage() {
                 return (
                   <Fragment key={key}>
                     <TableRow
-                      className={cn('bg-card', !empty && 'cursor-pointer')}
-                      onClick={() => { if (!empty) setOpenBatch(isOpen ? null : key) }}
+                      className="cursor-pointer bg-card"
+                      onClick={() => setOpenBatch(isOpen ? null : key)}
                     >
                       <TableCell className="pr-0 text-muted-foreground">
-                        {/* Nothing to expand into on a batch with no trucks,
-                            so it gets no affordance saying otherwise. */}
-                        {!empty && (
-                          <ChevronRight className={cn('size-4 transition-transform duration-250 ease-luxe', isOpen && 'rotate-90')} />
-                        )}
+                        <ChevronRight className={cn('size-4 transition-transform duration-250 ease-luxe', isOpen && 'rotate-90')} />
                       </TableCell>
                       <TableCell>
                         {/* The name links out; the rest of the row expands.
-                            Where it links depends on what there is to do: a
-                            loaded batch goes to its allocation register, where
-                            loads get customers and rates. One with no trucks
-                            goes to its own page, which is where trucks are
-                            added — sending it to a register of nothing was
-                            the dead end that made a new PFI look broken. */}
-                        {empty && pfi?.id != null ? (
-                          <Link
-                            to="/delivery-operations/batch"
-                            search={{ id: Number(pfi.id) }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="font-semibold uppercase underline-offset-4 hover:underline"
-                          >
-                            {code}
-                          </Link>
-                        ) : (
-                          <Link
-                            to="/delivery-operations/allocation-details"
-                            search={{ code }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="font-semibold uppercase underline-offset-4 hover:underline"
-                          >
-                            {code || 'No code'}
-                          </Link>
-                        )}
+                            Two things to do with a batch, and clicking the name
+                            of it is the one that means "open it". */}
+                        <Link
+                          to="/delivery-operations/allocation-details"
+                          search={{ code }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-semibold uppercase underline-offset-4 hover:underline"
+                        >
+                          {code || 'No code'}
+                        </Link>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {products.length ? products.join(', ') : '—'}
@@ -844,22 +811,14 @@ function DeliveryOperationsPage() {
                       <TableCell className="max-w-[180px] truncate text-muted-foreground" title={depots.join(', ')}>
                         {depots.length ? depots.join(', ') : '—'}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {empty
-                          ? <span className="text-muted-foreground/50">none yet</span>
-                          : records.length}
-                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{records.length}</TableCell>
                       {/* The unit rides in the header when the whole page is
                           in one, and on the cell when it is not — this page
                           carries LPG in kilograms as well as fuel in litres,
                           so neither placement is right for both. */}
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {empty ? <span className="font-normal text-muted-foreground/50">—</span> : (
-                          <>
-                            {fmtQty(totalQty)}
-                            {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
-                          </>
-                        )}
+                        {fmtQty(totalQty)}
+                        {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {loaded.length
@@ -893,21 +852,34 @@ function DeliveryOperationsPage() {
                           : '—'}
                       </TableCell>
                       <TableCell className="pl-0">
-                        {empty ? (
-                          <StatusChip tone="warning" title="Raised, but nothing loaded against it yet">
-                            No trucks
-                          </StatusChip>
-                        ) : other.length > 0 ? (
+                        {other.length > 0 && (
                           <StatusChip tone="inert" title={`${other.length} ${STATUS_DISPLAY.empty.label.toLowerCase()}`}>
                             {other.length}
                           </StatusChip>
-                        ) : null}
+                        )}
                       </TableCell>
+                      {canDelete && (
+                        <TableCell className="pl-0">
+                          {/* Offered on every batch and refused inside the
+                              dialog rather than hidden here: "why can I not
+                              delete this" is a question worth answering, and a
+                              missing button answers nothing. */}
+                          <Button
+                            variant="ghost" size="icon-sm"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            title={`Delete ${code || 'this batch'}`}
+                            onClick={(e) => { e.stopPropagation(); setDeletingBatch({ key, code, records, pfi }) }}
+                          >
+                            <Trash2 />
+                            <span className="sr-only">Delete {code}</span>
+                          </Button>
+                        </TableCell>
+                      )}
                     </TableRow>
 
                     {isOpen && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={12} className="bg-muted/30 p-0">
+                        <TableCell colSpan={canDelete ? 13 : 12} className="bg-muted/30 p-0">
                           <Table>
                             <TableHeader>
                               <TableRow className="hover:bg-transparent">
@@ -1040,6 +1012,111 @@ function DeliveryOperationsPage() {
         onOpenChange={setNewBatchOpen}
         existingCodes={deliveryCodes}
       />
+
+      {/* ── Deleting a whole batch ─────────────────────────────────────── */}
+      <Dialog
+        open={deletingBatch !== null}
+        onOpenChange={(open) => { if (!open && !deleteBatch.isPending) setDeletingBatch(null) }}
+      >
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const batch = deletingBatch
+            if (!batch) return null
+            const blockers = deleteBlockers(batch.records)
+            const qty = batch.records.reduce((sum, r) => sum + r.qty, 0)
+            const unit = batch.records[0]?.unitLabel || batch.pfi?.productUnit || 'Litres'
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Delete {batch.code || 'this batch'}?</DialogTitle>
+                  <DialogDescription>
+                    {blockers.blocked
+                      ? 'This batch has been traded, so it cannot be deleted from here.'
+                      : `This removes the batch and every truck record under it${batch.pfi ? ', including its PFI, its manifest and its locations' : ''}. It cannot be undone.`}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Truck records</span>
+                      <span className="font-semibold tabular-nums">{fmtQty(batch.records.length)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-muted-foreground">Volume</span>
+                      <span className="font-semibold tabular-nums">{fmtQty(qty)} {unit}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-muted-foreground">PFI</span>
+                      <span className="font-semibold">
+                        {batch.pfi
+                          ? batch.pfi.pfiNumber
+                          : <span className="font-normal text-muted-foreground">not linked — truck records only</span>}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Named one by one, because "cannot delete" without saying
+                      what is in the way is a dead end rather than an answer. */}
+                  {blockers.blocked && (
+                    <div className="space-y-1.5 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
+                      <p className="flex items-center gap-1.5 font-semibold">
+                        <AlertTriangle className="size-3.5" />
+                        Already traded
+                      </p>
+                      {blockers.sold > 0 && <p>{blockers.sold} load{blockers.sold === 1 ? '' : 's'} assigned to a customer.</p>}
+                      {blockers.rated > 0 && <p>{blockers.rated} load{blockers.rated === 1 ? '' : 's'} carry a rate.</p>}
+                      {blockers.paid > 0 && <p>{blockers.paid} load{blockers.paid === 1 ? '' : 's'} have payments recorded against them.</p>}
+                      <p className="pt-1 text-muted-foreground">
+                        Clear the sales and payments on those loads first — deleting the batch
+                        would take that money record with it.
+                      </p>
+                    </div>
+                  )}
+
+                  {!blockers.blocked && batch.pfi && (
+                    <p className="text-xs text-muted-foreground">
+                      If any order is assigned to this PFI the server will refuse, and nothing
+                      is deleted — the PFI goes first precisely so that failure costs nothing.
+                    </p>
+                  )}
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    disabled={deleteBatch.isPending}
+                    onClick={() => setDeletingBatch(null)}
+                  >
+                    {blockers.blocked ? 'Close' : 'Keep it'}
+                  </Button>
+                  {!blockers.blocked && (
+                    <Button
+                      variant="destructive"
+                      disabled={deleteBatch.isPending}
+                      onClick={async () => {
+                        await deleteBatch.mutateAsync({
+                          pfiId: batch.pfi?.id != null ? Number(batch.pfi.id) : null,
+                          inventoryIds: batch.records
+                            .map((r) => String(r._id || r.id || ''))
+                            .filter(Boolean),
+                          label: batch.code || 'Batch',
+                        })
+                        setDeletingBatch(null)
+                        setOpenBatch(null)
+                      }}
+                    >
+                      {deleteBatch.isPending && <Loader2 className="animate-spin" />}
+                      Delete permanently
+                    </Button>
+                  )}
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       <ManageCodesDialog
         open={manageCodesOpen}

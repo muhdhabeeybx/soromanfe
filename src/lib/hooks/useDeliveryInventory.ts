@@ -104,3 +104,63 @@ export function useDeleteDeliveryInventory() {
     },
   })
 }
+
+/**
+ * Delete a whole delivery batch — the PFI and every truck row under its code.
+ *
+ * ── Why the PFI goes first ────────────────────────────────────────────────
+ *
+ * DELETE /pfis refuses a batch any order references, and that is the common
+ * refusal. Deleting the truck rows first would mean destroying them and only
+ * then discovering the batch itself cannot go, leaving the PFI standing with
+ * its loads gone. Taking the PFI first means the likely failure happens while
+ * nothing has been touched.
+ *
+ * ── Why the rows have to be deleted at all ────────────────────────────────
+ *
+ * delivery_inventory.pfi_id is ON DELETE SET NULL, not CASCADE. Deleting the
+ * PFI alone would leave every truck row behind with a null pfi_id, still
+ * carrying its allocation_code — so the batch would go on appearing on the
+ * inventory page and in the sales ledger, unlinked from anything. "Deleted the
+ * batch, batch still there."
+ */
+export function useDeleteDeliveryBatch() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ pfiId, inventoryIds, label }: {
+      pfiId?: number | null
+      inventoryIds: string[]
+      /** The batch code, for the message. */
+      label: string
+    }) => {
+      if (pfiId != null) await api.delete(`/pfis/${pfiId}`)
+
+      // One at a time, not Promise.all: each removal unwinds its own stock and
+      // ledger links, and a failure halfway needs to say how far it got rather
+      // than leave a dozen half-finished requests in flight.
+      const failed: string[] = []
+      for (const id of inventoryIds) {
+        try {
+          await api.delete(`/delivery-inventory/${id}`)
+        } catch {
+          failed.push(id)
+        }
+      }
+      return { label, deleted: inventoryIds.length - failed.length, failed: failed.length }
+    },
+    onSuccess: (res) => {
+      if (res.failed > 0) {
+        toast.error(`${res.label}: ${res.deleted} truck records removed, ${res.failed} could not be`)
+      } else {
+        toast.success(`${res.label} deleted${res.deleted ? ` with ${res.deleted} truck record${res.deleted === 1 ? '' : 's'}` : ''}`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
