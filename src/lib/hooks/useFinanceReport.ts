@@ -333,6 +333,19 @@ export interface CustomerDifferential {
   /** Money still owed across their orders. */
   underpaid: number
   /**
+   * Money the report above still counts and this block does not, and on how
+   * many orders.
+   *
+   * Migration 0021 gave an order that RECEIVED transferred surplus both the
+   * transfer_in and a 'legacy' placeholder for the same amount, so orders
+   * settled in full by a transfer read as overpaid by their whole value. The
+   * report's own Differential column still counts both rows — it has been
+   * audited and does not move. This is the gap between the two, stated so the
+   * documents reconcile line by line rather than silently disagreeing.
+   */
+  duplicatesExcluded: number
+  duplicateOrderCount: number
+  /**
    * Positive is owed to Soroman, negative is held for the customer.
    *
    * Kept alongside the two sides rather than replacing them: a customer ₦5m
