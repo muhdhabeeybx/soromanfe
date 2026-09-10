@@ -66,6 +66,20 @@ interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, Re
   split: LoadSplit
 }
 
+/**
+ * A batch, however it is identified.
+ *
+ * `records` is empty on a delivery PFI with no trucks on it yet. It is still a
+ * batch, and still the thing you open in order to put trucks on it.
+ */
+interface BatchGroup {
+  key: string
+  code: string
+  records: TruckRecord[]
+  /** The PFI behind the code, where there is one. */
+  pfi?: Pfi
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Component
 // ═══════════════════════════════════════════════════════════════════════════
@@ -291,16 +305,77 @@ function DeliveryOperationsPage() {
     return units.size === 1 ? [...units][0] : null
   }, [filtered])
 
-  const grouped = useMemo((): [string, TruckRecord[]][] => {
-    const map = new Map<string, TruckRecord[]>()
+  /**
+   * One row per batch — and an allocation code IS a batch.
+   *
+   * The page grouped truck rows by `allocation_code` and stopped there, so a
+   * batch existed only once something had been loaded against its code. That
+   * made a PFI and a code two different kinds of thing on a page where they
+   * mean the same one: PFI-43B was raised, carried no trucks yet, and simply
+   * was not here — with nowhere to click to put trucks on it.
+   *
+   * So the list is the union of both identities:
+   *
+   *   codes with truck rows    exactly as before. The legacy codes are the
+   *                            record of how this was done before PFIs, and
+   *                            nothing here rewrites or renames them.
+   *   delivery PFIs            included whether or not anything is loaded
+   *                            against them, so a new batch is visible the
+   *                            moment it exists.
+   *
+   * Matched by pfi_id first and by name second, because both links exist in
+   * the data: PFI-14B, PFI-19B and PFI-24B already carry a pfi_id on their
+   * rows, while PFI-25C, PFI-36C and PFI-40B are name-only. A batch that
+   * matches either way appears once, not twice.
+   *
+   * Truck-less PFIs are held back once a filter that only reads truck rows is
+   * on — a status of "In transit" over a batch with no trucks is a row that
+   * cannot answer the question being asked. A batch filter still finds them,
+   * since that filter is about the batch rather than its loads.
+   */
+  const grouped = useMemo((): BatchGroup[] => {
+    const map = new Map<string, BatchGroup>()
+    const norm = (v: string) => v.trim().toUpperCase()
+
     filtered.forEach(r => {
-      const key = r.code || ''
-      const arr = map.get(key) ?? []
-      arr.push(r)
-      map.set(key, arr)
+      const code = r.code || ''
+      const key = norm(code)
+      const group = map.get(key) ?? { key, code, records: [] }
+      group.records.push(r)
+      map.set(key, group)
     })
 
-    map.forEach(records => {
+    // Only truck-level filters suppress an empty batch; the batch filter does
+    // the opposite and is how you go looking for one.
+    const truckFiltered = !!(
+      searchQuery || hasDateFilter || statusFilter !== 'all'
+      || customerFilter || truckFilter || customerTypeFilter !== 'all'
+    )
+
+    for (const pfi of allPfis) {
+      if (pfi.pfiType !== 'delivery') continue
+      const number = String(pfi.pfiNumber || '')
+      if (!number) continue
+      const key = norm(number)
+
+      // Already here under its own name, or under a code whose rows point at
+      // it. Either way it is the same batch and keeps the group it has.
+      const byName = map.get(key)
+      const byId = byName ?? [...map.values()].find(
+        (g) => g.records.some((r) => r.pfiId != null && String(r.pfiId) === String(pfi.id)),
+      )
+      if (byId) {
+        byId.pfi = pfi
+        continue
+      }
+
+      if (truckFiltered) continue
+      if (pfiFilter && norm(pfiFilter) !== key) continue
+      if (codeFilter && norm(codeFilter) !== key) continue
+      map.set(key, { key, code: number, records: [], pfi })
+    }
+
+    map.forEach(({ records }) => {
       records.sort((x, y) => {
         const dateX = x.dateOffloaded || x.dateLoaded || ''
         const dateY = y.dateOffloaded || y.dateLoaded || ''
@@ -308,18 +383,22 @@ function DeliveryOperationsPage() {
       })
     })
 
-    return [...map.entries()].sort(([, recordsA], [, recordsB]) => {
-      const maxDateA = recordsA.reduce((max, r) => {
-        const d = r.dateOffloaded || r.dateLoaded || ''
-        return d > max ? d : max
-      }, '')
-      const maxDateB = recordsB.reduce((max, r) => {
-        const d = r.dateOffloaded || r.dateLoaded || ''
-        return d > max ? d : max
-      }, '')
-      return maxDateB.localeCompare(maxDateA)
+    const latest = (g: BatchGroup) => g.records.reduce((max, r) => {
+      const d = r.dateOffloaded || r.dateLoaded || ''
+      return d > max ? d : max
+    }, '')
+
+    // A batch with nothing loaded yet has no date to sort on, so it leads the
+    // list rather than sinking to the bottom — it is the one still waiting on
+    // somebody.
+    return [...map.values()].sort((a, b) => {
+      if (!a.records.length !== !b.records.length) return a.records.length ? 1 : -1
+      return latest(b).localeCompare(latest(a))
     })
-  }, [filtered])
+  }, [
+    filtered, allPfis, searchQuery, hasDateFilter, statusFilter,
+    customerFilter, truckFilter, customerTypeFilter, pfiFilter, codeFilter,
+  ])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Derived / Summaries
@@ -691,10 +770,11 @@ function DeliveryOperationsPage() {
             </TableHeader>
 
             <TableBody>
-              {grouped.map(([code, records]) => {
-                const key = code || '__none__'
+              {grouped.map(({ key, code, records, pfi }) => {
                 const isOpen = openBatch === key
-                const unit = records[0]?.unitLabel || 'Litres'
+                /** Nothing loaded yet — a batch waiting on its trucks. */
+                const empty = records.length === 0
+                const unit = records[0]?.unitLabel || pfi?.productUnit || 'Litres'
                 const totalQty = records.reduce((s, r) => s + r.qty, 0)
 
                 const loaded = records.filter(r => r.status.key === 'loaded')
@@ -703,8 +783,15 @@ function DeliveryOperationsPage() {
                 // columns above could read 0 and 0 over a batch of 36 trucks.
                 const other = records.filter(r => r.status.key !== 'loaded' && r.status.key !== 'offloaded')
 
-                const products = [...new Set(records.map(r => r.product).filter(Boolean))]
-                const depots = [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
+                // Off the truck rows where there are any, off the PFI where
+                // there are not — an empty batch still knows its own product
+                // and the depot it loads at.
+                const products = records.length
+                  ? [...new Set(records.map(r => r.product).filter(Boolean))]
+                  : [pfi?.productName].filter(Boolean) as string[]
+                const depots = records.length
+                  ? [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
+                  : [pfi?.locationName].filter(Boolean) as string[]
                 const latestDate = records.reduce((max, r) => {
                   const d = r.dateOffloaded || r.dateLoaded || ''
                   return d > max ? d : max
@@ -713,24 +800,43 @@ function DeliveryOperationsPage() {
                 return (
                   <Fragment key={key}>
                     <TableRow
-                      className="cursor-pointer bg-card"
-                      onClick={() => setOpenBatch(isOpen ? null : key)}
+                      className={cn('bg-card', !empty && 'cursor-pointer')}
+                      onClick={() => { if (!empty) setOpenBatch(isOpen ? null : key) }}
                     >
                       <TableCell className="pr-0 text-muted-foreground">
-                        <ChevronRight className={cn('size-4 transition-transform duration-250 ease-luxe', isOpen && 'rotate-90')} />
+                        {/* Nothing to expand into on a batch with no trucks,
+                            so it gets no affordance saying otherwise. */}
+                        {!empty && (
+                          <ChevronRight className={cn('size-4 transition-transform duration-250 ease-luxe', isOpen && 'rotate-90')} />
+                        )}
                       </TableCell>
                       <TableCell>
-                        {/* The code links out; the rest of the row expands.
-                            Two things to do with a PFI, and clicking the name
-                            of it is the one that means "open it". */}
-                        <Link
-                          to="/delivery-operations/allocation-details"
-                          search={{ code }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="font-semibold uppercase underline-offset-4 hover:underline"
-                        >
-                          {code || 'No code'}
-                        </Link>
+                        {/* The name links out; the rest of the row expands.
+                            Where it links depends on what there is to do: a
+                            loaded batch goes to its allocation register, where
+                            loads get customers and rates. One with no trucks
+                            goes to its own page, which is where trucks are
+                            added — sending it to a register of nothing was
+                            the dead end that made a new PFI look broken. */}
+                        {empty && pfi?.id != null ? (
+                          <Link
+                            to="/delivery-operations/batch"
+                            search={{ id: Number(pfi.id) }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-semibold uppercase underline-offset-4 hover:underline"
+                          >
+                            {code}
+                          </Link>
+                        ) : (
+                          <Link
+                            to="/delivery-operations/allocation-details"
+                            search={{ code }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-semibold uppercase underline-offset-4 hover:underline"
+                          >
+                            {code || 'No code'}
+                          </Link>
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {products.length ? products.join(', ') : '—'}
@@ -738,14 +844,22 @@ function DeliveryOperationsPage() {
                       <TableCell className="max-w-[180px] truncate text-muted-foreground" title={depots.join(', ')}>
                         {depots.length ? depots.join(', ') : '—'}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{records.length}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {empty
+                          ? <span className="text-muted-foreground/50">none yet</span>
+                          : records.length}
+                      </TableCell>
                       {/* The unit rides in the header when the whole page is
                           in one, and on the cell when it is not — this page
                           carries LPG in kilograms as well as fuel in litres,
                           so neither placement is right for both. */}
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {fmtQty(totalQty)}
-                        {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
+                        {empty ? <span className="font-normal text-muted-foreground/50">—</span> : (
+                          <>
+                            {fmtQty(totalQty)}
+                            {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
+                          </>
+                        )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {loaded.length
@@ -779,11 +893,15 @@ function DeliveryOperationsPage() {
                           : '—'}
                       </TableCell>
                       <TableCell className="pl-0">
-                        {other.length > 0 && (
+                        {empty ? (
+                          <StatusChip tone="warning" title="Raised, but nothing loaded against it yet">
+                            No trucks
+                          </StatusChip>
+                        ) : other.length > 0 ? (
                           <StatusChip tone="inert" title={`${other.length} ${STATUS_DISPLAY.empty.label.toLowerCase()}`}>
                             {other.length}
                           </StatusChip>
-                        )}
+                        ) : null}
                       </TableCell>
                     </TableRow>
 
