@@ -944,6 +944,31 @@ export function useSetPfiLocations(pfiId: number | null) {
   })
 }
 
+/**
+ * The same allowlist, for a batch whose id is not known when the hook runs.
+ *
+ * useSetPfiLocations binds its pfiId at render, which is right for a panel
+ * sitting on one batch's page. The PFI form is the other case: on a create
+ * there is no id until the request comes back, so the id arrives with the
+ * mutation rather than before it.
+ */
+export function useSetLocationsForPfi() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ pfiId, depotIds }: { pfiId: number; depotIds: number[] }) => {
+      const res = await api.put(`/pfis/${pfiId}/locations`, { depotIds })
+      return res.data
+    },
+    onSuccess: (_data, { pfiId }) => {
+      queryClient.invalidateQueries({ queryKey: ['pfi-locations', pfiId] })
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
 export function usePfiTrucks(pfiId: number | null) {
   return useQuery({
     queryKey: ['pfi-trucks', pfiId],

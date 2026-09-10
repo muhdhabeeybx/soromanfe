@@ -506,12 +506,14 @@ function PFIDashboard() {
         <option value="not_started">Not started</option>
         <option value="finished">Finished</option>
         </NativeSelect>
-        {/* Coastal and gantry rows read nothing alike — one has a BL and a
-            surplus, the other tickets — so a mixed list needs separating. */}
+        {/* The three read nothing alike — coastal has a BL and a surplus,
+            gantry has tickets, delivery has trucks and a list of locations —
+            so a mixed list needs separating. */}
         <NativeSelect className="w-40" value={type} onChange={(e) => setType(e.target.value)}>
         <option value="all">All types</option>
         <option value="coastal">Coastal</option>
         <option value="gantry">Gantry</option>
+        <option value="delivery">Delivery</option>
         </NativeSelect>
         <div className="flex items-center gap-1">
         <NativeSelect className="w-44" value={sort.key} onChange={(e) => setSortKey(e.target.value as SortKey)}>
@@ -563,7 +565,14 @@ function PFIDashboard() {
               const f = p.financials
               const finished = p.status === 'finished'
               const notStarted = p.status === 'not_started'
+              /**
+               * `f.isGantry` means "billed on its own quantity", which covers
+               * delivery too — so it drives the layout, and pfiType names the
+               * kind. Reading the chip off isGantry would label every delivery
+               * batch "Gantry".
+               */
               const gantry = f.isGantry
+              const delivery = p.pfiType === 'delivery'
               const uncosted = f.grandTotalCost == null
               const heroLabel = uncosted
                 ? 'Cost'
@@ -591,7 +600,7 @@ function PFIDashboard() {
                             {finished ? 'Finished' : notStarted ? 'Not started' : 'Active'}
                           </StatusChip>
                           <StatusChip fill="solid" tone="inert">
-                            {gantry ? 'Gantry' : 'Coastal'}
+                            {delivery ? 'Delivery' : gantry ? 'Gantry' : 'Coastal'}
                           </StatusChip>
                         </div>
                         <p className="mt-0.5 truncate text-sm text-muted-foreground">
@@ -652,7 +661,7 @@ function PFIDashboard() {
                               </p>
                             </div>
                             <div className="min-w-0">
-                              <p className="text-xs text-muted-foreground">Tickets</p>
+                              <p className="text-xs text-muted-foreground">{delivery ? 'Trucks' : 'Tickets'}</p>
                               <p className="truncate text-sm font-normal">
                                 {p.ticketCount == null ? '—' : p.ticketCount.toLocaleString('en-NG')}
                               </p>

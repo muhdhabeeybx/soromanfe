@@ -3,7 +3,7 @@ import { PageHeader } from '#/components/PageHeader'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Loader2, Save, CheckCircle, AlertCircle, FileText, Banknote, Users, Ship,
-  Anchor, Fuel, Calculator, Info,
+  Anchor, Fuel, Truck, Calculator, Info,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -18,6 +18,7 @@ import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useCreatePfi, useUpdatePfi, useDepotsForFilter, usePfiDetails,
+  usePfiLocations, useSetLocationsForPfi,
 } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { useAdminList } from '#/lib/hooks/useAdmin'
@@ -83,12 +84,13 @@ const OFFICER_FIELDS: Array<{ label: string; key: StringKeys }> = [
 ]
 
 /**
- * The two kinds of batch, and what each one is actually asking for.
+ * The three kinds of batch, and what each one is actually asking for.
  *
  * Presented as a choice up front rather than as fields that appear later,
  * because the answer changes what the rest of the form even means: a coastal
- * batch is billed on a BL figure that a gantry batch does not have, and a
- * gantry batch is counted in tickets that a coastal one does not issue.
+ * batch is billed on a BL figure that a gantry batch does not have, a gantry
+ * batch is counted in tickets that a coastal one does not issue, and a
+ * delivery batch is the only one sold anywhere other than where it sits.
  */
 const PFI_TYPES: Array<{
   value: PfiType
@@ -108,7 +110,20 @@ const PFI_TYPES: Array<{
     hint: 'Bought at the loading gantry and split into tickets. One quantity, no vessel.',
     icon: <Fuel />,
   },
+  {
+    value: 'delivery',
+    label: 'Delivery',
+    hint: 'Loaded onto trucks at one depot and sold at several. Counted in trucks.',
+    icon: <Truck />,
+  },
 ]
+
+/** The label for a type wherever one is named in a sentence or a chip. */
+const TYPE_LABEL: Record<PfiType, string> = {
+  coastal: 'Coastal',
+  gantry: 'Gantry',
+  delivery: 'Delivery',
+}
 
 function formatDateToInput(dateStr: string | null | undefined): string {
   if (!dateStr) return ''
@@ -285,6 +300,17 @@ function PFIForm() {
   const products = Array.isArray(productsData) ? productsData : ((productsData as any)?.products || (productsData as any)?.results || [])
   const staff = Array.isArray(adminsData) ? adminsData : []
 
+  /**
+   * The allowlist lives in its own table, so it is fetched and saved on its
+   * own. `usePfiDetails` does not carry it and the create endpoint does not
+   * take it — see the note on the submit below.
+   */
+  const editingPfiId = editingPfi?.id != null ? Number(editingPfi.id) : null
+  const { data: allowedLocations } = usePfiLocations(
+    isEdit && editingPfi?.pfiType === 'delivery' ? editingPfiId : null,
+  )
+  const setLocations = useSetLocationsForPfi()
+
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -295,7 +321,9 @@ function PFIForm() {
         id: String(editingPfi._id || editingPfi.id || ''),
         // Rows written before the distinction existed carry no type, and every
         // one of them is coastal — it was the only kind there was.
-        pfiType: editingPfi.pfiType === 'gantry' ? 'gantry' : 'coastal',
+        pfiType: editingPfi.pfiType === 'gantry' || editingPfi.pfiType === 'delivery'
+          ? editingPfi.pfiType
+          : 'coastal',
         // A closed batch is never shown as not-started: closing is the
         // /finish endpoint's business and this form must not undo it.
         notStarted: editingPfi.status === 'not_started',
@@ -326,12 +354,34 @@ function PFIForm() {
     }
   }, [isEdit, editingPfi])
 
+  /**
+   * Null until something is ticked, then the local copy wins.
+   *
+   * Deliberately not seeded into state by an effect. Copying server data into
+   * state on every fetch means a refetch — a window refocus is enough —
+   * silently discards a half-made selection. Falling through to the server's
+   * answer while untouched, and holding the edit once made, keeps both.
+   */
+  const [editedDepots, setEditedDepots] = useState<number[] | null>(null)
+  const selectedDepots = editedDepots ?? (allowedLocations ?? []).map((d) => Number(d.id))
+
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitted, setSubmitted] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const isGantry = form.pfiType === 'gantry'
+  const isDelivery = form.pfiType === 'delivery'
+  /**
+   * Neither gantry nor delivery is weighed against shipping papers.
+   *
+   * Both are collected on land — one at a loading gantry, one onto trucks —
+   * so the BL figures, the MT weights, the vessel and the surveyor are facts
+   * about a cargo that neither of them is. They also share the shape of the
+   * cost section: one quantity, a price, and a count of the units it was
+   * split into.
+   */
+  const isCargo = !isGantry && !isDelivery
 
   /** The picked product's unit, so no label ever says "Litres" over a tonnage. */
   const unit = useMemo(() => unitNames(form.productUnit), [form.productUnit])
@@ -346,21 +396,23 @@ function PFIForm() {
   //
   // Which quantity the value runs off is the whole difference between the two
   // kinds: coastal is billed for the BL figure whatever landed in the tank,
-  // gantry is billed for the quantity bought, which is the only one there is.
+  // while gantry and delivery are billed for the quantity bought, which is
+  // the only one either of them has.
   const preview = useMemo(() => {
     const bl = form.blQtyLitres === '' ? null : Number(form.blQtyLitres)
     const tank = form.startingQtyLitres === '' ? null : Number(form.startingQtyLitres)
     const price = form.unitPrice === '' ? null : Number(form.unitPrice)
-    const costQty = isGantry ? tank : bl
+    const costQty = isCargo ? bl : tank
     return {
-      show: isGantry ? tank != null || price != null : bl != null || tank != null,
-      surplusDeficit: !isGantry && bl != null && tank != null ? tank - bl : null,
+      show: isCargo ? bl != null || tank != null : tank != null || price != null,
+      surplusDeficit: isCargo && bl != null && tank != null ? tank - bl : null,
       pfiValue: costQty != null && price != null ? costQty * price : null,
     }
-  }, [isGantry, form.blQtyLitres, form.startingQtyLitres, form.unitPrice])
+  }, [isCargo, form.blQtyLitres, form.startingQtyLitres, form.unitPrice])
 
   const resetForm = () => {
     setForm(EMPTY_FORM)
+    setEditedDepots(null)
     setError('')
     setFieldErrors({})
   }
@@ -402,10 +454,14 @@ function PFIForm() {
         startingQtyLitres: Number(form.startingQtyLitres) || 0,
         unitPrice: form.unitPrice === '' ? 0 : Number(form.unitPrice),
         creditBalance: form.creditBalance === '' ? 0 : Number(form.creditBalance),
-        // The two field sets are mutually exclusive, so each is sent only for
-        // the kind it belongs to. The server clears the other side anyway —
-        // this just means the request says the same thing the form does.
-        ...(isGantry
+        // The field sets are mutually exclusive, so each is sent only for the
+        // kind it belongs to. The server clears the other side anyway — this
+        // just means the request says the same thing the form does.
+        //
+        // ticketCount carries the gantry ticket count and the delivery truck
+        // count. One column because it is one fact — how many units the
+        // allocation was split into — and the label follows the type.
+        ...(!isCargo
           ? {
               ticketCount: form.ticketCount === '' ? null : Number(form.ticketCount),
             }
@@ -428,11 +484,34 @@ function PFIForm() {
         salesManagerId: form.salesManagerId || null,
       }
 
+      /**
+       * The allowlist is a second request, after the PFI exists.
+       *
+       * PUT /pfis/:id/locations is the only endpoint that writes it — create
+       * and update accept `allowedDepotIds` in their schema but do nothing
+       * with it — and on a create there is no id to address until the first
+       * request comes back. It is sent after the PFI is safely saved rather
+       * than before, so a rejected allowlist cannot lose the batch.
+       */
+      let savedId = form.id
       if (isEdit && form.id) {
         await updatePfi.mutateAsync({ id: form.id, data: payload })
       } else {
-        await createPfi.mutateAsync(payload)
+        const res = await createPfi.mutateAsync(payload)
+        const created = res?.data?.pfi ?? res?.data
+        savedId = created?.id != null ? String(created.id) : ''
       }
+
+      if (isDelivery && savedId) {
+        // Sent even when empty: clearing the list is a real edit, and on a
+        // batch switched away from delivery the stale allowlist is what would
+        // keep letting other depots sell from it.
+        await setLocations.mutateAsync({
+          pfiId: Number(savedId),
+          depotIds: selectedDepots,
+        })
+      }
+
       setSubmitted(true)
     } catch (err: any) {
       const status = err?.response?.status
@@ -466,7 +545,7 @@ function PFIForm() {
           PFI {isEdit ? 'updated' : 'registered'} successfully
         </h2>
         <p className="max-w-sm text-muted-foreground">
-          {isGantry ? 'Gantry' : 'Coastal'} Pro Forma Invoice{' '}
+          {TYPE_LABEL[form.pfiType]} Pro Forma Invoice{' '}
           <span className="font-mono font-semibold text-foreground">{form.pfiNumber}</span> has been saved.
         </p>
         <div className="mt-2 flex gap-3">
@@ -490,7 +569,9 @@ function PFIForm() {
           isEdit
             ? isGantry
               ? 'Modify quantity, cost, tickets and officers for this gantry PFI.'
-              : 'Modify quantities, cost, officers and vessel details for this PFI.'
+              : isDelivery
+                ? 'Modify quantity, cost, trucks, locations and officers for this delivery PFI.'
+                : 'Modify quantities, cost, officers and vessel details for this PFI.'
             : 'Register a new PFI.'
         }
       />
@@ -507,15 +588,16 @@ function PFIForm() {
           <div className="space-y-6">
             <Section
               step={1}
-              icon={isGantry ? <Fuel /> : <Anchor />} title="PFI Type"
+              icon={isGantry ? <Fuel /> : isDelivery ? <Truck /> : <Anchor />} title="PFI Type"
               description="How this batch was bought. It decides what the rest of the form asks for."
               aside={
                 <StatusChip tone="accent" className="hidden shrink-0 sm:inline-flex">
-                  {isGantry ? 'Gantry' : 'Coastal'}
+                  {TYPE_LABEL[form.pfiType]}
                 </StatusChip>
               }
             >
-              <div className="grid gap-3 sm:grid-cols-2">
+              {/* Three now, so they stop being a pair of half-width cards. */}
+              <div className="grid gap-3 sm:grid-cols-3">
                 {PFI_TYPES.map((t) => {
                   const active = form.pfiType === t.value
                   return (
@@ -596,9 +678,9 @@ function PFIForm() {
                 <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/5 p-3">
                   <Info className="mt-0.5 size-4 shrink-0 text-warning" />
                   <p className="text-xs leading-snug text-muted-foreground">
-                    {isGantry
-                      ? <>Saving as <span className="font-semibold text-foreground">gantry</span> clears this PFI’s BL figures, vessel and surveyor details.</>
-                      : <>Saving as <span className="font-semibold text-foreground">coastal</span> clears this PFI’s ticket count.</>}
+                    {isCargo
+                      ? <>Saving as <span className="font-semibold text-foreground">coastal</span> clears this PFI’s ticket or truck count.</>
+                      : <>Saving as <span className="font-semibold text-foreground">{form.pfiType}</span> clears this PFI’s BL figures, vessel and surveyor details.</>}
                   </p>
                 </div>
               )}
@@ -635,8 +717,12 @@ function PFIForm() {
 
               <div className="grid grid-cols-2 gap-4">
                 <Field
-                  label="Location" required error={fieldErrors.locationId}
-                  hint="Only orders at this depot can be assigned to the batch."
+                  label={isDelivery ? 'Loaded at' : 'Location'} required error={fieldErrors.locationId}
+                  hint={
+                    isDelivery
+                      ? 'The depot the trucks load at. Where it may be SOLD is the list below.'
+                      : 'Only orders at this depot can be assigned to the batch.'
+                  }
                 >
                   <NativeSelect
                     value={form.locationId} aria-invalid={!!fieldErrors.locationId}
@@ -676,10 +762,64 @@ function PFIForm() {
                 </Field>
               </div>
 
+              {/* Where it may be sold, which only a delivery batch has.
+                  A coastal or gantry batch is sold out of the depot it sits
+                  in, so `locationId` above is the whole answer there and this
+                  would be a list with one right tick. A delivery batch is
+                  loaded at one depot and sold at several, and that list is
+                  what decides which locations may place an order against it. */}
+              {isDelivery && (
+                <Field
+                  label="Locations that may sell from it"
+                  hint={
+                    selectedDepots.length > 0
+                      ? `${selectedDepots.length} selected. The loading depot can always sell from it, ticked or not.`
+                      : 'Tick every depot that can place orders against this batch. Leave it empty and only the loading depot can.'
+                  }
+                >
+                  <div className="grid gap-1 rounded-lg border border-foreground/15 p-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {depots.map((d: any) => {
+                      const depotId = Number(d.id || d._id)
+                      const isSource = !!form.locationId && depotId === Number(form.locationId)
+                      return (
+                        <label
+                          key={depotId}
+                          className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/50"
+                        >
+                          <Checkbox
+                            className="mt-0.5"
+                            checked={selectedDepots.includes(depotId)}
+                            onCheckedChange={() =>
+                              setEditedDepots(
+                                selectedDepots.includes(depotId)
+                                  ? selectedDepots.filter((x) => x !== depotId)
+                                  : [...selectedDepots, depotId],
+                              )
+                            }
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate">{d.name}</span>
+                            {/* Named rather than hidden: ticking the loading
+                                depot changes nothing, so its absence from the
+                                list is not somebody's mistake. */}
+                            {isSource && (
+                              <span className={cn(MICRO, 'text-muted-foreground')}>
+                                loaded here · always allowed
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </Field>
+              )}
+
               {/* Coastal measures twice — the tank against the papers — so it
-                  asks twice. Gantry has one quantity, and it lives beside the
-                  price it is charged at, in the cost section below. */}
-              {!isGantry && (
+                  asks twice. Gantry and delivery have one quantity, and it
+                  lives beside the price it is charged at, in the cost section
+                  below. */}
+              {isCargo && (
                 <div className="grid grid-cols-2 gap-4">
                   <Field
                     label={`Tank Quantity (${unit.plural})`} required error={fieldErrors.startingQtyLitres}
@@ -710,19 +850,25 @@ function PFIForm() {
             <Section
               step={3}
               icon={<Banknote />}
-              title={isGantry ? 'Quantity & Cost' : 'Cargo Cost'}
+              title={isCargo ? 'Cargo Cost' : 'Quantity & Cost'}
               description={
                 isGantry
                   ? 'What was bought at the gantry, at what price, over how many tickets.'
-                  : "What the shipping papers say you're billed for."
+                  : isDelivery
+                    ? 'What was loaded out, at what price, over how many trucks.'
+                    : "What the shipping papers say you're billed for."
               }
             >
-              {isGantry ? (
+              {!isCargo ? (
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <Field
                       label={`Quantity (${unit.plural})`} required error={fieldErrors.startingQtyLitres}
-                      hint="What was bought. There is only one quantity on a gantry batch."
+                      hint={
+                        isDelivery
+                          ? 'What went out on the trucks. A delivery batch has one quantity.'
+                          : 'What was bought. There is only one quantity on a gantry batch.'
+                      }
                     >
                       <Adorned suffix={unit.short}>
                         <CommaInput
@@ -748,14 +894,26 @@ function PFIForm() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
+                    {/* One column, one meaning: how many units the allocation
+                        was split into. A gantry batch counts that in tickets
+                        and a delivery batch in trucks, so the label follows
+                        the type rather than the storage. On a delivery batch
+                        this is the figure that was planned for — what actually
+                        went out is the manifest on the batch's own page, and
+                        the two are worth being able to disagree. */}
                     <Field
-                      label="Number of Tickets" error={fieldErrors.ticketCount}
-                      hint="How many gantry tickets the allocation was split into."
+                      label={isDelivery ? 'Number of Trucks' : 'Number of Tickets'}
+                      error={fieldErrors.ticketCount}
+                      hint={
+                        isDelivery
+                          ? 'How many trucks this allocation is loaded onto.'
+                          : 'How many gantry tickets the allocation was split into.'
+                      }
                     >
-                      <Adorned suffix="tickets">
+                      <Adorned suffix={isDelivery ? 'trucks' : 'tickets'}>
                         <CommaInput
                           className="tabular-nums"
-                          value={form.ticketCount} placeholder="25"
+                          value={form.ticketCount} placeholder={isDelivery ? '12' : '25'}
                           aria-invalid={!!fieldErrors.ticketCount}
                           onValueChange={(v) => set('ticketCount', v)}
                         />
@@ -841,7 +999,7 @@ function PFIForm() {
                     Worked out for you
                   </p>
                   <div className="grid grid-cols-2 gap-4">
-                    {isGantry ? (
+                    {!isCargo ? (
                       <>
                         <Computed
                           label="PFI Value"
@@ -911,7 +1069,7 @@ function PFIForm() {
 
             {/* A gantry batch never touches a vessel, so there is nothing here
                 to leave blank. */}
-            {!isGantry && (
+            {isCargo && (
             <Section
               step={5}
               icon={<Ship />} title="Vessel & Surveyor"
@@ -947,7 +1105,7 @@ function PFIForm() {
             floating slab — this system has no shadows. */}
         <div className="sticky bottom-0 z-20 -mx-1 flex flex-wrap items-center justify-end gap-3 border-t border-foreground/15 bg-background/85 px-1 py-4 backdrop-blur">
           <p className="mr-auto text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground">{isGantry ? 'Gantry' : 'Coastal'}</span> PFI
+            <span className="font-semibold text-foreground">{TYPE_LABEL[form.pfiType]}</span> PFI
             {form.pfiNumber ? <> · <span className="font-mono font-semibold text-foreground">{form.pfiNumber}</span></> : null}
           </p>
           <Button type="button" variant="outline" onClick={() => navigate({ to: '/pfi' })}>Cancel</Button>

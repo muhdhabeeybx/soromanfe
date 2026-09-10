@@ -7,8 +7,8 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
 import { Separator } from '#/components/ui/separator'
-import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Clock } from 'lucide-react'
-import { usePfiDetails, useUpdatePfi, useDeletePfi } from '#/lib/hooks/usePfis'
+import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Truck, Clock } from 'lucide-react'
+import { usePfiDetails, useUpdatePfi, useDeletePfi, usePfiLocations } from '#/lib/hooks/usePfis'
 import { unitNames } from '#/routes/pfi/-pfi-utils'
 import { useAdminList } from '#/lib/hooks/useAdmin'
 import { useToast } from '#/lib/hooks/useToast'
@@ -44,6 +44,13 @@ function PFIDetails() {
   const { id } = Route.useSearch()
 
   const { data: pfi, isLoading, error: fetchError } = usePfiDetails(id)
+  /**
+   * Only a delivery batch has an allowlist, and only it is asked for one.
+   * A null id disables the query, so a coastal batch never makes the call.
+   */
+  const { data: allowedDepots = [] } = usePfiLocations(
+    pfi?.pfiType === 'delivery' && pfi?.id != null ? Number(pfi.id) : null,
+  )
   const { mutateAsync: updatePfi, isPending } = useUpdatePfi()
   const { mutateAsync: deletePfi, isPending: isDeleting } = useDeletePfi()
   const { data: adminsData } = useAdminList()
@@ -89,6 +96,9 @@ function PFIDetails() {
   }
 
   const isGantry = pfi.pfiType === 'gantry'
+  const isDelivery = pfi.pfiType === 'delivery'
+  /** Only a coastal batch has shipping papers, a vessel and a surveyor. */
+  const isCargo = !isGantry && !isDelivery
 
   const rawUnit = pfi.productUnit || (Number(pfi.qtyVolumeMt || 0) > 0 && Number(pfi.startingQtyLitres || 0) === 0 ? 'MT' : 'Litres')
   const names = unitNames(rawUnit)
@@ -217,8 +227,12 @@ function PFIDetails() {
                   Unit: {names.plural}
                 </Badge>
                 <Badge variant="outline" className="font-normal text-xs">
-                  {isGantry ? <Ticket className="size-3 mr-1 text-info inline" /> : <Package className="size-3 mr-1 text-primary inline" />}
-                  {isGantry ? 'Gantry' : 'Coastal'}
+                  {isGantry
+                    ? <Ticket className="size-3 mr-1 text-info inline" />
+                    : isDelivery
+                      ? <Truck className="size-3 mr-1 text-info inline" />
+                      : <Package className="size-3 mr-1 text-primary inline" />}
+                  {isGantry ? 'Gantry' : isDelivery ? 'Delivery' : 'Coastal'}
                 </Badge>
                 <Badge
                   className={cn(
@@ -272,11 +286,16 @@ function PFIDetails() {
                 <dt className="text-muted-foreground font-normal">Measurement Unit</dt>
                 <dd className="font-semibold text-foreground mt-0.5">{names.plural}</dd>
               </div>
-              {/* A gantry allocation is never weighed in MT — there is one
-                  quantity, in the product's own unit. */}
-              {isGantry ? (
+              {/* Neither a gantry nor a delivery allocation is weighed in MT
+                  — there is one quantity, in the product's own unit. What both
+                  carry instead is a count of the units it was split into, and
+                  ticket_count holds it for each: tickets at a gantry, trucks
+                  on a delivery. */}
+              {!isCargo ? (
                 <div>
-                  <dt className="text-muted-foreground font-normal">Number of Tickets</dt>
+                  <dt className="text-muted-foreground font-normal">
+                    {isDelivery ? 'Number of Trucks' : 'Number of Tickets'}
+                  </dt>
                   <dd className="font-semibold text-foreground mt-0.5">
                     {pfi.ticketCount == null ? '—' : pfi.ticketCount.toLocaleString()}
                   </dd>
@@ -298,9 +317,10 @@ function PFIDetails() {
         </Card>
 
         {/* Card 2: Vessel & Surveyor — coastal only. A gantry batch is
-            collected at the loading gantry, so there is no vessel to name and
-            no discharge for a surveyor to measure. */}
-        {!isGantry && (
+            collected at the loading gantry and a delivery batch goes out on
+            trucks, so neither has a vessel to name or a discharge for a
+            surveyor to measure. */}
+        {isCargo && (
         <Card>
           <CardHeader className="border-b border-border">
             <div className="flex items-center gap-2">
@@ -330,6 +350,52 @@ function PFIDetails() {
               <div>
                 <dt className="text-muted-foreground font-normal">Surveyor Phone</dt>
                 <dd className="font-semibold text-foreground mt-0.5"><PhoneLink value={pfi.surveyorPhone} /></dd>
+              </div>
+            </dl>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Card 2b: Where it may be sold — delivery only, and the reason the
+            type exists. A coastal or gantry batch is sold out of the depot it
+            sits in, so its answer is the Location field above and a card here
+            would restate it. */}
+        {isDelivery && (
+        <Card>
+          <CardHeader className="border-b border-border">
+            <div className="flex items-center gap-2">
+              <div className="size-8 rounded-lg bg-info/10 flex items-center justify-center text-info">
+                <MapPin className="size-4" />
+              </div>
+              <div>
+                <CardTitle className="text-sm">Locations That May Sell From It</CardTitle>
+                <CardDescription className="text-xs">
+                  {allowedDepots.length > 0
+                    ? `${allowedDepots.length} location${allowedDepots.length === 1 ? '' : 's'} beyond the depot it loaded at`
+                    : 'None listed — sellable only at the depot it loaded at'}
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4 text-sm">
+            <dl className="grid grid-cols-2 gap-4">
+              <div>
+                <dt className="text-muted-foreground font-normal">Loaded At</dt>
+                <dd className="font-semibold text-foreground mt-0.5">{pfi.locationName || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground font-normal">May Also Sell At</dt>
+                <dd className="mt-1 flex flex-wrap gap-1.5">
+                  {allowedDepots.length === 0 ? (
+                    <span className="font-semibold text-foreground">—</span>
+                  ) : (
+                    allowedDepots.map((d) => (
+                      <Badge key={d.id} variant="outline" className="font-normal text-xs">
+                        {d.name}
+                      </Badge>
+                    ))
+                  )}
+                </dd>
               </div>
             </dl>
           </CardContent>
