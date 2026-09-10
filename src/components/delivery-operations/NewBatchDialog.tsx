@@ -251,15 +251,32 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
                   onChange={(e) => setExistingPfiId(e.target.value)}
                 >
                   <option value="">Select a PFI…</option>
-                  {deliveryBatches.map((p) => (
-                    <option key={String(p.id ?? p._id)} value={String(p.id ?? p._id)}>
-                      {p.pfiNumber}{p.locationName ? ` · ${p.locationName}` : ''}
-                    </option>
-                  ))}
+                  {/* Every delivery PFI is offered, including ones raised in
+                      the PFI module that have never been loaded — those are
+                      precisely the ones this tab exists to bring in. What it
+                      must not do is offer them silently: a PFI listed here and
+                      absent from the table behind the dialog reads as a bug
+                      unless the option says why, so an unloaded one says so on
+                      its own line. The inventory table lists LOADS, so a batch
+                      appears there once it has one. */}
+                  {deliveryBatches.map((p) => {
+                    const loadedQty = Number(p.startingQtyLitres ?? 0)
+                    return (
+                      <option key={String(p.id ?? p._id)} value={String(p.id ?? p._id)}>
+                        {p.pfiNumber}
+                        {p.locationName ? ` · ${p.locationName}` : ''}
+                        {loadedQty > 0
+                          ? ` · ${loadedQty.toLocaleString()} loaded`
+                          : ' · no trucks yet'}
+                      </option>
+                    )
+                  })}
                 </NativeSelect>
                 <p className={cn(MICRO, 'text-muted-foreground')}>
                   {chosenBatch
-                    ? `${chosenBatch.productName || 'No product'} · loaded at ${chosenBatch.locationName || '—'}`
+                    ? Number(chosenBatch.startingQtyLitres ?? 0) > 0
+                      ? `${chosenBatch.productName || 'No product'} · loaded at ${chosenBatch.locationName || '—'}. These trucks join its manifest; the ones already on it stay.`
+                      : `${chosenBatch.productName || 'No product'} · loaded at ${chosenBatch.locationName || '—'}. Nothing is loaded against it yet, so it is not on the inventory table — adding trucks here is what puts it there.`
                     : 'These trucks join its manifest; the ones already on it stay.'}
                 </p>
               </div>
