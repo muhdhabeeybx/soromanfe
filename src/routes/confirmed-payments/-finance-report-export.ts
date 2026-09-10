@@ -906,9 +906,37 @@ export async function exportFinanceReportPdf(
    * than designed.
    */
   const face = satoshi ? { font: 'Satoshi' } : {}
-  const bodyStyle = { ...pdfStyles.body, ...face }
-  const headStyle = { ...pdfStyles.head, ...face }
-  const footStyle = { ...pdfStyles.foot, ...face }
+  /**
+   * Tighter than the shared theme's padding, and only here.
+   *
+   * Padding sits INSIDE the cell, so every millimetre of it is a millimetre
+   * the text does not get. This report is the widest one in the system — a
+   * customer name, a bank narration and a teller reference all competing for
+   * room on one row — and at the theme's 2mm the columns were truncating text
+   * that would otherwise have fitted. The grid still reads as a grid at
+   * 1.2mm; it just stops throwing away a fifth of every cell.
+   */
+  const bodyStyle = { ...pdfStyles.body, ...face, cellPadding: 1.2 }
+  const headStyle = { ...pdfStyles.head, ...face, cellPadding: 1.4 }
+  const footStyle = { ...pdfStyles.foot, ...face, cellPadding: 1.4 }
+
+  /**
+   * Every table on the page starts and ends where the header rule and the
+   * page number do.
+   *
+   * autotable's default margin works out at ~14.1mm here, which happens to be
+   * close to the 14mm the header and footer are drawn at — but the columns
+   * are declared as fixed widths totalling 260mm against 268.8mm of usable
+   * page, so the payments table stopped ~9mm short of the right margin and
+   * read as though it had been cut off. Stating the margin and scaling the
+   * fixed widths to what is actually available fills the page exactly, and
+   * keeps every table on the report flush with every other.
+   */
+  const PAGE_MARGIN = 14
+  const tableMargin = { left: PAGE_MARGIN, right: PAGE_MARGIN }
+  const usableWidth = doc.internal.pageSize.getWidth() - PAGE_MARGIN * 2
+  const declaredWidth = PDF_COLUMNS.reduce((sum, c) => sum + (c.width || 0), 0)
+  const widthScale = declaredWidth > 0 ? usableWidth / declaredWidth : 1
   /**
    * Signed money without the brackets — colour carries the sign, matching the
    * screen and the workbook. Every other money column here is positive by
@@ -946,8 +974,6 @@ export async function exportFinanceReportPdf(
     signed?: number
     /** Transferred is signed but is neither a gain nor a loss — see paintOwed. */
     transfer?: boolean
-    /** A full-width divider naming what follows, not a label/value pair. */
-    section?: boolean
   }
 
   const summaryRows: SummaryRow[] = []
@@ -993,37 +1019,9 @@ export async function exportFinanceReportPdf(
   const note = extraFilterNote(filters)
   if (note) summaryRows.push({ label: 'Filters', text: note })
 
-  /**
-   * Each batch on one row rather than nine columns of its own table.
-   *
-   * A batch's four figures read perfectly well as one line, and folding them
-   * in this way is what lets the whole preamble be a single table however many
-   * batches the period touched. The per-batch positions are still per-batch —
-   * nothing is summed across them, for the reason the workbook's total row
-   * gives: initial stock and remaining are positions in mixed batches and
-   * adding them together would not mean anything.
-   */
-  if (pfiStock.length > 0) {
-    summaryRows.push({ label: `Stock by PFI (${pfiStock.length})`, text: '', section: true })
-    for (const p of pfiStock) {
-      summaryRows.push({
-        label: up(p.pfiNumber),
-        text: [
-          up(p.productName),
-          `initial ${qtyText(p.initialStock, p.productUnit)}`,
-          `sold ${qtyText(p.volumeSoldPeriod, p.productUnit)} for ${naira(p.salesValuePeriod)}`,
-          `remaining ${qtyText(p.volumeRemaining, p.productUnit)}`,
-          `all-time ${qtyText(p.volumeSoldAllTime, p.productUnit)} for ${naira(p.revenue)}`,
-        ].join('   ·   '),
-        // A batch charged for more BL than the tank received shows a negative
-        // remaining — a real deficit, worth the same red flag it gets on screen.
-        signed: p.volumeRemaining < 0 ? 1 : undefined,
-      })
-    }
-  }
-
   autoTable(doc, {
     startY,
+    margin: tableMargin,
     head: [['Summary', '']],
     body: summaryRows.map((r) => [r.label, r.text]),
     styles: { ...bodyStyle, fontSize: 7.5, cellPadding: 1.4 },
@@ -1039,16 +1037,6 @@ export async function exportFinanceReportPdf(
       if (data.section !== 'body') return
       const row = summaryRows[data.row.index]
       if (!row) return
-      if (row.section) {
-        // Drawn as one band across both columns: it names a group, and a
-        // label/value pair is not what it is.
-        // The brand tint the workbook keeps for a closing total — the one
-        // fill in the palette that reads as "this is a heading, not a row".
-        data.cell.styles.fillColor = PDF.grandTotalTint
-        data.cell.styles.fontStyle = 'bold'
-        data.cell.styles.textColor = PDF.brandGreen
-        return
-      }
       if (data.column.index !== 1 || row.signed == null) return
       if (Math.abs(row.signed) < 0.005) return
       data.cell.styles.textColor = row.transfer
@@ -1056,6 +1044,58 @@ export async function exportFinanceReportPdf(
         : row.signed > 0 ? PDF.loss : PDF.gain
     },
   })
+
+  /**
+   * Stock by PFI, as a table rather than a sentence.
+   *
+   * Each batch used to be folded onto one line of the summary table, its five
+   * figures strung together with middots: "PMS · initial 45,000 L · sold
+   * 30,000 L for ₦45,000,000 · remaining 15,000 L · all-time …". It fitted,
+   * and that was the whole of its case. Nothing lined up between one batch
+   * and the next, so the eye could not compare two batches without reading
+   * both sentences end to end, and the separators did the work that column
+   * edges are for.
+   *
+   * As its own table the figures sit in columns, the units stay attached to
+   * the numbers, and it matches the block the workbook and the screen already
+   * show. Still nothing summed across batches — initial stock and remaining
+   * are per-batch positions, and the all-time columns span different lengths
+   * of time per batch, so a total row would be arithmetic on unlike things.
+   */
+  if (pfiStock.length > 0) {
+    const per = filters.periodLabel
+    autoTable(doc, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      startY: (doc as any).lastAutoTable.finalY + 5,
+      margin: tableMargin,
+      head: [[
+        'PFI', 'Location', 'Product', 'Initial Stock',
+        `Sold (${per})`, `Sales Value (${per})`, 'Remaining',
+        'Sold (All Time)', 'Revenue (All Time)',
+      ]],
+      body: pfiStock.map((p) => [
+        up(p.pfiNumber), up(p.locationName), up(p.productName),
+        qtyText(p.initialStock, p.productUnit),
+        qtyText(p.volumeSoldPeriod, p.productUnit),
+        naira(p.salesValuePeriod),
+        qtyText(p.volumeRemaining, p.productUnit),
+        qtyText(p.volumeSoldAllTime, p.productUnit),
+        naira(p.revenue),
+      ]),
+      styles: { ...bodyStyle, fontSize: 7 },
+      headStyles: { ...headStyle, fillColor: PDF.brandGreen, fontSize: 7 },
+      columnStyles: {
+        3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' },
+        6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' },
+      },
+      didParseCell: (data) => {
+        // A batch charged for more than the tank received shows a negative
+        // remaining — a real deficit, and the same red it gets on screen.
+        if (data.section !== 'body' || data.column.index !== 6) return
+        if (pfiStock[data.row.index]?.volumeRemaining < 0) data.cell.styles.textColor = PDF.loss
+      },
+    })
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cursorY = (doc as any).lastAutoTable.finalY + 6
@@ -1188,8 +1228,12 @@ export async function exportFinanceReportPdf(
     styles: bodyStyle,
     headStyles: headStyle,
     footStyles: { ...footStyle, fillColor: PDF.grandTotalTint },
+    margin: tableMargin,
+    // Scaled to the width actually available rather than left at the declared
+    // widths, which added up to 9mm less than the page and made the table
+    // look truncated. The proportions between columns are unchanged.
     columnStyles: Object.fromEntries(
-      PDF_COLUMNS.map((c, i) => [i, { cellWidth: c.width }]),
+      PDF_COLUMNS.map((c, i) => [i, { cellWidth: (c.width || 0) * widthScale }]),
     ),
     // A payment-source sub-row gets the same faint tint as its Excel
     // counterpart — never a font change, just enough to read as nested. A
@@ -1344,6 +1388,7 @@ export async function exportFinanceReportPdf(
 
     autoTable(doc, {
       startY: custStartY,
+      margin: tableMargin,
       head: [['Customer', 'Company', 'Orders', 'Out of Balance', 'Overpaid', 'Underpaid', 'Net']],
       body: custBody,
       foot: [[
