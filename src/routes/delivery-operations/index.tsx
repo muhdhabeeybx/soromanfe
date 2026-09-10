@@ -474,7 +474,7 @@ function DeliveryOperationsPage() {
     if (!filtered.length) return
     // A split load has to survive the export too — one row per truck with the
     // whole quantity, and the shares spelled out beside it rather than lost.
-    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'PFI / Code', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Split', 'Customer Split', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
+    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'Batch', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Split', 'Customer Split', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
     const rows = filtered.map((r, idx) => [
       idx + 1,
       r.code || '—',
@@ -556,13 +556,11 @@ function DeliveryOperationsPage() {
 
           Creating a batch is now the only entry point, and it opens a dialog
           that can finish the job — code, depot, product, date, the trucks and
-          what each one loaded, and the depots allowed to sell from it. The
-          first cut of this led to a create page that took a name and left the
-          trucks to a second screen, which meant the primary action on this
-          page could not do the thing the page is for. Everything done to a
-          batch AFTERWARDS — editing its manifest, its locations, allocating
-          it to customers — still lives on that batch's own page, reached by
-          opening it.
+          what each one loaded. What it does NOT do is raise a PFI: a batch is
+          the code on the loading papers and the loads recorded under it, and
+          nothing else holds it together. Everything done to a batch
+          afterwards — selling its loads, editing a record — lives on that
+          batch's own page, reached by opening it.
         */
         actions={
           <div className="flex gap-2">
@@ -598,7 +596,7 @@ function DeliveryOperationsPage() {
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9"
-            placeholder="Search truck, PFI, product, customer, depot, destination, code…"
+            placeholder="Search truck, batch, product, customer, depot, destination…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -640,7 +638,7 @@ function DeliveryOperationsPage() {
         </NativeSelect>
 
         <NativeSelect
-          className="w-44" aria-label="Filter by PFI"
+          className="w-44" aria-label="Filter by batch"
           value={codeFilter} onChange={(e) => setCodeFilter(e.target.value)}
         >
           <option value="">All batches</option>
@@ -729,9 +727,9 @@ function DeliveryOperationsPage() {
       ) : (
         <section className={PANEL}>
           <div className={PANEL_RAIL}>
-            <span className={MICRO}>PFIs</span>
+            <span className={MICRO}>Batches</span>
             <span className={cn(MICRO, 'text-muted-foreground')}>
-              {filtered.length} truck{filtered.length === 1 ? '' : 's'} in {grouped.length} PFI{grouped.length === 1 ? '' : 's'}
+              {filtered.length} truck{filtered.length === 1 ? '' : 's'} in {grouped.length} batch{grouped.length === 1 ? '' : 'es'}
             </span>
           </div>
 
@@ -743,7 +741,7 @@ function DeliveryOperationsPage() {
                   only reason to have put them in a table. */}
               <TableRow className="bg-muted/60 hover:bg-muted/60">
                 <TableHead className="w-8" />
-                <TableHead className="font-semibold text-muted-foreground">PFI</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">Batch</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Product</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Loaded at</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">Trucks</TableHead>
@@ -1047,14 +1045,15 @@ function DeliveryOperationsPage() {
                       <span className="text-muted-foreground">Volume</span>
                       <span className="font-semibold tabular-nums">{fmtQty(qty)} {unit}</span>
                     </div>
-                    <div className="mt-1 flex items-center justify-between">
-                      <span className="text-muted-foreground">PFI</span>
-                      <span className="font-semibold">
-                        {batch.pfi
-                          ? batch.pfi.pfiNumber
-                          : <span className="font-normal text-muted-foreground">not linked — truck records only</span>}
-                      </span>
-                    </div>
+                    {/* Only where there is one. Batches are codes and their
+                        loads now; a PFI behind one means it was raised in the
+                        PFI module, and that it goes too is worth saying. */}
+                    {batch.pfi && (
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-muted-foreground">PFI</span>
+                        <span className="font-semibold">{batch.pfi.pfiNumber}</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Named one by one, because "cannot delete" without saying

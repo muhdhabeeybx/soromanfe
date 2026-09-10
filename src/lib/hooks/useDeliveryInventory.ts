@@ -63,6 +63,102 @@ export function useCreateDeliveryInventory() {
   })
 }
 
+/** One truck on a batch, as the New Batch dialog collects it. */
+export interface BatchTruck {
+  truckId: number | null
+  plateNumber: string
+  loadedQty: number
+}
+
+export interface DeliveryBatchDraft {
+  /** The batch code. Every screen groups these loads by it. */
+  code: string
+  /** The depot the trucks loaded at. Text, because that is what the row holds. */
+  depotName: string
+  productName: string
+  dateAllocated: string
+  trucks: BatchTruck[]
+}
+
+/**
+ * Create a delivery batch: a code, and one row per truck loaded under it.
+ *
+ * ── A batch is a code, not a PFI ──────────────────────────────────────────
+ *
+ * This used to raise a PFI first and hang the loads off its id, so creating a
+ * batch meant creating a cargo record, an allowlist of depots that could sell
+ * from it and a manifest — three writes that could each fail on their own and
+ * leave a batch half-built. None of that is what anybody comes here to do.
+ * A batch is the code written on the loading papers; the trucks that carried
+ * it are the batch. So the only thing written is the operational row per
+ * truck, which is what the inventory table lists and what the sales ledger
+ * builds its rows from — the load appears there straight away, unpaid, and
+ * stays that way until somebody enters a payment against it.
+ *
+ * Adding trucks to a code that already exists is the same write. Nothing
+ * anywhere holds "the batch" apart from its rows, so a second load under
+ * PFI-25C simply joins the first.
+ *
+ * One request at a time, and a failure is counted rather than thrown: eight
+ * trucks going in as eight POSTs means a network blip halfway leaves five
+ * recorded, and the honest thing is to say so rather than to report a failure
+ * over rows that are already in the books.
+ */
+export function useCreateDeliveryBatch() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (draft: DeliveryBatchDraft) => {
+      const code = draft.code.trim().toUpperCase().replace(/\s+/g, '-')
+      const failed: string[] = []
+      let firstError: unknown = null
+
+      for (const t of draft.trucks) {
+        try {
+          await api.post('/delivery-inventory', {
+            // Both casings, as every other caller of this endpoint sends: the
+            // serialiser answers in camel and accepts either.
+            allocation_code: code, allocationCode: code,
+            truck: t.truckId != null ? String(t.truckId) : undefined,
+            truck_id: t.truckId ?? undefined, truckId: t.truckId ?? undefined,
+            truck_number: t.plateNumber, truckNumber: t.plateNumber,
+            depot: draft.depotName || undefined,
+            pfi_product: draft.productName || undefined, pfiProduct: draft.productName || undefined,
+            // What went on, not what the truck holds. The old allocation
+            // screen wrote capacity here, which overstated every truck that
+            // loaded short.
+            quantity_allocated: t.loadedQty, quantityAllocated: t.loadedQty,
+            date_allocated: draft.dateAllocated, dateAllocated: draft.dateAllocated,
+            loading_status: 'loaded', loadingStatus: 'loaded',
+          })
+        } catch (err) {
+          firstError = firstError ?? err
+          failed.push(t.plateNumber || 'a truck')
+        }
+      }
+
+      const created = draft.trucks.length - failed.length
+      // Nothing landed, so there is no batch to send anybody to — this is a
+      // plain failure and reads as one.
+      if (created === 0) throw firstError ?? new Error(`Nothing was recorded against ${code}`)
+
+      return { code, created, failed }
+    },
+    onSuccess: ({ code, created, failed }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+      if (failed.length > 0) {
+        toast.error(`${code}: ${created} truck${created === 1 ? '' : 's'} recorded, ${failed.join(', ')} could not be`)
+      } else {
+        toast.success(`${code} · ${created} truck${created === 1 ? '' : 's'} loaded`)
+      }
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
 export function useUpdateDeliveryInventory() {
   const queryClient = useQueryClient()
   const toast = useToast()

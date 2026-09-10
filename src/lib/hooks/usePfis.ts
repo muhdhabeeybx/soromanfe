@@ -1005,7 +1005,7 @@ export function useSetPfiTrucks(pfiId: number | null) {
   })
 }
 
-/** One truck as the New Batch dialog collects it, before it is anything. */
+/** One truck on a delivery PFI's manifest, before it is anything. */
 export interface DeliveryBatchTruck {
   truckId?: number | null
   plateNumber: string
@@ -1013,154 +1013,25 @@ export interface DeliveryBatchTruck {
   loadedQty: number
 }
 
-export interface DeliveryBatchDraft {
-  /** Omit to append to `pfiId` instead of creating a batch. */
-  pfiNumber?: string
-  /** Set to append trucks to a batch that already exists. */
-  pfiId?: number
-  /** The depot the trucks load at. Required when creating. */
-  locationId?: number
-  productId?: number
-  /** Names, for the operations rows — those columns hold text, not ids. */
-  depotName?: string
-  productName?: string
-  description?: string
-  dateAllocated: string
-  /** Depots that may sell from the batch. Replaces the existing allowlist. */
-  sellAtDepotIds?: number[]
-  trucks: DeliveryBatchTruck[]
-}
-
-/** Thrown once the batch itself exists, so the caller can offer to open it. */
-export class DeliveryBatchPartial extends Error {
-  // Assigned in the body rather than declared as constructor parameters:
-  // `erasableSyntaxOnly` is on, and parameter properties emit real code.
-  readonly pfiId: number
-  readonly step: string
-
-  constructor(pfiId: number, step: string, cause: unknown) {
-    super(`Batch created, but ${step} failed: ${getErrorMessage(cause)}`)
-    this.name = 'DeliveryBatchPartial'
-    this.pfiId = pfiId
-    this.step = step
-  }
-}
-
 /**
- * Create a delivery batch and everything that hangs off it, in one call.
+ * Put trucks on a delivery PFI, in both places they belong.
  *
- * Locations, the manifest and the operations rows all need a PFI id, and there
- * is no id until the batch exists — which is why this used to be a two-step
- * form: create, then edit. That was the wrong trade. Nobody allocates trucks
- * as a separate errand later; the trucks are the reason the batch is being
- * created, and a form that takes the name and then asks you to come back is a
- * form that lost the thing you opened it for.
+ * This is the PFI module's path, not the delivery inventory's: a batch
+ * created there is a code and its loads, and useCreateDeliveryBatch writes
+ * those directly. A delivery PFI raised on the PFI form still needs both
+ * tables written:
  *
- * So the steps are sequenced here rather than staged across two screens. The
- * batch is created first because everything else is addressed by its id, and
- * if a later step fails the id is thrown out with the error — the batch is
- * real by then, and the caller can send you to it rather than making you
- * retype a manifest against a row that already exists.
- *
- * ── The manifest and the operations rows are both written ─────────────────
- *
- * They are not duplicates. `pfi_trucks` is the manifest: it is what the batch
- * quantity is rebuilt from, server-side. `delivery_inventory` is the
- * operational record of each load — the row that gets a customer, a
- * destination, a rate and an offload date, and the row the inventory page
- * lists. A batch written to only one of them is either a batch with no
- * quantity or a batch that never appears on the page it belongs to, so both
- * are written from the same truck list, here, where they cannot disagree.
- */
-export function useCreateDeliveryBatch() {
-  const queryClient = useQueryClient()
-  const toast = useToast()
-
-  return useMutation({
-    retry: false,
-    mutationFn: async (draft: DeliveryBatchDraft) => {
-      let pfiId = draft.pfiId
-
-      if (pfiId == null) {
-        const res = await api.post('/pfis', {
-          pfiNumber: draft.pfiNumber,
-          pfiType: 'delivery',
-          locationId: draft.locationId,
-          productId: draft.productId,
-          description: draft.description,
-          pfiDate: draft.dateAllocated,
-          // Rebuilt from the manifest below. Never typed — see the note above
-          // DeliveryBatchPanel on why a batch is worth what its trucks loaded.
-          startingQtyLitres: 0,
-        })
-        const created = res.data?.data?.pfi ?? res.data?.data
-        if (!created?.id) throw new Error('The batch was created but came back without an id')
-        pfiId = Number(created.id)
-      }
-
-      // Past this line the batch exists, so every failure carries its id.
-      const step = async <T,>(what: string, run: () => Promise<T>) => {
-        try {
-          return await run()
-        } catch (err) {
-          throw new DeliveryBatchPartial(pfiId!, what, err)
-        }
-      }
-
-      if (draft.sellAtDepotIds?.length) {
-        await step('saving its locations', () =>
-          api.put(`/pfis/${pfiId}/locations`, { depotIds: draft.sellAtDepotIds }),
-        )
-      }
-
-      if (draft.trucks.length > 0) {
-        // The one definition of "a truck is on this batch", shared with the
-        // PFI form — see writeDeliveryTrucks. Both the manifest and the
-        // operations register, from the same list, so they cannot disagree.
-        await step('saving its trucks', () =>
-          writeDeliveryTrucks({
-            pfiId: pfiId!,
-            pfiNumber: draft.pfiNumber,
-            depotName: draft.depotName,
-            productName: draft.productName,
-            dateAllocated: draft.dateAllocated,
-            trucks: draft.trucks,
-            isNew: draft.pfiId == null,
-          }),
-        )
-      }
-
-      return { pfiId: pfiId! }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pfis'] })
-      queryClient.invalidateQueries({ queryKey: ['pfi-locations'] })
-      queryClient.invalidateQueries({ queryKey: ['pfi-trucks'] })
-      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
-      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
-    },
-    onError: (err) => toast.error(getErrorMessage(err)),
-  })
-}
-
-/**
- * Put trucks on a batch that already exists, in both places they belong.
- *
- * A delivery batch's trucks live in two tables and both are needed:
- *
- *   pfi_trucks          the manifest. The batch quantity is rebuilt from it
- *                       server-side, so this is what makes the batch worth
- *                       what its trucks loaded.
+ *   pfi_trucks          the manifest. The PFI's quantity is rebuilt from it
+ *                       server-side, so this is what makes it worth what its
+ *                       trucks loaded.
  *   delivery_inventory  the operational row per load — the one that later
  *                       gets a customer, a destination, a rate and an offload
  *                       date, and the ONLY thing the delivery inventory page
  *                       and the sales ledger list.
  *
- * Writing one without the other is why a batch could exist, carry a quantity,
+ * Writing one without the other is why a PFI could exist, carry a quantity,
  * and still be invisible on both delivery screens: the batch page's manifest
- * wrote pfi_trucks alone, and the PFI form wrote neither. Every entry point
- * calls this instead, so "created a batch" and "the batch is on the page" stop
- * being different states.
+ * wrote pfi_trucks alone, and the PFI form wrote neither.
  *
  * Appends rather than replaces. PUT /trucks takes the whole manifest, so the
  * trucks already on the batch are read back and sent with the new ones — and
@@ -1180,11 +1051,8 @@ export interface AttachTrucksArgs {
 }
 
 /**
- * The write itself, as a plain function.
- *
- * Shared by useAttachDeliveryTrucks and useCreateDeliveryBatch so there is one
- * definition of "a truck is on this batch". Two copies of this is how the
- * manifest and the operations register came to disagree in the first place.
+ * The write itself, as a plain function, so the hook below and any caller
+ * that already has a PFI id share one definition of "a truck is on this PFI".
  */
 export async function writeDeliveryTrucks({
   pfiId, pfiNumber, depotName, productName, dateAllocated, trucks, isNew,

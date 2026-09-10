@@ -28,17 +28,13 @@ export const Route = createFileRoute('/delivery-operations/batch')({
  * a delivery batch is the two things a cargo has no use for: an allowlist of
  * depots that may sell from it, and a manifest of what each truck loaded.
  *
- * ── This page no longer creates anything ──────────────────────────────────
+ * ── This is the PFI module's view, not the inventory's ────────────────────
  *
- * It used to, on a form that took a name and a depot and left the trucks to a
- * second step, because locations and trucks are addressed by a PFI id and
- * there is no id until the batch exists. That sequencing is real, but staging
- * it across two screens was the wrong place to solve it: it made the primary
- * action on the inventory page lead somewhere that could not finish the job.
- * Creating a batch is now one dialog on that page, and the sequencing lives in
- * useCreateDeliveryBatch. What is left here is what a batch page should be —
- * the batch as it stands, and the two things about it that are edited after
- * the fact.
+ * A batch created on the delivery inventory page is a code and the loads
+ * recorded under it — no PFI, nothing for this page to show. This page is for
+ * a delivery PFI raised on the PFI form, where the two things a cargo has no
+ * use for still need editing after the fact. Selling those loads happens on
+ * the allocation register, keyed by the code, like every other batch.
  *
  * The quantity is deliberately not editable. It is not typed; it is the sum of
  * what the trucks loaded, rebuilt server-side whenever the manifest is saved.
