@@ -241,3 +241,103 @@ export function useCancelOrder() {
     },
   })
 }
+
+// ─── Acting on several orders at once ───────────────────────────────────────
+
+/** What became of each order, so a partial run can say which ones failed. */
+export interface BulkResult {
+  ok: Array<string | number>
+  failed: Array<{ id: string | number; label: string; reason: string }>
+}
+
+/**
+ * Run one order action over a selection, one order at a time.
+ *
+ * ── Why sequential, and why not Promise.all ───────────────────────────────
+ *
+ * Every one of these actions moves money or stock: a cancel returns reserved
+ * litres to its PFI and releases a wallet hold, a delete unwinds tickets,
+ * commissions and movements. Fired concurrently, twenty of them contend for
+ * the same PFI rows, and the pair that interleaves badly is the pair whose
+ * batch quantity ends up wrong — a race worth nothing to trade away for a
+ * faster spinner on a button somebody presses once a week.
+ *
+ * ── Why it does not stop at the first failure ─────────────────────────────
+ *
+ * The statuses are checked before the request goes out, but the server is the
+ * authority and a status can move under a selection that was made a minute
+ * ago. One order refusing says nothing about the next, so the run continues
+ * and reports what actually happened per order. Stopping dead would leave the
+ * caller unable to tell the refused ones from the untried ones.
+ */
+function useBulkOrderAction<T>(
+  run: (order: T) => Promise<unknown>,
+  { verb, label }: { verb: string; label: (order: T) => string },
+) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (orders: T[]): Promise<BulkResult> => {
+      const result: BulkResult = { ok: [], failed: [] }
+      for (const order of orders) {
+        const id = (order as { id?: string | number; _id?: string }).id
+          ?? (order as { _id?: string })._id
+          ?? ''
+        try {
+          await run(order)
+          result.ok.push(id)
+        } catch (err) {
+          result.failed.push({ id, label: label(order), reason: getErrorMessage(err) })
+        }
+      }
+      return result
+    },
+    onSuccess: (result) => {
+      // One toast for the run, not one per order — twenty stacked toasts say
+      // less than a single line that names the ones that did not work.
+      if (result.failed.length === 0) {
+        toast.success(`${result.ok.length} order${result.ok.length === 1 ? '' : 's'} ${verb}`)
+      } else if (result.ok.length === 0) {
+        toast.error(`None ${verb}. ${result.failed[0].label}: ${result.failed[0].reason}`)
+      } else {
+        toast.error(
+          `${result.ok.length} ${verb}, ${result.failed.length} refused — ` +
+          result.failed.slice(0, 3).map((f) => f.label).join(', ') +
+          (result.failed.length > 3 ? `, +${result.failed.length - 3} more` : ''),
+        )
+      }
+      // Invalidated once, after the whole run. Per-order invalidation would
+      // refetch the entire order list twenty times mid-loop.
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+      queryClient.invalidateQueries({ queryKey: ['tickets'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+interface BulkOrder {
+  id?: string | number
+  _id?: string
+  orderNumber?: string
+}
+
+const orderLabel = (o: BulkOrder) => o.orderNumber || String(o.id ?? o._id ?? 'order')
+
+/** Cancel each one, returning its stock and releasing its wallet hold. */
+export function useBulkCancelOrders(reason?: string) {
+  return useBulkOrderAction<BulkOrder>(
+    async (o) => api.post(`/orders/${o.id ?? o._id}/cancel`, { reason: reason || undefined }),
+    { verb: 'cancelled', label: orderLabel },
+  )
+}
+
+/** Delete each one permanently. Nothing survives but the audit entry. */
+export function useBulkDeleteOrders() {
+  return useBulkOrderAction<BulkOrder>(
+    async (o) => api.delete(`/orders/${o.id ?? o._id}`),
+    { verb: 'deleted', label: orderLabel },
+  )
+}

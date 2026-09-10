@@ -3,11 +3,14 @@ import { createFileRoute } from '@tanstack/react-router'
 import { format, isWithinInterval } from 'date-fns'
 import {
   Search, X, RefreshCw, Pencil, Eye, Trash2, Wallet, Fuel, Package,
+  Ban, Loader2, AlertTriangle,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import { Textarea } from '#/components/ui/textarea'
+import { Checkbox } from '#/components/ui/checkbox'
 import { NativeSelect } from '#/components/ui/native-select'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
@@ -21,7 +24,9 @@ import { Pagination } from '#/components/Pagination'
 import { FilterBar } from '#/components/FilterBar'
 import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
-import { useAllOrders, useDeleteOrder } from '#/lib/hooks/useOrders'
+import {
+  useAllOrders, useDeleteOrder, useBulkCancelOrders, useBulkDeleteOrders,
+} from '#/lib/hooks/useOrders'
 import { useRoles } from '#/lib/hooks/useRoles'
 import { routeGuard } from '#/lib/route-guard'
 import {
@@ -36,6 +41,23 @@ export const Route = createFileRoute('/order-management/')({
 })
 
 const ALL = 'all'
+
+/**
+ * What may still be done to an order, by status.
+ *
+ * Both lists mirror the server: LOCKED is what OrderEditDialog refuses (see
+ * order.service.js's updateOrder), and CANCELLABLE is the set of states with
+ * "Cancelled" in their transition table (orderStatus.service.js) — cancel is
+ * allowed through Released and stops the moment a truck gates in. They are
+ * checked here so a bulk action can say up front how much of a selection it
+ * will actually touch, rather than firing twenty requests to find out.
+ */
+const LOCKED_STATUSES = ['Completed', 'Cancelled', 'Expired']
+const CANCELLABLE_STATUSES = ['Pending', 'Paid', 'Released']
+
+const isLocked = (o: { status?: unknown }) => LOCKED_STATUSES.includes(String(o.status))
+const isCancellable = (o: { status?: unknown }) => CANCELLABLE_STATUSES.includes(String(o.status))
+const orderId = (o: { id?: string | number; _id?: string }) => String(o.id ?? o._id ?? '')
 
 /**
  * All Orders, but built for correcting them rather than reading them.
@@ -64,9 +86,23 @@ function OrderManagementPage() {
   const [viewing, setViewing] = useState<any | null>(null)
   const [deleting, setDeleting] = useState<any | null>(null)
 
+  /**
+   * The selection, by order id.
+   *
+   * A Set rather than an array of orders: the rows are re-created on every
+   * refetch, so holding the objects would keep a selection pointing at stale
+   * copies of them — and the figures a confirm dialog reads off the selection
+   * would then be the ones from before the refetch.
+   */
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkAction, setBulkAction] = useState<'cancel' | 'delete' | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+
   const { data, isLoading, isError, error, refetch, isFetching } = useAllOrders()
   const { isSuperAdmin: canDelete } = useRoles()
   const deleteOrder = useDeleteOrder()
+  const bulkCancel = useBulkCancelOrders(cancelReason)
+  const bulkDelete = useBulkDeleteOrders()
 
   const orders: any[] = useMemo(() => data?.orders || [], [data])
 
@@ -127,6 +163,68 @@ function OrderManagementPage() {
   const totalPages = Math.max(Math.ceil(filtered.length / pageSize), 1)
   const current = Math.min(page, totalPages)
   const rows = filtered.slice((current - 1) * pageSize, current * pageSize)
+
+  /**
+   * The selected orders, resolved against what is on screen.
+   *
+   * Derived from `filtered` rather than from every order, so narrowing a
+   * filter narrows the selection with it. An id that has scrolled out of view
+   * behind a filter simply stops counting — which is the point: nobody should
+   * be able to delete twelve orders when the screen says eight are selected.
+   *
+   * Nothing prunes the Set itself. Clearing a filter brings its ids back, and
+   * an effect that deleted them on every filter change would make widening
+   * the view silently lose work.
+   */
+  const selectedOrders = useMemo(
+    () => filtered.filter((o) => selected.has(orderId(o))),
+    [filtered, selected],
+  )
+  const cancellable = useMemo(() => selectedOrders.filter(isCancellable), [selectedOrders])
+  const deletable = selectedOrders
+
+  const pageIds = rows.map(orderId)
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id))
+  const someOnPageSelected = pageIds.some((id) => selected.has(id))
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  /** The header box acts on this page only — never on rows nobody can see. */
+  const togglePage = () =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allOnPageSelected) pageIds.forEach((id) => next.delete(id))
+      else pageIds.forEach((id) => next.add(id))
+      return next
+    })
+
+  const selectAllFiltered = () => setSelected(new Set(filtered.map(orderId)))
+  const clearSelection = () => setSelected(new Set())
+
+  const bulkBusy = bulkCancel.isPending || bulkDelete.isPending
+
+  const runBulk = async () => {
+    const targets = bulkAction === 'cancel' ? cancellable : deletable
+    if (targets.length === 0) return
+    const result = bulkAction === 'cancel'
+      ? await bulkCancel.mutateAsync(targets)
+      : await bulkDelete.mutateAsync(targets)
+    // Only the ones that went through leave the selection. What was refused
+    // stays ticked, so a second attempt does not mean re-finding them.
+    setSelected((prev) => {
+      const next = new Set(prev)
+      result.ok.forEach((id) => next.delete(String(id)))
+      return next
+    })
+    setBulkAction(null)
+    setCancelReason('')
+  }
 
   if (isLoading) return <PageLoader message="Loading orders…" />
   if (isError) {
@@ -208,11 +306,81 @@ function OrderManagementPage() {
       </FilterBar>
 
       <section className={PANEL}>
-        <div className={PANEL_RAIL}>
-          <span className={MICRO}>
-            {formatQty(filtered.length)} order{filtered.length === 1 ? '' : 's'}
-          </span>
-          <span className="text-xs text-muted-foreground">{formatNaira(totals.value)}</span>
+        {/* The rail carries the count until something is ticked, and then it
+            carries the actions instead. A separate bar that appears above the
+            table would push the whole thing down by its own height every time
+            a checkbox was clicked. */}
+        <div className={cn(PANEL_RAIL, 'gap-3')}>
+          {selectedOrders.length === 0 ? (
+            <>
+              <span className={MICRO}>
+                {formatQty(filtered.length)} order{filtered.length === 1 ? '' : 's'}
+              </span>
+              <span className="text-xs text-muted-foreground">{formatNaira(totals.value)}</span>
+            </>
+          ) : (
+            <>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <span className={cn(MICRO, 'font-semibold')}>
+                  {formatQty(selectedOrders.length)} selected
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {formatNaira(selectedOrders.reduce((sum, o) => sum + toNumber(o.totalAmount), 0))}
+                </span>
+                {/* Offered only when there is more behind the pagination than
+                    the page could tick, so it never reads as a second way to
+                    do what the header box just did. */}
+                {selectedOrders.length < filtered.length && (
+                  <button
+                    type="button"
+                    onClick={selectAllFiltered}
+                    className="text-xs text-accent underline-offset-4 hover:underline"
+                  >
+                    Select all {formatQty(filtered.length)}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-2">
+                {/* The eligible count is on the button, not discovered in a
+                    dialog: a selection of twelve where only five can be
+                    cancelled should say five before it is pressed. */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={cancellable.length === 0 || bulkBusy}
+                  title={
+                    cancellable.length === 0
+                      ? 'Nothing selected can still be cancelled'
+                      : `Cancel ${cancellable.length} order${cancellable.length === 1 ? '' : 's'}`
+                  }
+                  onClick={() => setBulkAction('cancel')}
+                >
+                  <Ban data-icon="inline-start" />
+                  Cancel {cancellable.length > 0 ? cancellable.length : ''}
+                </Button>
+                {canDelete && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={bulkBusy}
+                    onClick={() => setBulkAction('delete')}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete {deletable.length}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {filtered.length === 0 ? (
@@ -228,6 +396,16 @@ function OrderManagementPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        aria-label={allOnPageSelected ? 'Clear this page' : 'Select this page'}
+                        // Indeterminate when the page is part-ticked, so the
+                        // box reports a partial selection instead of reading
+                        // as empty over eight ticked rows.
+                        checked={allOnPageSelected ? true : someOnPageSelected ? 'indeterminate' : false}
+                        onCheckedChange={togglePage}
+                      />
+                    </TableHead>
                     <TableHead className="w-10">S/N</TableHead>
                     <TableHead>Reference</TableHead>
                     <TableHead>Date</TableHead>
@@ -245,9 +423,24 @@ function OrderManagementPage() {
                 </TableHeader>
                 <TableBody>
                   {rows.map((o, i) => {
-                    const locked = ['Completed', 'Cancelled', 'Expired'].includes(String(o.status))
+                    const locked = isLocked(o)
+                    const id = orderId(o)
+                    const ticked = selected.has(id)
                     return (
-                      <TableRow key={o.id ?? o._id}>
+                      <TableRow key={o.id ?? o._id} data-state={ticked ? 'selected' : undefined}>
+                        <TableCell>
+                          {/* Every order can be ticked, including a completed
+                              one. What a selection may then have DONE to it is
+                              the buttons' business — hiding the box would make
+                              a locked order look unselectable rather than
+                              uncancellable, and a super admin can still
+                              delete it. */}
+                          <Checkbox
+                            checked={ticked}
+                            onCheckedChange={() => toggleOne(id)}
+                            aria-label={`Select ${o.orderNumber}`}
+                          />
+                        </TableCell>
                         <TableCell className="text-muted-foreground">
                           {(current - 1) * pageSize + i + 1}
                         </TableCell>
@@ -342,6 +535,112 @@ function OrderManagementPage() {
         open={viewing !== null}
         onOpenChange={(o) => { if (!o) setViewing(null) }}
       />
+
+      {/* ── The same two questions, asked of a selection ──────────────── */}
+      <Dialog
+        open={bulkAction !== null}
+        onOpenChange={(open) => { if (!open && !bulkBusy) { setBulkAction(null); setCancelReason('') } }}
+      >
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const isCancel = bulkAction === 'cancel'
+            const targets = isCancel ? cancellable : deletable
+            const skipped = selectedOrders.length - targets.length
+            const paid = targets.filter((o) => o.paymentStatus === 'Paid').length
+            const value = targets.reduce((sum, o) => sum + toNumber(o.totalAmount), 0)
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>
+                    {isCancel ? 'Cancel' : 'Delete'} {formatQty(targets.length)}{' '}
+                    order{targets.length === 1 ? '' : 's'}?
+                  </DialogTitle>
+                  <DialogDescription>
+                    {isCancel
+                      ? 'Each one returns its reserved quantity to its PFI and releases its wallet hold. The orders stay on the books as cancelled.'
+                      : 'This permanently removes each order and everything attached to it — tickets, allocated trucks, commissions, wallet holds and stock movements. Only the audit entries survive.'}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Orders</span>
+                      <span className="font-semibold tabular-nums">{formatQty(targets.length)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-muted-foreground">Value</span>
+                      <span className="font-semibold tabular-nums">{formatNaira(value)}</span>
+                    </div>
+                    {paid > 0 && (
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-muted-foreground">Already paid</span>
+                        <span className="font-semibold tabular-nums text-warning">{formatQty(paid)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Said before the button, not after the run. A selection of
+                      twelve that only touches five is the single most likely
+                      way to think this did less than it did. */}
+                  {skipped > 0 && (
+                    <p className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                      {formatQty(skipped)} of the {formatQty(selectedOrders.length)} selected
+                      {skipped === 1 ? ' is' : ' are'} already completed, cancelled or expired and
+                      {skipped === 1 ? ' will be' : ' will be'} left alone. They stay ticked.
+                    </p>
+                  )}
+
+                  {paid > 0 && !isCancel && (
+                    <p className="rounded-lg border border-destructive/25 bg-destructive/5 p-2.5 text-xs text-destructive">
+                      {formatQty(paid)} of these {paid === 1 ? 'is' : 'are'} paid. Deleting
+                      {paid === 1 ? ' it' : ' them'} also removes the payment trail, so the wallet
+                      debits behind {paid === 1 ? 'it' : 'them'} can no longer be reconciled.
+                    </p>
+                  )}
+
+                  {isCancel && (
+                    <div className="space-y-1.5">
+                      <label htmlFor="bulk-reason" className="text-sm font-medium">
+                        Reason <span className="text-muted-foreground">(optional)</span>
+                      </label>
+                      <Textarea
+                        id="bulk-reason"
+                        rows={2}
+                        placeholder="Recorded against every order in this run."
+                        value={cancelReason}
+                        onChange={(e) => setCancelReason(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    disabled={bulkBusy}
+                    onClick={() => { setBulkAction(null); setCancelReason('') }}
+                  >
+                    Keep them
+                  </Button>
+                  <Button
+                    variant={isCancel ? 'default' : 'destructive'}
+                    disabled={bulkBusy || targets.length === 0}
+                    onClick={runBulk}
+                  >
+                    {bulkBusy && <Loader2 className="animate-spin" />}
+                    {isCancel
+                      ? `Cancel ${formatQty(targets.length)}`
+                      : `Delete ${formatQty(targets.length)} permanently`}
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Names what goes with it. Not a cancel — nothing survives but the
           audit entry. */}
