@@ -55,8 +55,19 @@ export interface LoadSplit {
   understated: boolean
 }
 
+/** Any map keyed by customer id, however the caller keyed it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CustomerLookup = { get: (key: any) => DeliveryCustomer | undefined } | null | undefined
+export type CustomerLookup = { get: (key: any) => DeliveryCustomer | undefined } | null | undefined
+
+/** One customer off a lookup, tolerant of ids stored as text or number. */
+export function lookupCustomer(
+  customers: CustomerLookup,
+  id: string | number | null | undefined,
+): DeliveryCustomer | null {
+  const key = idKey(id)
+  if (!key || !customers) return null
+  return customers.get(key) || customers.get(Number(key)) || null
+}
 
 /**
  * What one sale row says its volume was.
@@ -95,17 +106,12 @@ export function buildLoadSplit(
   sales: DeliverySale[],
   customers?: CustomerLookup,
 ): LoadSplit {
-  const lookup = (id: string): DeliveryCustomer | null => {
-    if (!id || !customers) return null
-    return customers.get(id) || customers.get(Number(id)) || null
-  }
-
   const byCustomer = new Map<string, LoadShare>()
 
   for (const sale of sales) {
     const cid = idKey(sale.customerId)
     const existing = byCustomer.get(cid)
-    const customer = lookup(cid)
+    const customer = lookupCustomer(customers, cid)
     const fillingStation = isFillingStation(customer)
     const name = customer?.name || sale.customerName || ''
     const destination = fillingStation

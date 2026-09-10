@@ -207,7 +207,7 @@ function AllocationDetailsPage() {
         const customer = entry.customerId ? (customerMap.get(entry.customerId) || customerMap.get(Number(entry.customerId)) || customerMap.get(String(entry.customerId))) : null
         const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
         const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
-        const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
+        const resolved = resolveLoading(entry, { truck, customer, pfi, sales, customers: customerMap })
         const split = buildLoadSplit(entry, sales, customerMap)
 
         return {
@@ -650,7 +650,7 @@ function AllocationDetailsPage() {
           <div
             className="bg-warning h-full transition-all duration-500 ease-luxe"
             style={{ width: `${loadedPercent}%` }}
-            title={`${loadedPercent}% In Transit`}
+            title={`${loadedPercent}% unsold`}
           />
         </div>
       </div>
@@ -683,7 +683,7 @@ function AllocationDetailsPage() {
         <StatCard
           tone="amber"
           icon={<Truck />}
-          label="In transit"
+          label="Unsold"
           value={
             <>
               {stats.loadedCount}

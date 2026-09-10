@@ -133,7 +133,9 @@ function DeliveryOperationDetailsView() {
     const customer = inventoryItem.customerId
       ? customerMap.get(String(inventoryItem.customerId)) || null
       : null
-    const resolved = resolveLoading(inventoryItem, { truck, pfi, customer, sales: matchedSales })
+    const resolved = resolveLoading(inventoryItem, {
+      truck, pfi, customer, sales: matchedSales, customers: customerMap,
+    })
     const split = buildLoadSplit(inventoryItem, matchedSales, customerMap)
     return {
       ...inventoryItem,

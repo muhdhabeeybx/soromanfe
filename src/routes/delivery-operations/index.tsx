@@ -18,8 +18,8 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import {
-  Plus, Search, Download, Truck, Droplets, CheckCircle2, X, Settings,
-  ChevronRight, Loader2, Trash2, AlertTriangle,
+  Plus, Search, Truck, Droplets, CheckCircle2, X, Settings, Wallet,
+  ChevronRight, Loader2, Trash2, AlertTriangle, FileSpreadsheet, FileText,
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import {
@@ -33,8 +33,8 @@ import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useToast } from '#/lib/hooks/useToast'
 import { cn } from '#/lib/utils'
 import {
-  buildTruckIndex, matchSalesByRecord, resolveLoading, STATUS_DISPLAY,
-  type ResolvedLoading,
+  buildTruckIndex, loadMoney, matchSalesByRecord, resolveLoading, shareMoney, STATUS_DISPLAY,
+  type LoadMoney, type ResolvedLoading,
 } from '#/lib/delivery-records'
 import { buildLoadSplit, formatShareList, type LoadSplit } from '#/lib/load-split'
 import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
@@ -46,6 +46,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '#/components/ui/dialog'
 import { routeGuard } from '#/lib/route-guard'
+import {
+  exportDeliveryInventoryExcel, exportDeliveryInventoryPdf,
+  type DeliveryInventoryFilters, type ExportBatch,
+} from './-delivery-inventory-export'
 
 export const Route = createFileRoute('/delivery-operations/')({
   beforeLoad: () => routeGuard('/delivery-operations'),
@@ -73,6 +77,8 @@ interface TruckRecord extends Omit<DeliveryInventory, keyof ResolvedLoading>, Re
   notes: string
   /** Who this load was sold to, and in what shares. */
   split: LoadSplit
+  /** What it is worth, what has come in, what is left. */
+  money: LoadMoney
 }
 
 /**
@@ -242,7 +248,7 @@ function DeliveryOperationsPage() {
       const customer = entry.customerId ? (customerMap.get(entry.customerId) || customerMap.get(Number(entry.customerId)) || customerMap.get(String(entry.customerId))) : null
       const pfi = entry.pfiId ? pfiMap.get(String(entry.pfiId)) : null
       const sales = salesByRecord.get(entry._id || entry.id || '') ?? []
-      const resolved = resolveLoading(entry, { truck, customer, pfi, sales })
+      const resolved = resolveLoading(entry, { truck, customer, pfi, sales, customers: customerMap })
       const split = buildLoadSplit(entry, sales, customerMap)
 
       return {
@@ -258,6 +264,9 @@ function DeliveryOperationsPage() {
         // the depot on it — see buildLoadSplit.
         qty: split.total,
         split,
+        // The rate resolved above is the fallback: a share with no rate of its
+        // own is still priced by whatever was typed onto the allocation.
+        money: loadMoney(split, resolved.rate),
         code: (entry.allocationCode || (entry as any).allocation_code || '').trim().toUpperCase(),
         isFillingStation: isFillingStation(customer),
         notes: entry.notes || '',
@@ -406,34 +415,51 @@ function DeliveryOperationsPage() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const totals = useMemo(() => {
-    let activeCount = 0, totalInTransit = 0, totalDelivered = 0, deliveredTrips = 0
+    let unsoldCount = 0, unsoldQty = 0, totalDelivered = 0, deliveredTrips = 0
     let otherCount = 0, otherQty = 0
+    let expected = 0, paid = 0, outstanding = 0
     filtered.forEach(r => {
-      if (r.status.key === 'loaded') { activeCount++; totalInTransit += r.qty }
+      if (r.status.key === 'loaded') { unsoldCount++; unsoldQty += r.qty }
       else if (r.status.key === 'offloaded') { totalDelivered += r.qty; deliveredTrips++ }
       else { otherCount++; otherQty += r.qty }
+      expected += r.money.expected
+      paid += r.money.paid
+      // Owings only. Netting an overpaid truck against an owing one reports a
+      // book that is square when neither of them is.
+      if (r.money.balance > 0) outstanding += r.money.balance
     })
-    return { activeCount, totalInTransit, totalDelivered, deliveredTrips, otherCount, otherQty }
+    return {
+      unsoldCount, unsoldQty, totalDelivered, deliveredTrips, otherCount, otherQty,
+      expected, paid, outstanding,
+    }
   }, [filtered])
 
   const summaryCards = useMemo((): SummaryCard[] => [
     {
-      title: 'Trucks in Transit',
-      value: String(totals.activeCount),
+      title: 'Trucks Unsold',
+      value: String(totals.unsoldCount),
       icon: <Truck className="size-5" />,
-      tone: totals.activeCount > 0 ? 'amber' : 'neutral',
+      tone: totals.unsoldCount > 0 ? 'amber' : 'neutral',
     },
     {
-      title: 'Volume in Transit',
-      value: `${fmtQty(totals.totalInTransit)} Ltrs`,
+      title: 'Volume Unsold',
+      value: `${fmtQty(totals.unsoldQty)} Ltrs`,
       icon: <Droplets className="size-5" />,
-      tone: totals.totalInTransit > 0 ? 'amber' : 'neutral',
+      tone: totals.unsoldQty > 0 ? 'amber' : 'neutral',
     },
     {
       title: 'Quantity Sold',
       value: `${fmtQty(totals.totalDelivered)} Ltrs`,
       icon: <CheckCircle2 className="size-5" />,
       tone: 'green',
+    },
+    // The money the batches are still owed, on the page that lists them —
+    // this used to mean opening the sales ledger and filtering it by code.
+    {
+      title: 'Outstanding',
+      value: naira(totals.outstanding),
+      icon: <Wallet className="size-5" />,
+      tone: totals.outstanding > 0 ? 'amber' : 'green',
     },
   ], [totals])
 
@@ -477,38 +503,53 @@ function DeliveryOperationsPage() {
     setCustomerTypeFilter('all')
   }
 
-  const exportCSV = useCallback(() => {
-    if (!filtered.length) return
-    // A split load has to survive the export too — one row per truck with the
-    // whole quantity, and the shares spelled out beside it rather than lost.
-    const headers = ['S/N', 'Code', 'Truck', 'Driver', 'Batch', 'Product', 'Depot', 'Customer', 'Destination', 'Quantity', 'Split', 'Customer Split', 'Rate', 'Status', 'Date Loaded', 'Date Sold']
-    const rows = filtered.map((r, idx) => [
-      idx + 1,
-      r.code || '—',
-      r.truckPlate,
-      r.driverName || '—',
-      r.pfiLabel || '—',
-      r.product || '—',
-      r.depotDisplay || '—',
-      r.split.isSplit ? r.split.shares.map(sh => sh.customerName || 'Unassigned').join(' / ') : (r.custName || '—'),
-      r.split.isSplit ? r.split.shares.map(sh => sh.destination || '—').join(' / ') : (r.destination || '—'),
-      r.qty,
-      r.split.isSplit ? `${r.split.shares.length} customers` : 'Whole load',
-      formatShareList(r.split) || '—',
-      r.rate > 0 ? r.rate : '—',
-      r.status.label,
-      r.dateLoaded ? (() => { try { return format(parseISO(r.dateLoaded), 'dd/MM/yyyy') } catch { return r.dateLoaded } })() : '',
-      r.dateOffloaded ? (() => { try { return format(parseISO(r.dateOffloaded), 'dd/MM/yyyy') } catch { return r.dateOffloaded } })() : '',
-    ])
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `DELIVERY-OPERATIONS-${format(new Date(), 'dd-MM-yyyy')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [filtered])
+  /**
+   * The table, as a file — one batch row with its trucks underneath it.
+   *
+   * This was a flat CSV of truck rows with no batch totals and no money on it
+   * at all, so the file was the table with its structure and its point taken
+   * out. Both writers are handed the same batches this page is showing,
+   * filters and all, and the file says which filters those were.
+   */
+  const exportBatches = useMemo((): ExportBatch[] => grouped.map(({ code, records }) => ({
+    code,
+    product: [...new Set(records.map(r => r.product).filter(Boolean))].join(', '),
+    depot: [...new Set(records.map(r => r.depotDisplay).filter(Boolean))].join(', '),
+    dateLoaded: records.reduce((min, r) => {
+      const d = r.dateLoaded || ''
+      if (!d) return min
+      return !min || d < min ? d : min
+    }, ''),
+    records,
+  })), [grouped])
+
+  const exportFilters = useMemo((): DeliveryInventoryFilters => ({
+    status: statusFilter === 'all' ? '' : statusFilter === 'active' ? 'Unsold'
+      : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label,
+    truck: truckFilter,
+    customer: distinctCustomers.find(([id]) => id === customerFilter)?.[1] || '',
+    customerType: customerTypeFilter === 'all' ? ''
+      : customerTypeFilter === 'filling_station' ? 'Filling stations' : 'Normal',
+    code: codeFilter,
+    search: searchQuery,
+    dateFrom,
+    dateTo,
+  }), [statusFilter, truckFilter, customerFilter, customerTypeFilter, codeFilter, searchQuery, dateFrom, dateTo, distinctCustomers])
+
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
+
+  const runExport = useCallback(async (kind: 'excel' | 'pdf') => {
+    if (!exportBatches.length) return
+    setExporting(kind)
+    try {
+      if (kind === 'excel') await exportDeliveryInventoryExcel(exportBatches, exportFilters)
+      else await exportDeliveryInventoryPdf(exportBatches, exportFilters)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(null)
+    }
+  }, [exportBatches, exportFilters, toast])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Render
@@ -527,7 +568,7 @@ function DeliveryOperationsPage() {
   const activeChips = useMemo(
     () => [
       statusFilter !== 'all' && {
-        label: `Status: ${statusFilter === 'active' ? 'In transit' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`,
+        label: `Status: ${statusFilter === 'active' ? 'Unsold' : statusFilter === 'delivered' ? 'Sold' : STATUS_DISPLAY.empty.label}`,
         clear: () => setStatusFilter('all'),
       },
       truckFilter && { label: `Truck: ${truckFilter}`, clear: () => setTruckFilter('') },
@@ -571,8 +612,25 @@ function DeliveryOperationsPage() {
         */
         actions={
           <div className="flex gap-2">
-            <Button variant="outline" className="gap-2 cursor-pointer" onClick={exportCSV} disabled={filtered.length === 0}>
-              <Download className="size-4" /> Export
+            <Button
+              variant="outline" className="gap-2 cursor-pointer"
+              onClick={() => runExport('excel')}
+              disabled={exporting !== null || grouped.length === 0}
+            >
+              {exporting === 'excel'
+                ? <Loader2 className="size-4 animate-spin" />
+                : <FileSpreadsheet className="size-4" />}
+              Excel
+            </Button>
+            <Button
+              variant="outline" className="gap-2 cursor-pointer"
+              onClick={() => runExport('pdf')}
+              disabled={exporting !== null || grouped.length === 0}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 className="size-4 animate-spin" />
+                : <FileText className="size-4" />}
+              PDF
             </Button>
             <Button
               className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer"
@@ -614,7 +672,7 @@ function DeliveryOperationsPage() {
           value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
         >
           <option value="all">All statuses</option>
-          <option value="active">In transit</option>
+          <option value="active">Unsold</option>
           <option value="delivered">Sold</option>
           <option value="other">{STATUS_DISPLAY.empty.label}</option>
         </NativeSelect>
@@ -742,28 +800,31 @@ function DeliveryOperationsPage() {
 
           <Table>
             <TableHeader>
-              {/* A count and the volume behind it are two facts, so they get
-                  two columns. Reading "3 · 45,000" in one cell meant neither
-                  figure could be scanned down its own column, which is the
-                  only reason to have put them in a table. */}
+              {/*
+                The batch, and the money on it, without opening anything.
+
+                These columns used to be a count and a volume for each of "in
+                transit" and "sold" — four columns saying the same two things
+                twice — and no money at all, so knowing what a batch was worth
+                meant opening it and then opening the ledger. The volumes are
+                still a click away in the trucks below; what could not be got
+                at any distance was the value, so it takes the width.
+              */}
               <TableRow className="bg-muted/60 hover:bg-muted/60">
                 <TableHead className="w-8" />
                 <TableHead className="font-semibold text-muted-foreground">Batch</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Product</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Loaded at</TableHead>
+                <TableHead className="font-semibold text-muted-foreground">Date loaded</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">Trucks</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">
                   Volume{pageUnit ? ` (${pageUnit})` : ''}
                 </TableHead>
-                <TableHead className="text-right font-semibold text-warning">In transit</TableHead>
-                <TableHead className="text-right font-semibold text-warning">
-                  Qty{pageUnit ? ` (${pageUnit})` : ''}
-                </TableHead>
+                <TableHead className="text-right font-semibold text-warning">Unsold</TableHead>
                 <TableHead className="text-right font-semibold text-accent">Sold</TableHead>
-                <TableHead className="text-right font-semibold text-accent">
-                  Qty{pageUnit ? ` (${pageUnit})` : ''}
-                </TableHead>
-                <TableHead className="font-semibold text-muted-foreground">Last movement</TableHead>
+                <TableHead className="text-right font-semibold text-muted-foreground">Value</TableHead>
+                <TableHead className="text-right font-semibold text-accent">Paid</TableHead>
+                <TableHead className="text-right font-semibold text-muted-foreground">Balance</TableHead>
                 <TableHead className="w-8" />
                 {canDelete && <TableHead className="w-8" />}
               </TableRow>
@@ -783,10 +844,19 @@ function DeliveryOperationsPage() {
 
                 const products = [...new Set(records.map(r => r.product).filter(Boolean))]
                 const depots = [...new Set(records.map(r => r.depotDisplay).filter(Boolean))]
-                const latestDate = records.reduce((max, r) => {
-                  const d = r.dateOffloaded || r.dateLoaded || ''
-                  return d > max ? d : max
+                // When the batch loaded — the earliest of its trucks. A batch
+                // that went out over two days is dated by the day it started,
+                // not by whichever truck was touched last.
+                const loadDate = records.reduce((min, r) => {
+                  const d = r.dateLoaded || ''
+                  if (!d) return min
+                  return !min || d < min ? d : min
                 }, '')
+                const money = records.reduce((acc, r) => ({
+                  expected: acc.expected + r.money.expected,
+                  paid: acc.paid + r.money.paid,
+                  balance: acc.balance + r.money.balance,
+                }), { expected: 0, paid: 0, balance: 0 })
 
                 return (
                   <Fragment key={key}>
@@ -816,6 +886,11 @@ function DeliveryOperationsPage() {
                       <TableCell className="max-w-[180px] truncate text-muted-foreground" title={depots.join(', ')}>
                         {depots.length ? depots.join(', ') : '—'}
                       </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {loadDate
+                          ? (() => { try { return format(parseISO(loadDate), 'dd MMM yyyy') } catch { return loadDate } })()
+                          : '—'}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{records.length}</TableCell>
                       {/* The unit rides in the header when the whole page is
                           in one, and on the cell when it is not — this page
@@ -825,36 +900,45 @@ function DeliveryOperationsPage() {
                         {fmtQty(totalQty)}
                         {!pageUnit && <span className="font-normal text-muted-foreground"> {unit}</span>}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      {/* Counts, with the volume behind each on the cell —
+                          the volumes had columns of their own and said the
+                          same thing twice, and the money needed the width
+                          more than a second copy of the quantity did. */}
+                      <TableCell
+                        className="text-right tabular-nums"
+                        title={loaded.length ? `${fmtQty(loaded.reduce((s, r) => s + r.qty, 0))} ${unit} unsold` : undefined}
+                      >
                         {loaded.length
                           ? <span className="font-semibold text-warning">{loaded.length}</span>
                           : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {loaded.length ? (
-                          <>
-                            {fmtQty(loaded.reduce((s, r) => s + r.qty, 0))}
-                            {!pageUnit && <span> {unit}</span>}
-                          </>
-                        ) : <span className="text-muted-foreground/50">—</span>}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell
+                        className="text-right tabular-nums"
+                        title={sold.length ? `${fmtQty(sold.reduce((s, r) => s + r.qty, 0))} ${unit} sold` : undefined}
+                      >
                         {sold.length
                           ? <span className="font-semibold text-accent">{sold.length}</span>
                           : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {sold.length ? (
-                          <>
-                            {fmtQty(sold.reduce((s, r) => s + r.qty, 0))}
-                            {!pageUnit && <span> {unit}</span>}
-                          </>
-                        ) : <span className="text-muted-foreground/50">—</span>}
+                      {/* A batch nobody has priced is worth "—", never ₦0:
+                          those are different facts and only one of them is
+                          about the trading. */}
+                      <TableCell className="text-right tabular-nums">
+                        {money.expected > 0
+                          ? naira(money.expected)
+                          : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {latestDate
-                          ? (() => { try { return format(parseISO(latestDate), 'dd MMM yyyy') } catch { return latestDate } })()
-                          : '—'}
+                      <TableCell className="text-right tabular-nums">
+                        {money.paid > 0
+                          ? <span className="text-accent">{naira(money.paid)}</span>
+                          : <span className="text-muted-foreground/50">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {money.expected > 0
+                          ? <span className={money.balance > 0 ? 'text-destructive' : 'text-accent'}>
+                              {naira(money.balance)}
+                            </span>
+                          : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
                       <TableCell className="pl-0">
                         {other.length > 0 && (
@@ -884,7 +968,7 @@ function DeliveryOperationsPage() {
 
                     {isOpen && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={canDelete ? 13 : 12} className="bg-muted/30 p-0">
+                        <TableCell colSpan={canDelete ? 14 : 13} className="bg-muted/30 p-0">
                           <Table>
                             <TableHeader>
                               <TableRow className="hover:bg-transparent">
@@ -896,6 +980,9 @@ function DeliveryOperationsPage() {
                                   Quantity{pageUnit ? ` (${pageUnit})` : ''}
                                 </TableHead>
                                 <TableHead className="text-right font-semibold text-muted-foreground">Rate</TableHead>
+                                <TableHead className="text-right font-semibold text-muted-foreground">Value</TableHead>
+                                <TableHead className="text-right font-semibold text-accent">Paid</TableHead>
+                                <TableHead className="text-right font-semibold text-muted-foreground">Balance</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Status</TableHead>
                                 <TableHead className="font-semibold text-muted-foreground">Loaded</TableHead>
                               </TableRow>
@@ -939,6 +1026,23 @@ function DeliveryOperationsPage() {
                                       <TableCell className="text-right tabular-nums text-muted-foreground">
                                         {r.split.isSplit ? '' : r.rate > 0 ? naira(r.rate) : '—'}
                                       </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {r.money.expected > 0
+                                          ? naira(r.money.expected)
+                                          : <span className="text-muted-foreground/50">—</span>}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {r.money.paid > 0
+                                          ? <span className="text-accent">{naira(r.money.paid)}</span>
+                                          : <span className="text-muted-foreground/50">—</span>}
+                                      </TableCell>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {r.money.expected > 0
+                                          ? <span className={r.money.balance > 0 ? 'text-destructive' : 'text-accent'}>
+                                              {naira(r.money.balance)}
+                                            </span>
+                                          : <span className="text-muted-foreground/50">—</span>}
+                                      </TableCell>
                                       <TableCell><StatusChip tone={tone}>{r.status.label}</StatusChip></TableCell>
                                       <TableCell className="text-muted-foreground">{loadedOn}</TableCell>
                                     </TableRow>
@@ -967,6 +1071,32 @@ function DeliveryOperationsPage() {
                                         <TableCell className="text-right tabular-nums text-muted-foreground">
                                           {share.rate > 0 ? naira(share.rate) : '—'}
                                         </TableCell>
+                                        {(() => {
+                                          // Priced exactly as the truck above
+                                          // is, so the shares add up to it.
+                                          const m = shareMoney(share, r.rate)
+                                          return (
+                                            <>
+                                              <TableCell className="text-right tabular-nums">
+                                                {m.expected > 0
+                                                  ? naira(m.expected)
+                                                  : <span className="text-muted-foreground/50">—</span>}
+                                              </TableCell>
+                                              <TableCell className="text-right tabular-nums">
+                                                {m.paid > 0
+                                                  ? <span className="text-accent">{naira(m.paid)}</span>
+                                                  : <span className="text-muted-foreground/50">—</span>}
+                                              </TableCell>
+                                              <TableCell className="text-right tabular-nums">
+                                                {m.expected > 0
+                                                  ? <span className={m.balance > 0 ? 'text-destructive' : 'text-accent'}>
+                                                      {naira(m.balance)}
+                                                    </span>
+                                                  : <span className="text-muted-foreground/50">—</span>}
+                                              </TableCell>
+                                            </>
+                                          )
+                                        })()}
                                         <TableCell />
                                         <TableCell />
                                       </TableRow>
@@ -989,6 +1119,9 @@ function DeliveryOperationsPage() {
                                           {fmtQty(r.split.unassigned)}
                                           {!pageUnit && <span> {r.unitLabel}</span>}
                                         </TableCell>
+                                        <TableCell />
+                                        <TableCell />
+                                        <TableCell />
                                         <TableCell />
                                         <TableCell />
                                         <TableCell />
