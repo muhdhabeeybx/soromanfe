@@ -1,13 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Loader2, Search, Truck, AlertTriangle } from 'lucide-react'
+import { Loader2, AlertTriangle } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Checkbox } from '#/components/ui/checkbox'
 import { NativeSelect } from '#/components/ui/native-select'
-import { NumberInput } from '#/components/ui/number-input'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '#/components/ui/dialog'
@@ -15,8 +14,10 @@ import {
   useCreateDeliveryBatch, useDepotsForFilter, usePfiList, DeliveryBatchPartial,
 } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
-import { useAllocatableTrucks } from '#/lib/hooks/useFleet'
 import { useToast } from '#/lib/hooks/useToast'
+import {
+  TruckPicker, useFleetPicks, truckSelectionSummary, type TruckSelection,
+} from '#/components/delivery-operations/TruckPicker'
 import { MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 
@@ -50,33 +51,6 @@ interface NewBatchDialogProps {
 
 type Mode = 'new' | 'existing'
 
-interface TruckPick {
-  loadedQty: string
-}
-
-/**
- * What this form needs off a fleet truck.
- *
- * Named here rather than imported: useAllocatableTrucks builds each row by
- * spreading a FleetTruck and adding aliases, and the inferred return type
- * keeps only the aliases — so plateNumber and id are not on it despite being
- * on every row it returns.
- */
-interface FleetPick {
-  id?: number | string
-  _id?: string
-  plateNumber?: string
-  capacity?: number | null
-  capacity_litres?: number | null
-  driver?: string
-  driver_name?: string
-}
-
-const num = (v: unknown): number => {
-  const n = Number(String(v ?? '').replace(/[^0-9.]/g, ''))
-  return Number.isFinite(n) ? n : 0
-}
-
 const today = () => new Date().toISOString().slice(0, 10)
 
 export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBatchDialogProps) {
@@ -85,7 +59,6 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
 
   const { data: depots = [] } = useDepotsForFilter()
   const { data: productData } = useProductList()
-  const { data: trucksData } = useAllocatableTrucks()
   const { data: pfisData } = usePfiList()
 
   const createBatch = useCreateDeliveryBatch()
@@ -97,7 +70,7 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
     return (Array.isArray(list) ? list : []) as Array<{ id?: number | string; _id?: string; name: string }>
   }, [productData])
 
-  const trucks = useMemo(() => (trucksData?.trucks ?? []) as unknown as FleetPick[], [trucksData])
+  const fleet = useFleetPicks()
 
   /** Only delivery batches can take a manifest, so only they are offered. */
   const deliveryBatches = useMemo(
@@ -115,12 +88,11 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
   const [productId, setProductId] = useState('')
   const [date, setDate] = useState(today())
   const [sellAt, setSellAt] = useState<number[]>([])
-  const [picked, setPicked] = useState<Record<string, TruckPick>>({})
-  const [truckSearch, setTruckSearch] = useState('')
+  const [truckSelection, setTruckSelection] = useState<TruckSelection>({})
 
   const reset = () => {
     setMode('new'); setCode(''); setExistingPfiId(''); setDepotId(''); setProductId('')
-    setDate(today()); setSellAt([]); setPicked({}); setTruckSearch('')
+    setDate(today()); setSellAt([]); setTruckSelection({})
   }
 
   const close = () => { onOpenChange(false); reset() }
@@ -137,40 +109,13 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
     ? (chosenBatch?.productName || '')
     : (products.find((p) => String(p.id ?? p._id) === productId)?.name || '')
 
-  const filteredTrucks = useMemo(() => {
-    const q = truckSearch.trim().toLowerCase()
-    if (!q) return trucks
-    return trucks.filter((t) =>
-      (t.plateNumber || '').toLowerCase().includes(q) ||
-      (t.driver || t.driver_name || '').toLowerCase().includes(q),
-    )
-  }, [trucks, truckSearch])
-
-  const toggleTruck = (id: string, capacity: number) =>
-    setPicked((prev) => {
-      if (prev[id]) {
-        const next = { ...prev }
-        delete next[id]
-        return next
-      }
-      return { ...prev, [id]: { loadedQty: capacity > 0 ? String(capacity) : '' } }
-    })
-
   const toggleSellAt = (id: number) =>
     setSellAt((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
-  const pickedIds = Object.keys(picked)
-
-  const totals = useMemo(() => {
-    let loaded = 0
-    let capacity = 0
-    for (const id of pickedIds) {
-      loaded += num(picked[id].loadedQty)
-      const t = trucks.find((x) => String(x.id ?? x._id) === id)
-      capacity += num(t?.capacity ?? t?.capacity_litres)
-    }
-    return { loaded, capacity, short: capacity - loaded }
-  }, [picked, pickedIds, trucks])
+  // Ticking, searching, per-truck quantities and their totals all live in
+  // TruckPicker — the same component the PFI form uses, so the two cannot
+  // drift into asking for trucks differently.
+  const trucks = truckSelectionSummary(truckSelection, fleet)
 
   // ── What stops a save ───────────────────────────────────────────────────
   const normalizedCode = code.trim().toUpperCase().replace(/\s+/g, '-')
@@ -178,23 +123,14 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
     existingCodes.some((c) => c.trim().toUpperCase() === normalizedCode) ||
     deliveryBatches.some((p) => (p.pfiNumber || '').trim().toUpperCase() === normalizedCode)
   )
-  // A truck with no quantity would go in as zero and quietly shrink the batch.
-  const missingQty = pickedIds.filter((id) => !(num(picked[id].loadedQty) > 0))
-  const overloaded = pickedIds.filter((id) => {
-    const t = trucks.find((x) => String(x.id ?? x._id) === id)
-    const cap = num(t?.capacity ?? t?.capacity_litres)
-    return cap > 0 && num(picked[id].loadedQty) > cap
-  })
-
   const problem =
     mode === 'new' && !normalizedCode ? 'Give the PFI a number'
     : codeTaken ? `${normalizedCode} is already in use`
     : mode === 'new' && !depotId ? 'Say which depot it loads at'
     : mode === 'existing' && !existingPfiId ? 'Choose the PFI to add to'
-    : pickedIds.length === 0 ? 'Pick at least one truck'
-    : missingQty.length > 0 ? `${missingQty.length} truck${missingQty.length === 1 ? ' has' : 's have'} no quantity`
-    : overloaded.length > 0 ? `${overloaded.length} truck${overloaded.length === 1 ? '' : 's'} loaded beyond capacity`
-    : null
+    // Every complaint about the selection itself — none picked, one with no
+    // quantity, one loaded past capacity — comes from the picker.
+    : trucks.problem
 
   const submit = async () => {
     if (problem) return
@@ -211,21 +147,13 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
         // allowlist, so sending it for an existing one would wipe whatever
         // that batch already allows from a form that never showed it.
         sellAtDepotIds: mode === 'new' ? sellAt : undefined,
-        trucks: pickedIds.map((id) => {
-          const t = trucks.find((x) => String(x.id ?? x._id) === id)
-          return {
-            truckId: Number(id) || null,
-            plateNumber: t?.plateNumber || '',
-            capacity: num(t?.capacity ?? t?.capacity_litres) || null,
-            loadedQty: num(picked[id].loadedQty),
-          }
-        }),
+        trucks: trucks.trucks,
       })
 
       toast.success(
-        `${pickedIds.length} truck${pickedIds.length === 1 ? '' : 's'} on ${
+        `${trucks.count} truck${trucks.count === 1 ? '' : 's'} on ${
           mode === 'new' ? normalizedCode : chosenBatch?.pfiNumber
-        } · ${totals.loaded.toLocaleString()} loaded`,
+        } · ${trucks.loaded.toLocaleString()} loaded`,
       )
       close()
       navigate({ to: '/delivery-operations/batch', search: { id: pfiId } })
@@ -347,103 +275,16 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
           )}
 
           {/* ── The trucks ──────────────────────────────────────────────── */}
-          <section className="rounded-lg border border-foreground/15">
-            <div className="flex flex-wrap items-center gap-3 border-b border-foreground/15 px-4 py-3">
-              <Truck className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">Trucks</p>
-                <p className={cn(MICRO, 'text-muted-foreground')}>
-                  Tick a truck and it takes its rated capacity. Change it to what actually went on.
-                </p>
-              </div>
-              <div className="relative w-full sm:w-56">
-                <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="h-8 pl-8"
-                  placeholder="Plate or driver…"
-                  value={truckSearch}
-                  onChange={(e) => setTruckSearch(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="max-h-64 divide-y divide-foreground/10 overflow-y-auto">
-              {filteredTrucks.length === 0 && (
-                <p className="py-8 text-center text-sm text-muted-foreground">
-                  {trucks.length === 0 ? 'No trucks in the fleet yet.' : 'No truck matches that.'}
-                </p>
-              )}
-
-              {filteredTrucks.map((t) => {
-                const id = String(t.id ?? t._id)
-                const cap = num(t.capacity ?? t.capacity_litres)
-                const pick = picked[id]
-                const load = pick ? num(pick.loadedQty) : 0
-                const over = cap > 0 && load > cap
-                const short = cap > 0 && load > 0 && load < cap ? cap - load : 0
-                return (
-                  <div
-                    key={id}
-                    className={cn(
-                      'flex flex-wrap items-center gap-3 px-4 py-2.5 transition-colors duration-250 ease-luxe',
-                      pick ? 'bg-muted/40' : 'hover:bg-muted/20',
-                    )}
-                  >
-                    <Checkbox
-                      id={`truck-${id}`}
-                      checked={!!pick}
-                      onCheckedChange={() => toggleTruck(id, cap)}
-                    />
-                    <label htmlFor={`truck-${id}`} className="min-w-0 flex-1 cursor-pointer">
-                      <span className="block truncate text-sm font-semibold">
-                        {t.plateNumber || 'No plate'}
-                      </span>
-                      <span className={cn(MICRO, 'text-muted-foreground')}>
-                        {t.driver || t.driver_name || 'No driver'}
-                        {cap > 0 ? ` · holds ${cap.toLocaleString()}` : ' · no capacity on record'}
-                      </span>
-                    </label>
-
-                    {pick && (
-                      <div className="flex items-center gap-2">
-                        <NumberInput
-                          allowDecimal
-                          className="h-8 w-28 text-right"
-                          placeholder="Loaded"
-                          aria-label={`Quantity loaded on ${t.plateNumber}`}
-                          aria-invalid={over || undefined}
-                          value={pick.loadedQty}
-                          onValueChange={(v) => setPicked((prev) => ({ ...prev, [id]: { loadedQty: v } }))}
-                        />
-                        {/* The shortfall on the row it belongs to — "why is
-                            this batch 4,550 down" is answered here. */}
-                        <span className={cn(
-                          MICRO, 'w-20 shrink-0',
-                          over ? 'text-destructive' : short ? 'text-warning' : 'text-muted-foreground',
-                        )}>
-                          {over ? 'over' : short ? `${short.toLocaleString()} short` : cap > 0 && load > 0 ? 'full' : ''}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/40 px-4 py-2.5 text-sm">
-              <span>
-                <span className="font-semibold tabular-nums">{totals.loaded.toLocaleString()}</span>
-                <span className="text-muted-foreground">
-                  {' '}across {pickedIds.length} truck{pickedIds.length === 1 ? '' : 's'}
-                </span>
-              </span>
-              {totals.capacity > 0 && totals.short > 0 && (
-                <span className={cn(MICRO, 'text-muted-foreground')}>
-                  {totals.short.toLocaleString()} under the {totals.capacity.toLocaleString()} they can hold
-                </span>
-              )}
-            </div>
-          </section>
+          <TruckPicker
+            fleet={fleet}
+            value={truckSelection}
+            onChange={setTruckSelection}
+            hint={
+              mode === 'existing'
+                ? 'These are ADDED to the PFI. The trucks already on it stay.'
+                : 'Tick a truck and it takes its rated capacity. Change it to what actually went on.'
+            }
+          />
 
           {/* ── Where it may be sold ────────────────────────────────────── */}
           {mode === 'new' && (
@@ -489,7 +330,10 @@ export function NewBatchDialog({ open, onOpenChange, existingCodes = [] }: NewBa
               this tall hides the problem if it is only ever an inline error
               somewhere above the fold. */}
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground sm:mr-auto">
-            {problem && pickedIds.length > 0 && (missingQty.length > 0 || overloaded.length > 0) && (
+            {/* The warning triangle is for a selection that is WRONG, not
+                for one that is merely unfinished — "pick at least one truck"
+                is an instruction, not a fault. */}
+            {trucks.count > 0 && (trucks.missingQty.length > 0 || trucks.overloaded.length > 0) && (
               <AlertTriangle className="size-3.5 text-destructive" />
             )}
             {problem}

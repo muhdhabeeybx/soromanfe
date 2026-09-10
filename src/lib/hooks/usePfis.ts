@@ -1098,8 +1098,6 @@ export function useCreateDeliveryBatch() {
         pfiId = Number(created.id)
       }
 
-      const code = (draft.pfiNumber || '').trim().toUpperCase().replace(/\s+/g, '-') || undefined
-
       // Past this line the batch exists, so every failure carries its id.
       const step = async <T,>(what: string, run: () => Promise<T>) => {
         try {
@@ -1116,56 +1114,19 @@ export function useCreateDeliveryBatch() {
       }
 
       if (draft.trucks.length > 0) {
-        // Appending, not replacing: PUT /trucks takes the whole manifest, so
-        // trucks already on an existing batch have to be sent back with the
-        // new ones or the save would delete them.
-        const existing = draft.pfiId == null
-          ? []
-          : ((await step('reading its manifest', () => api.get(`/pfis/${pfiId}/trucks`)))
-              .data?.data?.trucks ?? []) as PfiTruck[]
-
-        await step('saving the manifest', () =>
-          api.put(`/pfis/${pfiId}/trucks`, {
-            trucks: [
-              ...existing.map((t) => ({
-                truckId: t.truckId ?? null,
-                plateNumber: t.plateNumber,
-                capacity: t.capacity ?? null,
-                loadedQty: t.loadedQty,
-              })),
-              ...draft.trucks.map((t) => ({
-                truckId: t.truckId ?? null,
-                plateNumber: t.plateNumber,
-                capacity: t.capacity ?? null,
-                loadedQty: t.loadedQty,
-              })),
-            ],
+        // The one definition of "a truck is on this batch", shared with the
+        // PFI form — see writeDeliveryTrucks. Both the manifest and the
+        // operations register, from the same list, so they cannot disagree.
+        await step('saving its trucks', () =>
+          writeDeliveryTrucks({
+            pfiId: pfiId!,
+            pfiNumber: draft.pfiNumber,
+            depotName: draft.depotName,
+            productName: draft.productName,
+            dateAllocated: draft.dateAllocated,
+            trucks: draft.trucks,
+            isNew: draft.pfiId == null,
           }),
-        )
-
-        await step('creating the truck records', () =>
-          Promise.all(
-            draft.trucks.map((t) =>
-              api.post('/delivery-inventory', {
-                // Both casings, as every other caller of this endpoint sends:
-                // the serialiser answers in camel and accepts either.
-                allocation_code: code, allocationCode: code,
-                pfi_id: pfiId, pfiId,
-                truck: t.truckId != null ? String(t.truckId) : undefined,
-                truck_id: t.truckId ?? undefined, truckId: t.truckId ?? undefined,
-                truck_number: t.plateNumber, truckNumber: t.plateNumber,
-                depot: draft.depotName || undefined,
-                pfi_product: draft.productName || undefined,
-                pfiProduct: draft.productName || undefined,
-                // What went on, not what it holds. The old screen wrote
-                // capacity here, which overstated every truck that loaded
-                // short — and most of them do.
-                quantity_allocated: t.loadedQty, quantityAllocated: t.loadedQty,
-                date_allocated: draft.dateAllocated, dateAllocated: draft.dateAllocated,
-                loading_status: 'loaded', loadingStatus: 'loaded',
-              }),
-            ),
-          ),
         )
       }
 
@@ -1175,6 +1136,115 @@ export function useCreateDeliveryBatch() {
       queryClient.invalidateQueries({ queryKey: ['pfis'] })
       queryClient.invalidateQueries({ queryKey: ['pfi-locations'] })
       queryClient.invalidateQueries({ queryKey: ['pfi-trucks'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+/**
+ * Put trucks on a batch that already exists, in both places they belong.
+ *
+ * A delivery batch's trucks live in two tables and both are needed:
+ *
+ *   pfi_trucks          the manifest. The batch quantity is rebuilt from it
+ *                       server-side, so this is what makes the batch worth
+ *                       what its trucks loaded.
+ *   delivery_inventory  the operational row per load — the one that later
+ *                       gets a customer, a destination, a rate and an offload
+ *                       date, and the ONLY thing the delivery inventory page
+ *                       and the sales ledger list.
+ *
+ * Writing one without the other is why a batch could exist, carry a quantity,
+ * and still be invisible on both delivery screens: the batch page's manifest
+ * wrote pfi_trucks alone, and the PFI form wrote neither. Every entry point
+ * calls this instead, so "created a batch" and "the batch is on the page" stop
+ * being different states.
+ *
+ * Appends rather than replaces. PUT /trucks takes the whole manifest, so the
+ * trucks already on the batch are read back and sent with the new ones — and
+ * nothing here ever deletes an operational row, because by the time a truck is
+ * on the register it may already carry a customer and a payment.
+ */
+export interface AttachTrucksArgs {
+  pfiId: number
+  /** Becomes the allocation code the inventory page groups by. */
+  pfiNumber?: string
+  depotName?: string
+  productName?: string
+  dateAllocated: string
+  trucks: DeliveryBatchTruck[]
+  /** Skip reading the existing manifest — nothing can be on a batch just created. */
+  isNew?: boolean
+}
+
+/**
+ * The write itself, as a plain function.
+ *
+ * Shared by useAttachDeliveryTrucks and useCreateDeliveryBatch so there is one
+ * definition of "a truck is on this batch". Two copies of this is how the
+ * manifest and the operations register came to disagree in the first place.
+ */
+export async function writeDeliveryTrucks({
+  pfiId, pfiNumber, depotName, productName, dateAllocated, trucks, isNew,
+}: AttachTrucksArgs): Promise<{ added: number }> {
+  if (trucks.length === 0) return { added: 0 }
+
+  const asManifest = (t: DeliveryBatchTruck | PfiTruck) => ({
+    truckId: t.truckId ?? null,
+    plateNumber: t.plateNumber,
+    capacity: t.capacity ?? null,
+    loadedQty: t.loadedQty,
+  })
+
+  // Appending, not replacing: PUT /trucks takes the whole manifest, so trucks
+  // already on the batch have to be sent back with the new ones or the save
+  // would delete them.
+  const existing = isNew
+    ? []
+    : (((await api.get(`/pfis/${pfiId}/trucks`)).data?.data?.trucks ?? []) as PfiTruck[])
+
+  await api.put(`/pfis/${pfiId}/trucks`, {
+    trucks: [...existing.map(asManifest), ...trucks.map(asManifest)],
+  })
+
+  const code = (pfiNumber || '').trim().toUpperCase().replace(/\s+/g, '-') || undefined
+  await Promise.all(
+    trucks.map((t) =>
+      api.post('/delivery-inventory', {
+        // Both casings, as every other caller of this endpoint sends: the
+        // serialiser answers in camel and accepts either.
+        allocation_code: code, allocationCode: code,
+        pfi_id: pfiId, pfiId,
+        truck: t.truckId != null ? String(t.truckId) : undefined,
+        truck_id: t.truckId ?? undefined, truckId: t.truckId ?? undefined,
+        truck_number: t.plateNumber, truckNumber: t.plateNumber,
+        depot: depotName || undefined,
+        pfi_product: productName || undefined, pfiProduct: productName || undefined,
+        // What went on, not what it holds. The old allocation screen wrote
+        // capacity here, which overstated every truck that loaded short.
+        quantity_allocated: t.loadedQty, quantityAllocated: t.loadedQty,
+        date_allocated: dateAllocated, dateAllocated,
+        loading_status: 'loaded', loadingStatus: 'loaded',
+      }),
+    ),
+  )
+
+  return { added: trucks.length }
+}
+
+export function useAttachDeliveryTrucks() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: writeDeliveryTrucks,
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['pfis'] })
+      queryClient.invalidateQueries({ queryKey: ['pfi-trucks', vars.pfiId] })
+      queryClient.invalidateQueries({ queryKey: ['pfi-detail', vars.pfiId] })
       queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
       queryClient.invalidateQueries({ queryKey: ['delivery-sales'] })
     },
