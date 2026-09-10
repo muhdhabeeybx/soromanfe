@@ -648,10 +648,27 @@ export function ReportPanel({
           .filter((r) => r.name.trim())
           .map((r) => ({ name: r.name.trim(), phone: r.phone.trim(), litres: Number(r.litres || 0) }))
       }
-      // A whole-company report still needs somewhere to file itself: location
-      // is NOT NULL and the API requires it, so leaving it out failed the
-      // whole submission on a form that calls the field optional.
-      if (!String(payload.location ?? '').trim()) payload.location = COMPANY_WIDE
+      /**
+       * Company-wide is now only ever a deliberate answer.
+       *
+       * This substituted it whenever location came out blank, for any report,
+       * which made it the silent destination for a sheet whose PFI line was
+       * skipped rather than a statement that the sheet covers everything. The
+       * button is disabled without a PFI, so reaching here blank means the
+       * gate was bypassed — and a report filed against no batch is worth
+       * refusing rather than filing somewhere nobody asked for.
+       *
+       * A report that legitimately has no PFI still needs somewhere to file
+       * itself, because the column is NOT NULL and the API requires it. That
+       * is what requireLocation: false means, and only a report carrying it
+       * gets the substitution.
+       */
+      if (!String(payload.location ?? '').trim()) {
+        if (def.requireLocation !== false) {
+          throw new Error('Pick the PFI this report is for before filing it.')
+        }
+        payload.location = COMPANY_WIDE
+      }
       return editingId
         ? (await api.patch(`/daily-reports/${editingId}`, payload)).data
         : (await api.post('/daily-reports', payload)).data
@@ -866,7 +883,9 @@ export function ReportPanel({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="pfiNumber">PFI{def.requireLocation === false && ' (optional)'}</Label>
+              <Label htmlFor="pfiNumber">
+                PFI{def.requireLocation === false ? ' (optional)' : <span className="text-destructive"> *</span>}
+              </Label>
               <NativeSelect
                 id="pfiNumber"
                 value={form.pfiNumber}

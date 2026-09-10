@@ -185,7 +185,20 @@ export const REPORTS: Record<ReportType, ReportDef> = {
     description: 'Orders, volume, the price for the day, and the top customers.',
     roleLabel: 'IT Compliance',
     color: '1E293B',
-    requireLocation: false,
+    /*
+      Compliance files against a PFI like every other sheet.
+
+      It was the one report exempted, because what it describes — orders,
+      volume, the day's price, top customers — is the whole company rather
+      than one batch. The exemption cost more than it explained: four of its
+      143 sheets were filed with no PFI at all and landed as Company-wide,
+      which is not a batch anybody can check a figure against, and there is no
+      way to tell a sheet that genuinely covers everything from one where the
+      PFI line was simply skipped.
+
+      `requireLocation` stays as a mechanism — set it false on a report and
+      the form drops the PFI line, the same as before. Nothing sets it now.
+    */
     sections: [
       {
         label: 'Today',
