@@ -620,8 +620,6 @@ function FinanceReportPage() {
       overpaid: customerDifferentials.reduce((s, c) => s + c.overpaid, 0),
       underpaid: customerDifferentials.reduce((s, c) => s + c.underpaid, 0),
       net: customerDifferentials.reduce((s, c) => s + c.net, 0),
-      excluded: customerDifferentials.reduce((s, c) => s + c.duplicatesExcluded, 0),
-      excludedOrders: customerDifferentials.reduce((s, c) => s + c.duplicateOrderCount, 0),
     }),
     [customerDifferentials],
   )
@@ -1244,28 +1242,6 @@ function FinanceReportPage() {
             <span className={MICRO}>Customer differentials · all time</span>
           </div>
           <div className={cn(PANEL_BODY, 'space-y-3')}>
-            <p className="text-xs text-muted-foreground">
-              {customerDifferentials.length === 1
-                ? 'Every order this customer has had money on,'
-                : `Every order these ${customerDifferentials.length} customers have had money on,`}
-              {' '}not just {periodLabel.toLowerCase()} — and not just the PFI or location filtered above.
-              Overpaid is their money still sitting on orders; underpaid is money still owed.
-              Both fall as surplus is transferred onto other orders.
-            </p>
-            {/* Stated rather than quietly applied. The table above is audited
-                and still counts these rows; saying exactly what is left out,
-                and how much, is what lets the two be reconciled. */}
-            {customerDifferentialTotals.excluded > 0.005 && (
-              <p className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
-                <strong>{naira(customerDifferentialTotals.excluded)}</strong> across{' '}
-                {customerDifferentialTotals.excludedOrders} order
-                {customerDifferentialTotals.excludedOrders === 1 ? '' : 's'} is left out of these figures:
-                the 2021 payments migration gave orders that received transferred surplus both the
-                transfer and a duplicate "no bank record" row for the same amount, so an order settled
-                in full by a transfer reads as overpaid by its whole value. The Differential column
-                above still counts both rows and is unchanged — this is the difference between the two.
-              </p>
-            )}
             <div className="overflow-x-auto rounded-lg border border-foreground/15">
               <Table>
                 <TableHeader>

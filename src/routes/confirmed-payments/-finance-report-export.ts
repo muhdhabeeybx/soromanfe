@@ -766,35 +766,7 @@ export async function exportFinanceReportExcel(
     cursor += 3
     cursor = writeSectionHeading(ws, cursor, 'CUSTOMER DIFFERENTIALS — ALL TIME')
 
-    ws.getCell(cursor, 1).value =
-      `Every order these customers have had money on — not limited to ${filters.periodLabel}, `
-      + 'and not limited to the PFI, location or product filtered above. Overpaid is money of '
-      + 'theirs still sitting on orders; underpaid is money still owed. Both fall as surplus is '
-      + 'transferred onto other orders.'
-    ws.getCell(cursor, 1).font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
-    cursor++
-
-    /**
-     * What this block leaves out, and why — never applied silently.
-     *
-     * The table earlier in this workbook is audited and still counts these
-     * rows. Printing the excluded figure is what lets a reader tie the two
-     * together instead of finding they disagree and not knowing which is
-     * wrong.
-     */
-    const excludedTotal = customerDifferentials.reduce((sum, c) => sum + c.duplicatesExcluded, 0)
-    const excludedOrders = customerDifferentials.reduce((sum, c) => sum + c.duplicateOrderCount, 0)
-    if (excludedTotal > 0.005) {
-      ws.getCell(cursor, 1).value =
-        `Excluded from these figures: ${excludedTotal.toLocaleString('en-NG', { style: 'currency', currency: 'NGN' })} `
-        + `across ${excludedOrders} order${excludedOrders === 1 ? '' : 's'}. The 2021 payments migration gave orders `
-        + 'that received transferred surplus both the transfer and a duplicate "no bank record" row for the same '
-        + 'amount, so an order settled in full by a transfer reads as overpaid by its whole value. The Differential '
-        + 'column earlier in this report still counts both rows and is unchanged; this is the difference between them.'
-      ws.getCell(cursor, 1).font = { italic: true, size: 9, color: { argb: XL.loss } }
-      cursor++
-    }
-    cursor++
+    cursor += 1
 
     const custHeaders = [
       'Customer', 'Company', 'Orders (All Time)', 'Out of Balance',
@@ -1339,15 +1311,7 @@ export async function exportFinanceReportPdf(
    */
   if (customerDifferentials.length > 0) {
     doc.addPage()
-    const custStartY = drawPdfHeader(
-      doc,
-      'Customer Differentials — All Time',
-      'Every order these customers have had money on · not limited to '
-        + `${filters.periodLabel.toLowerCase()}, the PFI, the location or the product filtered above`,
-    )
-
-    const excludedTotal = customerDifferentials.reduce((sum, c) => sum + c.duplicatesExcluded, 0)
-    const excludedOrders = customerDifferentials.reduce((sum, c) => sum + c.duplicateOrderCount, 0)
+    const custStartY = drawPdfHeader(doc, 'Customer Differentials — All Time', '')
 
     const overTotal = customerDifferentials.reduce((sum, c) => sum + c.overpaid, 0)
     const underTotal = customerDifferentials.reduce((sum, c) => sum + c.underpaid, 0)
@@ -1378,31 +1342,8 @@ export async function exportFinanceReportPdf(
       ]
     })
 
-    /**
-     * What is left out, said before the figures rather than after them. The
-     * orders table earlier in this document is audited and still counts these
-     * rows; this line is the bridge between the two.
-     */
-    let custTableY = custStartY
-    if (excludedTotal > 0.005) {
-      const lines = doc.splitTextToSize(
-        `Excluded from these figures: ${naira(excludedTotal)} across ${excludedOrders} order`
-        + `${excludedOrders === 1 ? '' : 's'}. The 2021 payments migration gave orders that received `
-        + 'transferred surplus both the transfer and a duplicate "no bank record" row for the same amount, so an '
-        + 'order settled in full by a transfer reads as overpaid by its whole value. The Differential column '
-        + 'earlier in this report still counts both rows and is unchanged; this is the difference between them.',
-        doc.internal.pageSize.getWidth() - 28,
-      )
-      doc.setFont(satoshi ? 'Satoshi' : 'helvetica', 'normal')
-      doc.setFontSize(7.5)
-      doc.setTextColor(...PDF.loss)
-      doc.text(lines, 14, custTableY + 1)
-      doc.setTextColor(...PDF.ink)
-      custTableY += lines.length * 3.4 + 4
-    }
-
     autoTable(doc, {
-      startY: custTableY,
+      startY: custStartY,
       head: [['Customer', 'Company', 'Orders', 'Out of Balance', 'Overpaid', 'Underpaid', 'Net']],
       body: custBody,
       foot: [[
