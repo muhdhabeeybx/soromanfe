@@ -32,7 +32,7 @@ import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate, narrationText,
   transferOrigin, visiblePayments, legacyAmount,
   orderPaidInto, orderCompany, orderAmountPaid, orderDifferential, orderSalesValue,
-  isTransferLeg, isUnreconciled, isSystemDecided,
+  isTransferLeg, isUnreconciled, isSystemDecided, walletSurplusFrom,
   useRemoveOrderPayment,
   useReverseOrderTransfer,
   CONFIRMATION_BASIS_LABEL, CONFIRMATION_BASIS_SHORT,
@@ -1163,9 +1163,26 @@ function FinanceReportPage() {
                    * printed above it.
                    */
                   const legacy = legacyAmount(o)
+                  /**
+                   * Where a legacy row is surplus received from another order,
+                   * it says so instead of "No bank record".
+                   *
+                   * Both statements are true — there is no bank line behind it
+                   * — but only one of them is useful. The wallet ledger named
+                   * the source order in a sentence that migration 0021 dropped;
+                   * it is read back here, and the money stops looking like it
+                   * appeared from nowhere.
+                   */
+                  const surplusFrom = o.payments
+                    .map((p) => walletSurplusFrom(p))
+                    .filter(Boolean) as string[]
                   const legacyCells: Record<string, React.ReactNode> = legacy > 0 ? {
                     amount: <span className="whitespace-nowrap font-semibold text-muted-foreground">{naira(legacy)}</span>,
-                    depositRef: (
+                    depositRef: surplusFrom.length > 0 ? (
+                      <span className={cn('text-xs whitespace-nowrap', TONE_CLASS.internal)}>
+                        Surplus from {surplusFrom.join(', ')}
+                      </span>
+                    ) : (
                       <span className="text-xs whitespace-nowrap text-muted-foreground/70">
                         No bank record
                       </span>
@@ -1259,6 +1276,50 @@ function FinanceReportPage() {
                           </TableRow>
                         )
                       })}
+
+                      {/*
+                        Surplus this order gave away, on the order that gave it.
+
+                        The receiving end has carried a row all along — money
+                        arrived, even if it read as "no bank record". The giving
+                        end had nothing: VG10807 sat here N17,685,000 overpaid
+                        with no sign anywhere that the N17,685,000 had gone to
+                        WP10852 weeks earlier. That is the row.
+
+                        No figure goes in a totalled column. The movement is not
+                        in order_payments, so putting it in Amount Paid or
+                        Transferred would make those columns stop summing to
+                        what the report is footed on — and those totals have
+                        been audited. The amount is stated in the reference
+                        column, as text, beside the order it went to.
+                      */}
+                      {o.surplusMovedOut.map((m, i) => (
+                        <TableRow
+                          key={`${o.id}-moved-${i}`}
+                          className="bg-blue-50/40 hover:bg-blue-50 dark:bg-blue-950/20 dark:hover:bg-blue-950/40"
+                        >
+                          {REPORT_COLUMNS.map((c) => (
+                            <TableCell key={c.key} className={cn(NUMERIC_COLUMNS.has(c.key) && 'text-right')}>
+                              {c.key === 'depositor' ? (
+                                <span className={cn('flex items-center gap-1.5', TONE_CLASS.internal)}>
+                                  <Repeat className="size-3 shrink-0" />
+                                  <span className="whitespace-nowrap">
+                                    Surplus moved to {m.toOrderRef || 'another order'}
+                                  </span>
+                                </span>
+                              ) : c.key === 'depositRef' ? (
+                                <span className={cn('block max-w-[15rem] truncate text-xs', TONE_CLASS.internal)}>
+                                  −{naira(m.amount)} · wallet ledger, not a recorded transfer
+                                </span>
+                              ) : c.key === 'depositDate' ? (
+                                <span className={cn('whitespace-nowrap', TONE_CLASS.internal)}>
+                                  {m.movedAt ? format(new Date(m.movedAt), 'd MMM yyyy') : '—'}
+                                </span>
+                              ) : null}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
                     </Fragment>
                   )
                 })}

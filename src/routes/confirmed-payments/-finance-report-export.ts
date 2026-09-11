@@ -3,7 +3,7 @@ import { unitNames } from '#/routes/pfi/-pfi-utils'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
-  orderPaidInto, orderCompany, orderSalesValue, orderDifferential,
+  orderPaidInto, orderCompany, orderSalesValue, orderDifferential, walletSurplusFrom,
   type FinanceReportOrder, type OrderPayment, type CustomerDifferential,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -290,9 +290,22 @@ function rowValues(o: FinanceReportOrder, i: number) {
      * total printed above it — the first thing anyone checks.
      */
     ...(legacyAmount(o) > 0
-      ? { amount: legacyAmount(o), depositRef: 'NO BANK RECORD' }
+      ? {
+          amount: legacyAmount(o),
+          // Where the wallet ledger named the order this surplus came out of,
+          // say so. Both statements are true — there is no bank line — but
+          // only one of them can be acted on. See walletSurplusFrom.
+          depositRef: surplusFromRefs(o).length
+            ? `SURPLUS FROM ${surplusFromRefs(o).join(', ')}`.toUpperCase()
+            : 'NO BANK RECORD',
+        }
       : {}),
   }
+}
+
+/** The orders whose surplus funded this one, where the old ledger named them. */
+function surplusFromRefs(o: FinanceReportOrder): string[] {
+  return o.payments.map((p) => walletSurplusFrom(p)).filter(Boolean) as string[]
 }
 
 /**
@@ -561,6 +574,36 @@ export function writeFinanceTable(
         if (c.key === 'transfers') cell.numFmt = NGN_SIGNED_PLAIN
       }
       if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
+      cursor++
+    }
+
+    /**
+     * Surplus this order gave away, on the order that gave it.
+     *
+     * The receiving order has carried a row all along, even if it read as "no
+     * bank record". The giving one had nothing at all, so an order sat here
+     * overpaid by a figure that had left for another order weeks earlier.
+     *
+     * Written as text, never as a figure in Amount Paid or Transferred: the
+     * movement is not in order_payments, so a number in either would stop
+     * those columns summing to the totals row below them — and that tie is the
+     * first thing anybody checks on this sheet.
+     */
+    for (const m of o.surplusMovedOut) {
+      const movedRow = ws.getRow(cursor)
+      movedRow.values = {
+        depositDate: m.movedAt ? new Date(m.movedAt) : null,
+        depositor: up(`Surplus moved to ${m.toOrderRef || 'another order'}`),
+        depositRef: up(`-${m.amount.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · wallet ledger, not a recorded transfer`),
+      }
+      movedRow.height = ROW_HEIGHT.body
+      for (const c of COLUMNS) {
+        const cell = movedRow.getCell(c.key)
+        cell.border = ALL_BORDERS
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } }
+        cell.font = { color: { argb: XL.internal } }
+      }
+      if (movedRow.getCell('depositDate').value) movedRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
     }
   })
@@ -1198,7 +1241,12 @@ export async function exportFinanceReportPdf(
     const legacy = legacyAmount(o)
     if (legacy > 0) {
       if (indexOfCol('amount') >= 0) orderRow[indexOfCol('amount')] = naira(legacy)
-      if (indexOfCol('depositRef') >= 0) orderRow[indexOfCol('depositRef')] = 'NO BANK RECORD'
+      if (indexOfCol('depositRef') >= 0) {
+        const from = surplusFromRefs(o)
+        orderRow[indexOfCol('depositRef')] = from.length
+          ? up(`Surplus from ${from.join(', ')}`)
+          : 'NO BANK RECORD'
+      }
     }
     body.push(orderRow)
     signedAt[body.length - 1] = { [diffCol]: v.differential }
@@ -1221,6 +1269,18 @@ export async function exportFinanceReportPdf(
         }),
       )
       if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
+    }
+
+    // Surplus this order gave away — see the workbook's copy of this block for
+    // why it is text rather than a figure in a totalled column.
+    for (const m of o.surplusMovedOut) {
+      body.push(
+        cellsFor('funding', {
+          depositDate: m.movedAt ? format(new Date(m.movedAt), DATE_PATTERN) : '—',
+          depositor: up(`Surplus moved to ${m.toOrderRef || 'another order'}`),
+          depositRef: `-${naira(m.amount)} · wallet ledger, not a recorded transfer`,
+        }),
+      )
     }
   })
 

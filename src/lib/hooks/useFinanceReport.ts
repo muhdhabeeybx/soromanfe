@@ -154,6 +154,35 @@ export interface OrderPayment {
    */
   originDepositor: string | null
   originBankRefs: string | null
+  /**
+   * How much of this payment the wallet-era ledger actually applied to THIS
+   * order. Null on every payment recorded since — the old ledger has nothing
+   * to say about them, which is not the same as it having applied nothing.
+   *
+   * Where it is less than the amount, the difference did not vanish: it went
+   * to another order, and walletFromOrderRef on that order's row names this
+   * one. See the note in order.repository.js.
+   */
+  appliedAmount: number | null
+  /**
+   * The order this money came out of, on a row that otherwise shows as having
+   * no bank record at all.
+   *
+   * Surplus moved between orders in the wallet era was written as a credit
+   * whose description named the source order. Migration 0021 kept the amount
+   * and dropped the sentence, so the receiving order carries a legacy row
+   * reading "No bank record" while the answer sat in a text column nothing
+   * read. 28 movements are recorded this way.
+   */
+  walletFromOrderRef: string | null
+}
+
+/** Surplus that left an order in the wallet era, and where it went. */
+export interface SurplusMovedOut {
+  toOrderId: number | null
+  toOrderRef: string | null
+  amount: number
+  movedAt: string | null
 }
 
 export interface FinanceReportOrder {
@@ -242,6 +271,20 @@ export interface FinanceReportOrder {
 
   /** The account(s) the money was actually paid into. */
   paidInto: string[]
+
+  /**
+   * Surplus this order gave away, where the only record of it was a sentence
+   * in the old wallet ledger.
+   *
+   * The receiving order at least carries a row for the money. The giving one
+   * carries nothing — no transfer_out, no payment, nothing — which is why
+   * VG10807 reads as N17,685,000 overpaid with no sign that the N17,685,000
+   * left for WP10852 weeks ago.
+   *
+   * Deliberately NOT netted into any figure on this report. The arithmetic
+   * stays exactly as it was audited; this names where the money went.
+   */
+  surplusMovedOut: SurplusMovedOut[]
 }
 
 export interface FinanceReportParams {
@@ -508,6 +551,30 @@ export function transferOrigin(p: OrderPayment): string {
 /** The account the money landed in — "Zenith Bank · 1311924890". */
 export function paymentPaidInto(p: OrderPayment): string {
   return [p.bankName, p.accountNumber].filter(Boolean).join(' · ')
+}
+
+/**
+ * Surplus received from another order, recorded before transfers existed.
+ *
+ * Reads as a legacy "no bank record" row everywhere else, because that is
+ * literally what it is — but it is not unexplained money, and saying so is
+ * the difference between a row somebody can account for and one they cannot.
+ */
+export function walletSurplusFrom(p: OrderPayment): string | null {
+  return p.walletFromOrderRef || null
+}
+
+/**
+ * The part of a payment the old ledger applied elsewhere, or nowhere.
+ *
+ * Zero for everything recorded since. Where it is positive, the report shows
+ * the whole bank line against this order — which is what the statement says
+ * and what the audit ticked — while this much of it settled a different one.
+ */
+export function unappliedAmount(p: OrderPayment): number {
+  if (p.appliedAmount == null) return 0
+  const gap = p.amount - p.appliedAmount
+  return gap > 0.005 ? gap : 0
 }
 
 /** Money that moved inside the business rather than arriving from a bank. */
