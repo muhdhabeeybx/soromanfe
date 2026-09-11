@@ -4,7 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Search, Plus, Package, Banknote, Droplets, TriangleAlert,
   ArrowUpDown, Lock, Pencil, Download, X, TrendingUp, TrendingDown,
-  FileSpreadsheet, Gauge, Play,
+  FileSpreadsheet, Gauge, Play, Trash2,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -21,7 +21,8 @@ import { PfiCloseDialog } from '#/components/PfiCloseDialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_FOOTER } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { usePfiList, useStartPfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import { usePfiList, useStartPfi, useDeletePfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import { useRoles } from '#/lib/hooks/useRoles'
 import {
   naira, litres, qty, unitNames, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
 } from '#/routes/pfi/-pfi-utils'
@@ -149,6 +150,13 @@ function PFIDashboard() {
   const [detailId, setDetailId] = useState<number | null>(null)
   const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
   const [starting, setStarting] = useState<PfiWithFinancials | null>(null)
+  /** The batch a delete has been asked for, awaiting confirmation. */
+  const [deleting, setDeleting] = useState<PfiWithFinancials | null>(null)
+  const deletePfi = useDeletePfi()
+  // The same gate the delivery register puts on deleting a batch. Deleting a
+  // PFI takes its movements, its allowed locations and its expense categories
+  // with it, and there is no undo.
+  const { isSuperAdmin: canDelete } = useRoles()
   const startPfi = useStartPfi()
 
   /**
@@ -842,6 +850,21 @@ function PFIDashboard() {
                       <FileSpreadsheet data-icon="inline-start" />
                       Report
                     </Button>
+                    {/* Last, and the only control here that destroys
+                        anything. Offered on every batch and refused by the
+                        server where it must be, rather than hidden: "why can I
+                        not delete this" is a question worth an answer, and a
+                        missing button answers nothing. */}
+                    {canDelete && (
+                      <Button
+                        variant="outline" size="sm"
+                        className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeleting(p)}
+                      >
+                        <Trash2 data-icon="inline-start" />
+                        Delete
+                      </Button>
+                    )}
                   </div>
                 </div>
               )
@@ -882,6 +905,62 @@ function PFIDashboard() {
           setStarting(null)
         }}
       />
+
+      {/* Deleting a batch outright.
+          What goes and what survives is spelled out, because the two are not
+          obvious and are not the same: the batch's own record goes, while
+          costs already booked against it survive with nothing to tie them to.
+          A batch any order refers to is refused by the server — that is the
+          check that protects the trading record, and it is the server's to
+          make, not this dialog's to guess at. */}
+      <ConfirmDialog
+        open={deleting != null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        variant="destructive"
+        title={deleting ? `Delete ${deleting.pfiNumber}?` : ''}
+        description={
+          deleting
+            ? 'This removes the batch itself along with its stock movements, its allowed locations and its own expense categories. It cannot be undone.'
+            : ''
+        }
+        confirmLabel="Delete permanently"
+        loading={deletePfi.isPending}
+        onConfirm={async () => {
+          if (!deleting) return
+          try {
+            await deletePfi.mutateAsync(String(deleting.id))
+            setDeleting(null)
+          } catch {
+            // The mutation raises its own toast — most often the server
+            // refusing because orders still point at this batch. The dialog
+            // stays open so the reason can be read against the batch it is
+            // about.
+          }
+        }}
+      >
+        {deleting && (
+          <div className="space-y-3">
+            {/* A batch that has traded will almost certainly be refused, and
+                saying so before the click is better than a toast after it. */}
+            {(deleting.financials.sold > 0 || deleting.financials.revenue > 0) && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  This batch has traded — {qty(deleting.financials.sold, deleting.productUnit)} sold
+                  {deleting.financials.revenue > 0 && <> for {naira(deleting.financials.revenue)}</>}.
+                  If any order still points at it, the server will refuse to delete it.
+                </span>
+              </p>
+            )}
+            {deleting.financials.totalExpenses > 0 && (
+              <p className="text-sm text-muted-foreground">
+                {naira(deleting.financials.totalExpenses)} of booked expenses will stay in the expense
+                records but will no longer belong to any batch.
+              </p>
+            )}
+          </div>
+        )}
+      </ConfirmDialog>
     </div>
   )
 }
