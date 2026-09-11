@@ -23,14 +23,20 @@ import { cn } from '#/lib/utils'
  * sold at several others — so it needs to say where it may be sold, and what
  * actually went out on each truck.
  *
- * ── Why the manifest decides the quantity ──────────────────────────────────
+ * ── The manifest no longer decides the quantity ────────────────────────────
  *
- * The batch's quantity is not typed. It is the sum of what the trucks loaded,
- * rebuilt server-side whenever the manifest is saved. A truck rated 50,000
- * that took 47,300 has carried 47,300, and a batch built from capacities
- * overstates itself on every truck that loaded short — which is most of them.
- * The shortfall is shown per truck rather than only in the total, because
- * "why is this batch 4,550 down" is answered by the row, not the sum.
+ * It used to: saving here rewrote the batch's quantity to the sum of what the
+ * trucks loaded. That left a PFI type whose headline figure nobody could
+ * state — owned by these rows, unable to be typed on the PFI form, and liable
+ * to move under the batch whenever this panel was saved.
+ *
+ * The batch's quantity is typed on the PFI form now, like every other type's.
+ * This is a record of what carried it, which is a different question.
+ *
+ * What it still does well is show the gap. A truck rated 50,000 that took
+ * 47,300 has carried 47,300, and the shortfall is shown per truck rather than
+ * only in the total, because "why is this batch 4,550 down" is answered by
+ * the row and not by the sum.
  */
 export function DeliveryBatchPanel({
   pfiId, productUnit, loadedAtDepotId,

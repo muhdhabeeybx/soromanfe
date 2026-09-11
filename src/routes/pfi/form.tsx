@@ -18,15 +18,12 @@ import { MICRO, PANEL, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import {
   useCreatePfi, useUpdatePfi, useDepotsForFilter, usePfiDetails,
-  usePfiLocations, useSetLocationsForPfi, useAttachDeliveryTrucks,
+  usePfiLocations, useSetLocationsForPfi,
 } from '#/lib/hooks/usePfis'
 import { useProductList } from '#/lib/hooks/useProducts'
 import { useAdminList } from '#/lib/hooks/useAdmin'
 import { routeGuard } from '#/lib/route-guard'
 import { naira, unitNames, SurplusDeficit } from '#/routes/pfi/-pfi-utils'
-import {
-  TruckPicker, useFleetPicks, truckSelectionSummary, type TruckSelection,
-} from '#/components/delivery-operations/TruckPicker'
 import type { PfiType } from '#/lib/types'
 
 export const Route = createFileRoute('/pfi/form')({
@@ -313,22 +310,6 @@ function PFIForm() {
     isEdit && editingPfi?.pfiType === 'delivery' ? editingPfiId : null,
   )
   const setLocations = useSetLocationsForPfi()
-  const attachTrucks = useAttachDeliveryTrucks()
-
-  /**
-   * The trucks this batch is loaded onto, picked rather than counted.
-   *
-   * This field was a typed number — "Number of Trucks: 20" — which recorded
-   * the number twenty and identified no trucks: no plates, no drivers, no
-   * quantity loaded. So a delivery batch raised here had nothing to put in the
-   * inventory register and never appeared on the delivery inventory page or the
-   * sales ledger, with nothing on the form to say why. Picking real trucks is
-   * the same question asked so that it has a usable answer, and the count is
-   * then derived from it rather than typed beside it.
-   */
-  const fleet = useFleetPicks()
-  const [truckSelection, setTruckSelection] = useState<TruckSelection>({})
-  const trucks = truckSelectionSummary(truckSelection, fleet)
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -432,7 +413,6 @@ function PFIForm() {
   const resetForm = () => {
     setForm(EMPTY_FORM)
     setEditedDepots(null)
-    setTruckSelection({})
     setError('')
     setFieldErrors({})
   }
@@ -447,15 +427,16 @@ function PFIForm() {
     if (!form.locationId) nextErrors.locationId = 'Location is required.'
     if (!form.productId) nextErrors.productId = 'Product is required.'
     /**
-     * A delivery batch is worth what its trucks loaded, so its quantity is
-     * not typed and cannot be validated as if it were. What is required
-     * instead is a manifest — and on an EDIT, not even that: the trucks
-     * already on the batch are not shown here, so an edit that changes only a
-     * price must not demand a fresh selection.
+     * Every type types its own quantity, delivery included.
+     *
+     * A delivery batch used to have its quantity derived from a truck
+     * manifest picked on this form, which made it the one PFI type you could
+     * not simply state the size of — and tied a batch's headline figure to
+     * the truck-sales tables. A delivery PFI is a PFI that happens to be
+     * delivered; its quantity is a fact about the batch, typed like any
+     * other.
      */
-    if (isDelivery) {
-      if (!isEdit && trucks.problem) nextErrors.trucks = trucks.problem
-    } else if (!form.startingQtyLitres || Number(form.startingQtyLitres) <= 0) {
+    if (!form.startingQtyLitres || Number(form.startingQtyLitres) <= 0) {
       nextErrors.startingQtyLitres = `Quantity (${unit.plural}) is required and must be greater than 0.`
     }
 
@@ -480,12 +461,7 @@ function PFIForm() {
         locationId: form.locationId || null,
         productId: form.productId,
         productUnit: form.productUnit || undefined,
-        // Sent as the manifest's sum so a batch is never briefly worth zero;
-        // PUT /trucks rebuilds it server-side straight after, which is the
-        // figure that stands.
-        startingQtyLitres: isDelivery
-          ? trucks.loaded
-          : Number(form.startingQtyLitres) || 0,
+        startingQtyLitres: Number(form.startingQtyLitres) || 0,
         unitPrice: form.unitPrice === '' ? 0 : Number(form.unitPrice),
         creditBalance: form.creditBalance === '' ? 0 : Number(form.creditBalance),
         // The field sets are mutually exclusive, so each is sent only for the
@@ -497,12 +473,11 @@ function PFIForm() {
         // allocation was split into — and the label follows the type.
         ...(!isCargo
           ? {
-              // Counted from the picked trucks on a delivery batch, typed on a
-              // gantry one. Same column, and on delivery it can no longer
-              // disagree with the manifest beside it.
-              ticketCount: isDelivery
-                ? (trucks.count || null)
-                : form.ticketCount === '' ? null : Number(form.ticketCount),
+              // The gantry ticket count and the delivery truck count, typed
+              // on both. One column because it is one fact — how many units
+              // the allocation was split into — and the label follows the
+              // type.
+              ticketCount: form.ticketCount === '' ? null : Number(form.ticketCount),
             }
           : {
               qtyVolumeMt: form.qtyVolumeMt === '' ? null : Number(form.qtyVolumeMt),
@@ -551,28 +526,18 @@ function PFIForm() {
         })
 
         /**
-         * And the trucks, in both tables they belong to.
+         * The trucks are deliberately NOT written here any more.
          *
-         * This is what makes the batch appear on the delivery inventory page
-         * and in the sales ledger. Both list truck LOADS rather than batches,
-         * so without this the PFI existed, carried a quantity, and showed up
-         * on neither — which is exactly what it used to do.
+         * Saving this form used to push a manifest into delivery_inventory,
+         * which is what put the batch on the delivery inventory page and in
+         * the sales ledger. It also meant raising a PFI created truck-sale
+         * rows as a side effect, and made the batch's quantity a figure the
+         * truck tables owned rather than one anybody typed.
+         *
+         * A delivery PFI is a PFI that happens to be delivered. Loads are
+         * recorded where loading happens — the delivery inventory page — and
+         * a batch's quantity is stated here.
          */
-        if (trucks.trucks.length > 0) {
-          await attachTrucks.mutateAsync({
-            pfiId: Number(savedId),
-            pfiNumber: form.pfiNumber.trim(),
-            // `: any` as everywhere else in this file — `depots` and `products`
-            // are unions of a typed array and the envelope fallback, so TS
-            // cannot pick one signature for the callback.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            depotName: depots.find((d: any) => String(d.id || d._id) === form.locationId)?.name,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            productName: products.find((p: any) => String(p.id || p._id) === form.productId)?.name,
-            dateAllocated: form.pfiDate || new Date().toISOString().slice(0, 10),
-            trucks: trucks.trucks,
-          })
-        }
       }
 
       setSubmitted(true)
@@ -878,35 +843,6 @@ function PFIForm() {
                 </Field>
               )}
 
-              {/* The trucks. Only a delivery batch has any, and picking them
-                  here is what puts the batch on the delivery inventory page
-                  and in the sales ledger — both list truck LOADS, not
-                  batches, so a batch with no trucks has nothing to appear as.
-                  Creating one used to leave both empty with no hint why. */}
-              {isDelivery && (
-                <div className="space-y-1.5">
-                  <TruckPicker
-                    fleet={fleet}
-                    value={truckSelection}
-                    onChange={setTruckSelection}
-                    unit={unit.short}
-                    hint={
-                      isEdit
-                        ? 'Ticked trucks are ADDED to this batch. What is already on it stays.'
-                        : 'Tick a truck and it takes its rated capacity. Change it to what actually went on.'
-                    }
-                  />
-                  {(fieldErrors.trucks || trucks.problem) && (
-                    <p className={cn(
-                      'text-xs',
-                      fieldErrors.trucks ? 'text-destructive' : 'text-muted-foreground',
-                    )}>
-                      {fieldErrors.trucks || trucks.problem}
-                    </p>
-                  )}
-                </div>
-              )}
-
               {/* Coastal measures twice — the tank against the papers — so it
                   asks twice. Gantry and delivery have one quantity, and it
                   lives beside the price it is charged at, in the cost section
@@ -956,29 +892,20 @@ function PFIForm() {
                   <div className="grid grid-cols-2 gap-4">
                     <Field
                       label={`Quantity (${unit.plural})`}
-                      required={!isDelivery} error={fieldErrors.startingQtyLitres}
+                      required error={fieldErrors.startingQtyLitres}
                       hint={
                         isDelivery
-                          ? 'The sum of what the trucks loaded, rebuilt from the manifest when it saves.'
+                          ? 'What was allocated to this batch.'
                           : 'What was bought. There is only one quantity on a gantry batch.'
                       }
                     >
                       <Adorned suffix={unit.short}>
-                        {isDelivery ? (
-                          <Input
-                            className="font-semibold tabular-nums"
-                            value={trucks.loaded ? trucks.loaded.toLocaleString() : ''}
-                            placeholder="0"
-                            readOnly
-                          />
-                        ) : (
-                          <CommaInput
-                            className="font-semibold tabular-nums"
-                            value={form.startingQtyLitres} aria-invalid={!!fieldErrors.startingQtyLitres}
-                            placeholder="e.g. 1,000,000"
-                            onValueChange={(v) => set('startingQtyLitres', v)}
-                          />
-                        )}
+                        <CommaInput
+                          className="font-semibold tabular-nums"
+                          value={form.startingQtyLitres} aria-invalid={!!fieldErrors.startingQtyLitres}
+                          placeholder="e.g. 1,000,000"
+                          onValueChange={(v) => set('startingQtyLitres', v)}
+                        />
                       </Adorned>
                     </Field>
                     <Field
@@ -998,25 +925,20 @@ function PFIForm() {
                   <div className="grid grid-cols-2 gap-4">
                     {/* One column, one meaning: how many units the allocation
                         was split into. A gantry batch counts tickets and a
-                        delivery batch counts trucks — but a delivery batch's
-                        trucks are PICKED below, so its count is derived from
-                        them rather than typed here. Typing it was how a batch
-                        came to record twenty trucks while identifying none. */}
+                        delivery batch counts trucks, and both are typed — the
+                        count belongs to the batch, not to whatever the truck
+                        tables happen to hold. */}
                     {isDelivery ? (
                       <Field
-                        label="Number of Trucks"
-                        hint={
-                          trucks.count > 0
-                            ? `${trucks.count} picked below, carrying ${trucks.loaded.toLocaleString()} ${unit.plural.toLowerCase()}.`
-                            : 'Counted from the trucks you pick below.'
-                        }
+                        label="Number of Trucks" error={fieldErrors.ticketCount}
+                        hint="How many trucks this batch was split across."
                       >
                         <Adorned suffix="trucks">
-                          <Input
+                          <CommaInput
                             className="tabular-nums"
-                            value={trucks.count ? String(trucks.count) : ''}
-                            placeholder="0"
-                            readOnly
+                            value={form.ticketCount} aria-invalid={!!fieldErrors.ticketCount}
+                            placeholder="e.g. 20"
+                            onValueChange={(v) => set('ticketCount', v)}
                           />
                         </Adorned>
                       </Field>

@@ -36,8 +36,9 @@ export const Route = createFileRoute('/delivery-operations/batch')({
  * use for still need editing after the fact. Selling those loads happens on
  * the allocation register, keyed by the code, like every other batch.
  *
- * The quantity is deliberately not editable. It is not typed; it is the sum of
- * what the trucks loaded, rebuilt server-side whenever the manifest is saved.
+ * The quantity shown is the batch's own, typed on the PFI form like every
+ * other PFI type's. The manifest below records what carried it and no longer
+ * rewrites it.
  */
 function DeliveryBatchPage() {
   const { id } = Route.useSearch()
@@ -124,7 +125,7 @@ function DeliveryBatchPage() {
               <Fact
                 label="Quantity"
                 value={`${Number(pfi?.startingQtyLitres ?? 0).toLocaleString()} ${pfi?.productUnit || 'L'}`}
-                hint="From the manifest"
+                hint="From the PFI"
               />
             </div>
           </section>
