@@ -720,6 +720,13 @@ export interface Commission {
   id: number
   orderId: number
   orderNumber: string
+  /**
+   * The company on the ORDER, which is the one that bought.
+   *
+   * A facilitator buys for different companies; the customer profile only
+   * records who they usually are. customerCompanyName is the fallback.
+   */
+  orderCompanyName?: string | null
   orderCreatedAt?: string
   customerId: number
   customerName: string
@@ -732,6 +739,9 @@ export interface Commission {
   depotName: string
   depotCity?: string
   depotState?: string
+  /** The batch the order drew on. Null on an order raised against no PFI. */
+  pfiId?: number | null
+  pfiNumber?: string | null
   productId: number
   productName: string
   productSku?: string

@@ -38,6 +38,7 @@ import {
   useSkipCommission, useBulkResolveCommissions,
 } from '#/lib/hooks/useCommissions'
 import { cn } from '#/lib/utils'
+import { NativeSelect } from '#/components/ui/native-select'
 import { useDepots } from '#/lib/hooks/useDepots'
 
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
@@ -58,6 +59,8 @@ export const Route = createFileRoute('/commissions/')({
 function formatNaira(amount: number) {
   return `₦${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
+
+type SortKey = 'date' | 'date_asc' | 'pfi' | 'facilitator' | 'amount'
 
 const QUICK_DATES = [
   { label: 'Today', value: 'today' },
@@ -103,12 +106,6 @@ function CommissionsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <PageHeader
-        eyebrow="Finance"
-        title="Customer commissions"
-        description="Commission earned per facilitator, by depot and product."
-      />
-
       <CommissionsTab />
     </div>
   )
@@ -119,10 +116,17 @@ function CommissionsPage() {
 function CommissionsTab() {
   const [searchQuery, setSearchQuery] = useState('')
   const [depotFilter, setDepotFilter] = useState('all')
-  const [datePreset, setDatePreset] = useState('all')
+  /**
+   * Today, not all time.
+   *
+   * The page is worked daily: what came in today is the question, and opening
+   * on every commission ever raised meant scrolling past months of settled
+   * rows to reach it. Every other range is one button away.
+   */
+  const [datePreset, setDatePreset] = useState('today')
   const [customDateFrom, setCustomDateFrom] = useState('')
   const [customDateTo, setCustomDateTo] = useState('')
-  const [page, setPage] = useState(1)
+
 
   /**
    * Which commissions to list.
@@ -134,6 +138,17 @@ function CommissionsTab() {
    * now one select away rather than unreachable.
    */
   const [statusFilter, setStatusFilter] = useState<'pending' | 'paid' | 'skipped' | 'all'>('pending')
+
+  /**
+   * PFI, as a filter and as a sort.
+   *
+   * Commissions are settled a batch at a time — "everything on PFI-40B" — and
+   * until now the only way to see one batch was to read the references. Held
+   * as the PFI number rather than an id because that is what the row shows and
+   * what somebody has written down.
+   */
+  const [pfiFilter, setPfiFilter] = useState('all')
+  const [sortKey, setSortKey] = useState<SortKey>('date')
 
   // Confirm Commission dialog
   const [confirmTarget, setConfirmTarget] = useState<Commission | null>(null)
@@ -184,10 +199,18 @@ function CommissionsTab() {
       depotId: depotFilter !== 'all' ? depotFilter : undefined,
       dateFrom: dateRange.dateFrom || undefined,
       dateTo: dateRange.dateTo || undefined,
-      page,
-      limit: 50,
+      /**
+       * The whole filtered set, unpaginated.
+       *
+       * A day's commissions are tens of rows, and paging them meant a bulk
+       * selection could only ever cover what happened to be on screen. 1000 is
+       * the server's own ceiling; the date filter is what keeps this small,
+       * which is why the page opens on today.
+       */
+      page: 1,
+      limit: 1000,
     }),
-    [searchQuery, statusFilter, depotFilter, dateRange, page]
+    [searchQuery, statusFilter, depotFilter, dateRange]
   )
 
   const { data, isLoading, isError, error, refetch } = useCommissions(queryParams)
@@ -197,8 +220,65 @@ function CommissionsTab() {
     dateTo: dateRange.dateTo || undefined,
   })
 
-  const commissions = data?.commissions || []
-  const pagination = data?.pagination
+  const allRows = data?.commissions || []
+
+  /** Every PFI present in what came back, for the filter's own list. */
+  const pfiOptions = useMemo(
+    () => [...new Set(allRows.map((c) => c.pfiNumber).filter(Boolean) as string[])]
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' })),
+    [allRows],
+  )
+
+  /**
+   * PFI filtering and sorting happen here rather than on the server.
+   *
+   * The page already holds the whole filtered set — that is the point of
+   * dropping pagination — so narrowing it further is instant and costs no
+   * round trip. The server keeps what it is good at: the date window, the
+   * depot, the status and the search.
+   */
+  const commissions = useMemo(() => {
+    const rows = pfiFilter === 'all'
+      ? [...allRows]
+      : allRows.filter((c) => c.pfiNumber === pfiFilter)
+
+    const byDate = (a: Commission, b: Commission) =>
+      new Date(b.orderCreatedAt || b.createdAt || 0).getTime()
+      - new Date(a.orderCreatedAt || a.createdAt || 0).getTime()
+
+    switch (sortKey) {
+      case 'date_asc': return rows.sort((a, b) => -byDate(a, b))
+      // Numeric as well as alphabetic, or PFI-9C outranks PFI-40B on the
+      // strength of its first digit. Unbatched rows sort last rather than
+      // first, where an empty string would otherwise put them.
+      case 'pfi': return rows.sort((a, b) =>
+        (a.pfiNumber || '\uffff').localeCompare(b.pfiNumber || '\uffff', undefined, { numeric: true, sensitivity: 'base' })
+        || byDate(a, b))
+      case 'facilitator': return rows.sort((a, b) =>
+        (a.customerName || '').localeCompare(b.customerName || '') || byDate(a, b))
+      case 'amount': return rows.sort((a, b) => Number(b.commissionAmount) - Number(a.commissionAmount))
+      default: return rows.sort(byDate)
+    }
+  }, [allRows, pfiFilter, sortKey])
+
+  const hasFilters = !!(
+    searchQuery || statusFilter !== 'pending' || depotFilter !== 'all'
+    || pfiFilter !== 'all' || sortKey !== 'date' || datePreset !== 'today'
+  )
+
+  const clearFilters = useCallback(() => {
+    setSearchQuery('')
+    setStatusFilter('pending')
+    setDepotFilter('all')
+    setPfiFilter('all')
+    setSortKey('date')
+    // Back to how the page opens, not to All Time — clearing should leave it
+    // where it starts.
+    setDatePreset('today')
+    setCustomDateFrom('')
+    setCustomDateTo('')
+    setSelectedIds([])
+  }, [])
 
   // What a bulk action can actually touch on this page.
   const openRows = useMemo(() => commissions.filter((c) => c.status === 'pending'), [commissions])
@@ -405,124 +485,168 @@ function CommissionsTab() {
 
   return (
     <div className="space-y-6">
+      {/* The report and refresh controls live in the header, where every
+          other page in the app puts them. They are things you do TO the page,
+          not filters on it, and mixing them into the filter bar made the row
+          of filters read as a toolbar. */}
+      <PageHeader
+        eyebrow="Finance"
+        title="Customer commissions"
+        description="Commission earned per facilitator, by depot and PFI."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShowDailyReport(true)}>
+              <FileText className="size-4" />
+              Daily report
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportExcel}>
+              <Download className="size-4" />
+              Excel
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportPDF}>
+              <Download className="size-4" />
+              PDF
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => refetch()}>
+              <RefreshCw className={cn('size-4', isLoading && 'animate-spin')} />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
+
       {/* Summary Cards */}
       <SummaryCards cards={summaryCards} />
 
-      {/* Filters */}
       <FilterBar>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-2 flex-wrap">
-        <Button variant="outline" size="sm" onClick={() => setShowDailyReport(true)} className="gap-2">
-        <FileText className="size-4" />
-        Daily Report
-        </Button>
-        <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-2">
-        <Download className="size-4" />
-        Excel
-        </Button>
-        <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">
-        <Download className="size-4" />
-        PDF
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
-        <RefreshCw className="size-4" />
-        Refresh
-        </Button>
+        {/* One row that wraps, rather than two stacked ones. Search takes the
+            room it needs and the rest sit together on the right, so the bar
+            reads as a single sentence about what is on screen. */}
+        <div className="relative min-w-[14rem] flex-1 max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search reference, facilitator, PFI…"
+            className="pl-9 pr-9"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          )}
         </div>
+
+        {/* Date. The presets are the common answers and Custom opens the two
+            inputs beside them, so a range never costs a dialog. */}
+        <div className="flex flex-wrap items-center gap-1">
+          {QUICK_DATES.map((d) => (
+            <Button
+              key={d.value}
+              variant={datePreset === d.value ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => setDatePreset(d.value)}
+            >
+              {d.label}
+            </Button>
+          ))}
+          <Button
+            variant={datePreset === 'custom' ? 'default' : 'outline'}
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => setDatePreset('custom')}
+          >
+            Custom
+          </Button>
         </div>
-        {/* Search + Filter Row */}
-        <div className="flex flex-col lg:flex-row gap-3">
-        <div className="relative flex-1 max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-        <Input
-        placeholder="Search ref, customer, truck, PFI…"
-        className="pl-9 pr-9"
-        value={searchQuery}
-        onChange={(e) => { setSearchQuery(e.target.value); setPage(1) }}
-        />
-        {searchQuery && (
-        <button
-        onClick={() => { setSearchQuery(''); setPage(1) }}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-        >
-        <X className="size-4" />
-        </button>
-        )}
-        </div>
-        <div className="flex flex-wrap gap-2 items-center">
-        {/* Date Quick Filters */}
-        <div className="flex gap-1 flex-wrap">
-        {QUICK_DATES.map((d) => (
-        <Button
-        key={d.value}
-        variant={datePreset === d.value ? 'default' : 'outline'}
-        size="sm"
-        className="h-8 text-xs"
-        onClick={() => { setDatePreset(d.value); setPage(1) }}
-        >
-        {d.label}
-        </Button>
-        ))}
-        <Button
-        variant={datePreset === 'custom' ? 'default' : 'outline'}
-        size="sm"
-        className="h-8 text-xs"
-        onClick={() => setDatePreset('custom')}
-        >
-        Custom
-        </Button>
-        </div>
-        {/* Custom Date Range */}
+
         {datePreset === 'custom' && (
-        <div className="flex gap-2 items-center">
-        <Input
-        type="date"
-        className="h-8 w-36 text-xs"
-        value={customDateFrom}
-        onChange={(e) => { setCustomDateFrom(e.target.value); setPage(1) }}
-        />
-        <span className="text-xs text-muted-foreground">to</span>
-        <Input
-        type="date"
-        className="h-8 w-36 text-xs"
-        value={customDateTo}
-        onChange={(e) => { setCustomDateTo(e.target.value); setPage(1) }}
-        />
-        </div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="date"
+              className="h-8 w-36 text-xs"
+              value={customDateFrom}
+              onChange={(e) => setCustomDateFrom(e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <Input
+              type="date"
+              className="h-8 w-36 text-xs"
+              value={customDateTo}
+              onChange={(e) => setCustomDateTo(e.target.value)}
+            />
+          </div>
         )}
-        {/* Pending first: this is a work queue, and what is still outstanding
-            is the question it exists to answer. The settled states are one
-            select away rather than unreachable, which is what they were. */}
-        <Select
+
+        {/*
+          The device's own dropdowns from here on.
+
+          A native select opens the picker the phone or the laptop already
+          uses — a wheel on iOS, a real listbox on desktop — which is faster to
+          hit, searchable by typing, and does not need this page to reimplement
+          keyboard handling. On a bar worked through dozens of times a day that
+          difference is the whole feel of it.
+        */}
+        <NativeSelect
+          className="h-8 w-36 text-xs"
+          aria-label="Filter by status"
           value={statusFilter}
-          onValueChange={(v) => { setStatusFilter(v as typeof statusFilter); setSelectedIds([]); setPage(1) }}
+          onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setSelectedIds([]) }}
         >
-        <SelectTrigger className="h-8 w-36 text-xs">
-        <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-        <SelectItem value="pending">Pending</SelectItem>
-        <SelectItem value="paid">Paid</SelectItem>
-        <SelectItem value="skipped">Skipped</SelectItem>
-        <SelectItem value="all">All statuses</SelectItem>
-        </SelectContent>
-        </Select>
-        {/* Depot Filter */}
-        <Select value={depotFilter} onValueChange={(v) => { setDepotFilter(v); setPage(1) }}>
-        <SelectTrigger className="h-8 w-40 text-xs">
-        <SelectValue placeholder="All Depots" />
-        </SelectTrigger>
-        <SelectContent>
-        <SelectItem value="all">All Depots</SelectItem>
-        {(depots as any[]).map((d) => (
-        <SelectItem key={d.id} value={String(d.id)}>
-        {d.name}
-        </SelectItem>
-        ))}
-        </SelectContent>
-        </Select>
-        </div>
-        </div>
+          <option value="pending">Pending</option>
+          <option value="paid">Paid</option>
+          <option value="skipped">Skipped</option>
+          <option value="all">All statuses</option>
+        </NativeSelect>
+
+        <NativeSelect
+          className="h-8 w-40 text-xs"
+          aria-label="Filter by depot"
+          value={depotFilter}
+          onChange={(e) => setDepotFilter(e.target.value)}
+        >
+          <option value="all">All depots</option>
+          {(depots as any[]).map((d) => (
+            <option key={d.id} value={String(d.id)}>{d.name}</option>
+          ))}
+        </NativeSelect>
+
+        <NativeSelect
+          className="h-8 w-40 text-xs"
+          aria-label="Filter by PFI"
+          value={pfiFilter}
+          onChange={(e) => { setPfiFilter(e.target.value); setSelectedIds([]) }}
+        >
+          <option value="all">All PFIs</option>
+          {pfiOptions.map((pfi) => (
+            <option key={pfi} value={pfi}>{pfi}</option>
+          ))}
+        </NativeSelect>
+
+        <NativeSelect
+          className="h-8 w-44 text-xs"
+          aria-label="Sort"
+          value={sortKey}
+          onChange={(e) => setSortKey(e.target.value as SortKey)}
+        >
+          <option value="date">Sort: newest first</option>
+          <option value="date_asc">Sort: oldest first</option>
+          <option value="pfi">Sort: PFI</option>
+          <option value="facilitator">Sort: facilitator</option>
+          <option value="amount">Sort: commission, highest</option>
+        </NativeSelect>
+
+        {hasFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <X className="size-3.5" />
+            Clear
+          </Button>
+        )}
       </FilterBar>
 
       <Card>
@@ -543,15 +667,8 @@ function CommissionsTab() {
                 icon={<DollarSign className="size-8 text-muted-foreground" />}
                 title="No commissions found"
                 description="Commissions are created automatically when orders are paid. Adjust your filters or set up commission rates first."
-                hasFilters={!!searchQuery || depotFilter !== 'all' || datePreset !== 'all'}
-                onClearFilters={() => {
-                  setSearchQuery('')
-                  setDepotFilter('all')
-                  setDatePreset('all')
-                  setCustomDateFrom('')
-                  setCustomDateTo('')
-                  setPage(1)
-                }}
+                hasFilters={hasFilters}
+                onClearFilters={clearFilters}
               />
             </div>
           ) : (
@@ -570,8 +687,8 @@ function CommissionsTab() {
                   </span>
                   <div className="ml-auto flex items-center gap-2">
                     <Button
-                      size="sm" variant="outline"
-                      className="gap-1.5 border-accent/40 text-accent hover:bg-accent/10 hover:text-accent"
+                      size="sm"
+                      className="gap-1.5 bg-accent text-accent-foreground hover:bg-accent/90"
                       disabled={bulkMutation.isPending}
                       onClick={() => setBulkAction('confirm')}
                     >
@@ -579,8 +696,8 @@ function CommissionsTab() {
                       Confirm as paid
                     </Button>
                     <Button
-                      size="sm" variant="outline"
-                      className="gap-1.5"
+                      size="sm"
+                      className="gap-1.5 bg-destructive text-white hover:bg-destructive/90"
                       disabled={bulkMutation.isPending}
                       onClick={() => { setBulkAction('skip'); setBulkReason('') }}
                     >
@@ -613,9 +730,15 @@ function CommissionsTab() {
                           onChange={toggleAll}
                         />
                       </TableHead>
-                      <TableHead>Order</TableHead>
+                      {/* Date first, then what it is — the order a row is
+                          actually scanned in when you are working a day. */}
+                      <TableHead>Date</TableHead>
+                      <TableHead>Reference</TableHead>
+                      <TableHead>PFI</TableHead>
                       <TableHead>Facilitator</TableHead>
-                      <TableHead>Location</TableHead>
+                      <TableHead>Company</TableHead>
+                      <TableHead>Contact</TableHead>
+                      <TableHead>Depot</TableHead>
                       <TableHead className="text-right">Quantity</TableHead>
                       <TableHead className="text-right">Commission</TableHead>
                       <TableHead>Status</TableHead>
@@ -649,43 +772,61 @@ function CommissionsTab() {
                             />
                           </TableCell>
 
-                          {/* Order and date in one cell. They are read
-                              together — "which order, and when" — and cost two
-                              columns of width to say separately. */}
-                          <TableCell className="whitespace-nowrap">
-                            <div className="font-mono text-sm font-semibold text-primary">{c.orderNumber}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {c.orderCreatedAt ? new Date(c.orderCreatedAt).toLocaleDateString() : '—'}
-                            </div>
+                          <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
+                            {c.orderCreatedAt
+                              ? new Date(c.orderCreatedAt).toLocaleDateString('en-GB', {
+                                  day: '2-digit', month: 'short', year: 'numeric',
+                                })
+                              : '—'}
                           </TableCell>
 
-                          {/* Facilitator, company and phone folded together for
-                              the same reason: one person, three facts, one
-                              column. The phone stays a link. */}
-                          <TableCell className="max-w-[15rem]">
-                            <div className="truncate text-sm font-semibold text-foreground">{c.customerName}</div>
-                            {c.customerCompanyName && (
-                              <div className="truncate text-xs text-muted-foreground">{c.customerCompanyName}</div>
-                            )}
-                            {c.customerPhone && (
-                              <div className="text-xs text-muted-foreground"><PhoneLink value={c.customerPhone} /></div>
-                            )}
+                          <TableCell className="font-mono text-sm font-semibold whitespace-nowrap text-primary">
+                            {c.orderNumber}
                           </TableCell>
 
-                          <TableCell className="text-sm text-muted-foreground">
-                            <div className="whitespace-nowrap">{c.depotName}</div>
-                            {c.depotCity && <div className="text-xs">{c.depotCity}</div>}
+                          <TableCell className="text-sm whitespace-nowrap">
+                            {c.pfiNumber
+                              ? <span className="font-medium">{c.pfiNumber}</span>
+                              : <span className="text-muted-foreground/50">—</span>}
+                          </TableCell>
+
+                          <TableCell className="max-w-[12rem]">
+                            <span className="block truncate text-sm font-semibold text-foreground">
+                              {c.customerName}
+                            </span>
+                          </TableCell>
+
+                          {/* The company on the ORDER, not the one on the
+                              customer's profile. A facilitator buys for
+                              different companies and the order says which; the
+                              profile only says who they usually are. */}
+                          <TableCell className="max-w-[12rem]">
+                            <span className="block truncate text-sm text-muted-foreground">
+                              {c.orderCompanyName || c.customerCompanyName || '—'}
+                            </span>
+                          </TableCell>
+
+                          <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
+                            {c.customerPhone ? <PhoneLink value={c.customerPhone} /> : '—'}
+                          </TableCell>
+
+                          {/* The depot, and only the depot. The city under it
+                              said "Calabar Municipal" beneath "Calabar", which
+                              is a second line of width for no second fact. */}
+                          <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
+                            {c.depotName || '—'}
                           </TableCell>
 
                           <TableCell className="text-right font-mono text-sm whitespace-nowrap">
-                            {c.quantity.toLocaleString()} L
+                            {c.quantity.toLocaleString()} Litres
                           </TableCell>
 
-                          <TableCell className="text-right whitespace-nowrap">
-                            <div className="font-mono text-sm font-semibold text-foreground">
-                              {formatNaira(c.commissionAmount)}
-                            </div>
-                            <div className="text-xs text-muted-foreground">₦{c.commissionRate}/L</div>
+                          {/* The amount alone. The rate under it was the one
+                              number on the row nobody decides anything from —
+                              it lives on the Commission Rates page, where it
+                              is set. */}
+                          <TableCell className="text-right font-mono text-sm font-semibold whitespace-nowrap text-foreground">
+                            {formatNaira(c.commissionAmount)}
                           </TableCell>
 
                           {/* Status carries its own explanation where it has
@@ -716,19 +857,25 @@ function CommissionsTab() {
                           </TableCell>
 
                           <TableCell className="text-right">
+                            {/* Filled, not ghost. These are the two decisions
+                                the page exists to take, and a bare word in a
+                                cell does not read as a button until you hover
+                                it. Green confirms, red skips — the colours the
+                                rest of the app already uses for "this goes
+                                through" and "this does not". */}
                             {open ? (
-                              <div className="flex items-center justify-end gap-1">
+                              <div className="flex items-center justify-end gap-1.5">
                                 <Button
-                                  variant="ghost" size="sm"
-                                  className="h-8 gap-1 px-2 text-xs text-accent hover:bg-accent/10 hover:text-accent"
+                                  size="sm"
+                                  className="h-8 gap-1 bg-accent px-2.5 text-xs text-accent-foreground hover:bg-accent/90"
                                   onClick={() => setConfirmTarget(c)}
                                 >
                                   <CheckCircle className="size-3.5" />
                                   Paid
                                 </Button>
                                 <Button
-                                  variant="ghost" size="sm"
-                                  className="h-8 gap-1 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                                  size="sm"
+                                  className="h-8 gap-1 bg-destructive px-2.5 text-xs text-white hover:bg-destructive/90"
                                   onClick={() => { setSkipTarget(c); setSkipReason('') }}
                                 >
                                   <MinusCircle className="size-3.5" />
@@ -746,32 +893,19 @@ function CommissionsTab() {
                 </Table>
               </div>
 
-              {/* Pagination */}
-              {pagination && pagination.pages > 1 && (
-                <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-                  <span className="text-sm text-muted-foreground">
-                    Showing {(page - 1) * 50 + 1}–{Math.min(page * 50, pagination.total)} of {pagination.total}
-                  </span>
-                  <div className="flex gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1}
-                      onClick={() => setPage((p) => p - 1)}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= pagination.pages}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              )}
+              {/* Footed rather than paged.
+                  The whole filtered set is on screen — that is what lets a
+                  bulk selection mean "everything matching", not "everything
+                  that happened to be on this page". */}
+              <div className="flex items-center justify-between border-t border-border px-4 py-3 text-sm text-muted-foreground">
+                <span>
+                  {commissions.length.toLocaleString()} commission{commissions.length === 1 ? '' : 's'}
+                  {pfiFilter !== 'all' && <> on {pfiFilter}</>}
+                </span>
+                <span className="font-mono font-semibold text-foreground">
+                  {formatNaira(commissions.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0))}
+                </span>
+              </div>
             </>
           )}
         </CardContent>
