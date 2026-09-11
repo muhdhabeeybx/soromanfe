@@ -38,6 +38,21 @@ export function useOrderWizard() {
 
   // Step 4: Delivery
   const [deliveryType, setDeliveryType] = useState<'delivery' | 'pickup'>('pickup')
+  /**
+   * Where the truck is going, asked only when Soroman is the one driving.
+   *
+   * The wizard used to take the delivery choice and stop there, so an order
+   * that Soroman had undertaken to deliver recorded no destination at all —
+   * the depot's own state rode along on `state` and read, on the review
+   * screen and on the order, as though it were where the product was headed.
+   *
+   * Kept as two fields rather than one free-text line because the state is a
+   * closed list and the town is not: the state can be picked, and the town
+   * can be picked from that state's LGAs or typed when the place people
+   * actually say is not one of them.
+   */
+  const [deliveryState, setDeliveryState] = useState('')
+  const [deliveryTown, setDeliveryTown] = useState('')
 
   // Step 5: Completion
   const [placedOrder, setPlacedOrder] = useState<any>(null)
@@ -114,6 +129,16 @@ export function useOrderWizard() {
         price: Number(selectedProduct.currentPrice),
         totalAmount,
         deliveryType,
+        /**
+         * Town first, then state — the way an address is read aloud, and the
+         * way it is wanted by somebody dispatching a truck. Sent only on a
+         * delivery; the server ignores it on a pickup anyway, and sending a
+         * destination for an order nobody is delivering would put one on the
+         * record.
+         */
+        deliveryAddress: deliveryType === 'delivery'
+          ? [deliveryTown.trim(), deliveryState].filter(Boolean).join(', ')
+          : '',
         companyName: orderCompanyName.trim(),
       }
       const response = await createOrderMutation.mutateAsync(payload)
@@ -162,6 +187,15 @@ export function useOrderWizard() {
       }
       return errs
     }
+    if (target === 4) {
+      // Only when we are the ones driving. A pickup order has no destination
+      // to state — the customer's truck comes to the depot.
+      if (deliveryType === 'delivery') {
+        if (!deliveryState) errs.push('Please select the delivery state')
+        if (!deliveryTown.trim()) errs.push('Please select or enter the delivery town')
+      }
+      return errs
+    }
     return errs
   }
 
@@ -197,6 +231,8 @@ export function useOrderWizard() {
     setSelectedDepot(null)
     setSelectedProduct(null)
     setOrderQuantity('')
+    setDeliveryState('')
+    setDeliveryTown('')
     setPlacedOrder(null)
     setPaymentInfo(null)
     setErrors([])
@@ -248,6 +284,10 @@ export function useOrderWizard() {
     // Delivery state
     deliveryType,
     setDeliveryType,
+    deliveryState,
+    setDeliveryState,
+    deliveryTown,
+    setDeliveryTown,
 
     // Completion state
     placedOrder,

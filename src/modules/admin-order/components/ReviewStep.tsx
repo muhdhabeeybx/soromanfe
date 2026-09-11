@@ -28,6 +28,8 @@ export function ReviewStep({ wizard }: ReviewStepProps) {
     selectedProduct,
     orderQuantity,
     deliveryType,
+    deliveryState,
+    deliveryTown,
   } = wizard
 
   return (
@@ -120,6 +122,20 @@ export function ReviewStep({ wizard }: ReviewStepProps) {
             {deliveryType === 'pickup' ? <Warehouse className="size-4 text-primary" /> : <Truck className="size-4 text-primary" />}
             <span className="font-semibold text-foreground capitalize">{deliveryType === 'pickup' ? 'Depot Pickup' : 'Soroman Delivery'}</span>
           </div>
+          {/* Where it is going, on the screen somebody checks before placing
+              the order. Without it the only place name on this review was the
+              depot's, which is where the truck loads. */}
+          {deliveryType === 'delivery' && (deliveryState || deliveryTown) && (
+            <div className="mt-3 flex items-start gap-2 border-t border-border pt-3">
+              <MapPin className="mt-0.5 size-4 shrink-0 text-primary" />
+              <div>
+                <p className="text-xs text-muted-foreground uppercase">Delivering to</p>
+                <p className="font-semibold text-foreground">
+                  {[deliveryTown?.trim(), deliveryState].filter(Boolean).join(', ')}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
