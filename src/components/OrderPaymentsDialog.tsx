@@ -263,8 +263,10 @@ export function OrderPaymentsDialog({
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      {/* Same rule as the report: a transfer says which way
+                          it went, a receipt takes no sign. */}
                       <span className={cn('font-semibold tabular-nums', p.amount < 0 && 'text-info')}>
-                        {naira(p.amount)}
+                        {isTransferLeg(p) ? (p.amount < 0 ? '−' : '+') : ''}{naira(Math.abs(p.amount))}
                       </span>
                       {/*
                         Vouching for a system-made attribution. Offered instead

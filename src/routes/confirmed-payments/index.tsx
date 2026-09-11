@@ -206,10 +206,13 @@ function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?
                 : 'Bank statement match'}
         </Badge>
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* Signed, so an outgoing leg says so in the character everyone
-              reads the same way rather than in accountant's brackets. */}
+          {/* A transfer carries its direction: + when money arrived from
+              another order, − when it left for one. Bank and wallet rows are
+              receipts and take no sign — a "+" on every line would stop
+              meaning anything, and the two the report needs to tell apart are
+              the two directions of a movement. */}
           <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
-            {payment.amount < 0 ? '−' : ''}{naira(Math.abs(payment.amount))}
+            {transfer ? (payment.amount < 0 ? '−' : '+') : ''}{naira(Math.abs(payment.amount))}
           </span>
           {/*
             Undoing lives here rather than on the report row itself: the table

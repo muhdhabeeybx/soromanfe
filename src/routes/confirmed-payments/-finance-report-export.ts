@@ -590,6 +590,10 @@ export function writeFinanceTable(
     cell.font = TOTAL_FONT
   }
   totalRow.getCell('differential').numFmt = NGN_PLAIN
+  // The transfers total was the one money cell on this row with no format at
+  // all, so it printed as a raw number while every column above it was
+  // currency. Signed like the rows it foots.
+  totalRow.getCell('transfers').numFmt = NGN_SIGNED_PLAIN
   paintOwed(totalRow.getCell('differential'), summary.totalDifferential, 'differential')
   paintOwed(totalRow.getCell('transfers'), summary.totalTransferred, 'transfers')
   totalRow.getCell('qty').numFmt = QTY
