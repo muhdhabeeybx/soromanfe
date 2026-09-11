@@ -983,6 +983,20 @@ function FinanceReportPage() {
           <SummaryItem icon={Banknote} label="Total sales value" value={naira(summary.totalSalesValue)} />
           <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
 
+          {/*
+            One card per money column, each named after the column it foots.
+
+            There was a single "Net differential" here, and once the table
+            split into Differential and Balance it was footing neither
+            unambiguously — it summed one column while carrying a name a
+            reader would attach to either. Two cards, two names, and each ties
+            to the column above it.
+
+            Net balance is the one to read for "where do we stand": it is
+            after the transfers, so it is the position the desk actually
+            holds. Net differential is the reconciliation figure — what the
+            bank paid against what was billed, before any money moved.
+          */}
           <SummaryItem
             icon={Scale}
             label="Net differential"
@@ -991,6 +1005,18 @@ function FinanceReportPage() {
               Math.abs(summary.totalDifferential) < 0.005
                 ? 'plain'
                 : summary.totalDifferential > 0
+                  ? 'owed'
+                  : 'over'
+            }
+          />
+          <SummaryItem
+            icon={Scale}
+            label="Net balance"
+            value={naira(Math.abs(summary.totalBalance))}
+            tone={
+              Math.abs(summary.totalBalance) < 0.005
+                ? 'plain'
+                : summary.totalBalance > 0
                   ? 'owed'
                   : 'over'
             }
