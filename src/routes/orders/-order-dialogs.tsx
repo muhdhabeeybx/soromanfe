@@ -153,8 +153,17 @@ export function OrderDetailsDialog({
             <Row label="Quantity" value={`${formatQty(qty)} ${unit}`} />
             <Row label="Unit price" value={formatNaira(toNumber(order.price))} />
             <Row label="Total" value={formatNaira(toNumber(order.totalAmount))} />
-            {/* <Row label="Delivery type" value={order.deliveryType} /> */}
-            {/* <Row label="Delivery address" value={order.deliveryAddress} /> */}
+            {/* Restored. These read as raw field names — "delivery"/"pickup"
+                and a bare address — which is presumably why they were turned
+                off. Said the way the desk says them, and the destination only
+                where there is one to give. */}
+            <Row
+              label="Fulfilment"
+              value={order.deliveryType === 'delivery' ? 'Delivered by Soroman' : 'Customer pickup'}
+            />
+            {order.deliveryType === 'delivery' && (
+              <Row label="Delivering to" value={(order.deliveryAddress || '').trim() || 'Not recorded'} />
+            )}
           </Section>
 
           {(order.virtualAccountNumber || order.virtualAccountBank) && (

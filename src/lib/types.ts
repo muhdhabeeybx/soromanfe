@@ -376,6 +376,11 @@ export interface Order {
   price: string | number
   totalAmount: string | number
   deliveryType: 'delivery' | 'pickup'
+  /**
+   * Where the truck is going, as "Town, State". Empty on a pickup — the depot
+   * is the address — and on deliveries raised before the wizard asked for it.
+   */
+  deliveryAddress?: string | null
   pfiId?: number | null
   pfiNumber?: string | null
   virtualAccountNumber?: string

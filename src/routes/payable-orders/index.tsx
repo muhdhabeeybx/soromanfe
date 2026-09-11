@@ -16,6 +16,7 @@ import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { Pagination } from '#/components/Pagination'
+import { OrderDestination } from '#/components/OrderDestination'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/payable-orders/')({
@@ -298,6 +299,10 @@ function PendingOrdersPage() {
                               <MapPin className="size-3.5" />
                               <span>{order.depotName || order.state || '—'}</span>
                             </div>
+                            <OrderDestination
+                              deliveryType={order.deliveryType}
+                              deliveryAddress={order.deliveryAddress}
+                            />
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                             {order.pfiNumber || '—'}

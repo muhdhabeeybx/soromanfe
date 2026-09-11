@@ -221,6 +221,18 @@ function RouteComponent() {
                 )}
               </Badge>
             </div>
+            {/* Where the truck is going. Only on a delivery — on a pickup the
+                depot above IS the address. An older delivery carrying no
+                destination says so rather than showing a blank row: nothing
+                was recorded, and that is worth knowing. */}
+            {order.deliveryType === 'delivery' && (
+              <div className="flex justify-between items-center py-2 border-b border-border/50">
+                <span className="text-sm text-muted-foreground">Delivering To</span>
+                <span className={`font-semibold ${(order.deliveryAddress || '').trim() ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {(order.deliveryAddress || '').trim() || 'Not recorded'}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between items-center py-2 border-b border-border/50">
               <span className="text-sm text-muted-foreground">Quantity Ordered</span>
               <span className="font-mono font-semibold text-foreground">

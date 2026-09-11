@@ -23,6 +23,7 @@ import { PageEmpty } from '#/components/PageEmpty'
 import { Pagination } from '#/components/Pagination'
 import { FilterBar } from '#/components/FilterBar'
 import { PANEL, PANEL_RAIL, MICRO } from '#/lib/panel'
+import { OrderDestination } from '#/components/OrderDestination'
 import { cn } from '#/lib/utils'
 import {
   useAllOrders, useDeleteOrder, useBulkCancelOrders, useBulkDeleteOrders,
@@ -456,7 +457,13 @@ function OrderManagementPage() {
                         <TableCell className="max-w-[11rem] truncate text-muted-foreground">
                           {o.companyName || o.customerCompanyName || ''}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{o.depotName || o.state || '—'}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          <span className="block">{o.depotName || o.state || '—'}</span>
+                          <OrderDestination
+                            deliveryType={o.deliveryType}
+                            deliveryAddress={o.deliveryAddress}
+                          />
+                        </TableCell>
                         <TableCell className="text-muted-foreground">{o.pfiNumber || '—'}</TableCell>
                         <TableCell className="text-muted-foreground">{o.productName || '—'}</TableCell>
                         <TableCell className="text-right font-medium whitespace-nowrap">

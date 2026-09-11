@@ -28,6 +28,7 @@ import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 import { Pagination } from '#/components/Pagination'
 import { PANEL, MICRO, PANEL_RAIL } from '#/lib/panel'
+import { OrderDestination } from '#/components/OrderDestination'
 import { cn } from '#/lib/utils'
 import { useAllOrders } from '#/lib/hooks/useOrders'
 import { routeGuard } from '#/lib/route-guard'
@@ -504,7 +505,13 @@ function OrdersDashboard() {
                                 )}
                               </TableCell>
                               <TableCell className="text-muted-foreground"><PhoneLink value={o.customerPhone} /></TableCell>
-                              <TableCell>{o.depotName || o.state || '—'}</TableCell>
+                              <TableCell>
+                                <span className="block">{o.depotName || o.state || '—'}</span>
+                                <OrderDestination
+                                  deliveryType={o.deliveryType}
+                                  deliveryAddress={o.deliveryAddress}
+                                />
+                              </TableCell>
                               <TableCell className="text-right font-medium">{formatQty(toNumber(o.quantity))}</TableCell>
                               <TableCell className="text-right">{formatNaira(toNumber(o.price))}</TableCell>
                               <TableCell className="text-right font-semibold">{formatNaira(toNumber(o.totalAmount))}</TableCell>
