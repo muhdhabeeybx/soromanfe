@@ -175,6 +175,17 @@ export interface OrderPayment {
    * read. 28 movements are recorded this way.
    */
   walletFromOrderRef: string | null
+  /**
+   * Not a row in order_payments — the outgoing leg of a wallet-era movement,
+   * rebuilt so the money it carried stops being counted on the order that
+   * gave it away.
+   *
+   * It behaves as a transfer leg everywhere: it nets into `received`, it lands
+   * in the Transferred column, it names the order at the other end. What it
+   * cannot do is be reversed, because there is nothing to reverse — which the
+   * UI already gets right by keying reversal on transferId, and this is null.
+   */
+  reconstructed?: boolean
 }
 
 /** Surplus that left an order in the wallet era, and where it went. */
