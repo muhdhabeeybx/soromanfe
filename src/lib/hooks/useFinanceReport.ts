@@ -628,18 +628,38 @@ export function orderAmountPaid(o: FinanceReportOrder): number {
 }
 
 /**
- * Sales value against what the order has been paid. Positive is still owed,
- * negative is more received than the order was worth.
+ * Sales value against what the BANK paid in — before any transfer.
  *
- * The one signed gap on the report. It used to be measured against the bank
- * figure alone, with a separate Balance column measuring it again after
- * transfers — two columns answering what the desk asks as one question. This
- * is the second of those: sales value less everything on the order.
+ * Positive is money the bank never paid for this order; negative is more paid
+ * in than the order was worth. The overpayment or underpayment as a
+ * reconciliation sees it, which is why it sits directly after Amount Paid: the
+ * two columns are the subtraction, side by side.
+ *
+ * Transfers are deliberately not in it. They are the next column, and what
+ * they leave behind is the one after that — see orderBalance.
  *
  * Computed server-side so the screen, the workbook and the PDF cannot each
  * arrive at their own version of it.
  */
 export function orderDifferential(o: FinanceReportOrder): number {
+  return o.differential
+}
+
+/**
+ * What is left once the transfers are taken into account too.
+ *
+ * The end of the row: sales value, less what the bank paid in, less what moved
+ * between orders. Zero on a settled order whichever route its money took.
+ *
+ * The report shows this beside the differential rather than instead of it,
+ * because the two answer different questions and the desk asks both. The
+ * differential is "did the bank pay what this order is worth" — the question a
+ * reconciliation asks, and the one a statement can answer. The balance is "is
+ * this order square now", which a statement cannot answer because a transfer
+ * leaves no bank line. An order settled entirely by a transfer shows its whole
+ * value as a differential and a balance of zero, and both are true.
+ */
+export function orderBalance(o: FinanceReportOrder): number {
   return o.balance
 }
 

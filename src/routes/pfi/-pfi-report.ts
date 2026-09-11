@@ -172,7 +172,11 @@ function financeTotals(orders: FinanceReportOrder[]) {
     totalQuantity: orders.reduce((s, o) => s + Number(o.quantity || 0), 0),
     totalSalesValue: orders.reduce((s, o) => s + orderSalesValue(o), 0),
     totalAmountPaid,
-    totalDifferential: orders.reduce((s, o) => s + o.balance, 0),
+    // Two figures now, and they are different: the differential measures the
+    // order against what the BANK paid in, the balance against everything
+    // including transfers.
+    totalDifferential: orders.reduce((s, o) => s + o.differential, 0),
+    totalBalance: orders.reduce((s, o) => s + o.balance, 0),
     totalBankPaid: orders.reduce((s, o) => s + o.amountPaidIn, 0),
     totalTransferred: orders.reduce((s, o) => s + o.netTransfers, 0),
   }

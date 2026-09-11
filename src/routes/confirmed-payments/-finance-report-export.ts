@@ -3,7 +3,7 @@ import { unitNames } from '#/routes/pfi/-pfi-utils'
 import {
   paymentRecorder, paymentPayer, paymentDate, transferOrigin,
   visiblePayments, legacyAmount, isTransferLeg,
-  orderPaidInto, orderCompany, orderSalesValue, orderDifferential, walletSurplusFrom,
+  orderPaidInto, orderCompany, orderSalesValue, orderDifferential, orderBalance, walletSurplusFrom,
   type FinanceReportOrder, type OrderPayment, type CustomerDifferential,
 } from '#/lib/hooks/useFinanceReport'
 import {
@@ -134,6 +134,8 @@ export interface FinanceReportSummary {
   totalTransferred: number
   /** Sales value less totalAmountPaid. Positive is owed, negative is overpaid. */
   totalDifferential: number
+  /** What is left after the transfers too — the Balance column, footed. */
+  totalBalance: number
   /**
    * The PFI's tank quantity — `startingQtyLitres`, the measured figure that
    * landed in the tank.
@@ -260,8 +262,21 @@ const COLUMNS: Array<{
    * is made of. Reading left to right now follows the arithmetic: what the
    * bank paid in, what moved between orders, and what is left over.
    */
-  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED_PLAIN, scope: 'funding', signed: true },
+  /**
+   * Sales value against the BANK figure beside it — the overpayment or the
+   * underpayment as a reconciliation sees it, before any transfer.
+   *
+   * Directly after Amount Paid because the two columns are the subtraction,
+   * read side by side.
+   */
   { header: 'Differential', key: 'differential', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
+  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED_PLAIN, scope: 'funding', signed: true },
+  /**
+   * What is left once the transfers are counted too. Zero on a settled order
+   * whichever route its money took — the column that should read as a line of
+   * zeros down a clean day.
+   */
+  { header: 'Balance', key: 'balance', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -298,6 +313,7 @@ function rowValues(o: FinanceReportOrder, i: number) {
     rate,
     salesValue: orderSalesValue(o),
     differential: orderDifferential(o),
+    balance: orderBalance(o),
     paidInto: up(orderPaidInto(o) || '—'),
     /**
      * Money with no bank record behind it, carried on the ORDER line.
@@ -415,8 +431,9 @@ const PDF_COLUMNS: Array<{ header: string; key: string; scope: ColumnScope; widt
   { header: 'Depositor', key: 'depositor', scope: 'funding', width: 25 },
   { header: 'Bank Reference', key: 'depositRef', scope: 'funding', width: 25 },
   { header: 'Amount Paid', key: 'amount', scope: 'funding', width: 22 },
-  { header: 'Transferred', key: 'transfers', scope: 'funding', width: 19, signed: true },
   { header: 'Differential', key: 'differential', scope: 'order', width: 19, signed: true },
+  { header: 'Transferred', key: 'transfers', scope: 'funding', width: 19, signed: true },
+  { header: 'Balance', key: 'balance', scope: 'order', width: 19, signed: true },
 ]
 
 /** The two columns drawn by hand, because each carries two lines at two weights. */
@@ -495,6 +512,7 @@ function summaryColumns(
      */
     { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_SIGNED_PLAIN, signed: true },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
+    { header: 'Total Balance', value: summary.totalBalance, fmt: NGN_PLAIN, signed: true },
   ]
   // The same two words the screen uses. Both only exist when a PFI is
   // selected, and the PFI is named two cells to the left, so the "(PFI)" they
@@ -536,7 +554,7 @@ export function writeFinanceTable(
   rows: FinanceReportOrder[],
   summary: Pick<
     FinanceReportSummary,
-    | 'totalQuantity' | 'totalSalesValue' | 'totalDifferential'
+    | 'totalQuantity' | 'totalSalesValue' | 'totalDifferential' | 'totalBalance'
     | 'totalBankPaid' | 'totalTransferred'
   >,
   startRow: number,
@@ -645,6 +663,7 @@ export function writeFinanceTable(
     salesValue: summary.totalSalesValue,
     amount: summary.totalBankPaid,
     differential: summary.totalDifferential,
+    balance: summary.totalBalance,
     transfers: summary.totalTransferred,
   }
   totalRow.height = ROW_HEIGHT.total
@@ -662,7 +681,9 @@ export function writeFinanceTable(
   // all, so it printed as a raw number while every column above it was
   // currency. Signed like the rows it foots.
   totalRow.getCell('transfers').numFmt = NGN_SIGNED_PLAIN
+  totalRow.getCell('balance').numFmt = NGN_PLAIN
   paintOwed(totalRow.getCell('differential'), summary.totalDifferential, 'differential')
+  paintOwed(totalRow.getCell('balance'), summary.totalBalance, 'balance')
   paintOwed(totalRow.getCell('transfers'), summary.totalTransferred, 'transfers')
   totalRow.getCell('qty').numFmt = QTY
   totalRow.getCell('salesValue').numFmt = NGN
@@ -1240,6 +1261,7 @@ export async function exportFinanceReportPdf(
   const signedAt: Array<Record<number, number>> = []
   const indexOfCol = (key: string) => PDF_COLUMNS.findIndex((c) => c.key === key)
   const diffCol = indexOfCol('differential')
+  const balanceCol = indexOfCol('balance')
   const transfersCol = indexOfCol('transfers')
 
   rows.forEach((o, i) => {
@@ -1257,6 +1279,7 @@ export async function exportFinanceReportPdf(
       // Zero printed as zero: on the column that says whether an order is
       // settled, a dash reads as "no data" and not as "square".
       differential: plain(v.differential),
+      balance: plain(v.balance),
     })
     // cellsFor() only fills the columns of the scope it was asked for, so the
     // legacy amount — which lives in two funding-scope columns but belongs on
@@ -1274,7 +1297,7 @@ export async function exportFinanceReportPdf(
       }
     }
     body.push(orderRow)
-    signedAt[body.length - 1] = { [diffCol]: v.differential }
+    signedAt[body.length - 1] = { [diffCol]: v.differential, [balanceCol]: v.balance }
     stacked[body.length - 1] = {
       [indexOfCol('customerBlock')]: [v.customer, v.company],
       [indexOfCol('qtyBlock')]: [qtyWithUnit(o, v.qty), v.product],
@@ -1321,6 +1344,7 @@ export async function exportFinanceReportPdf(
   footAt('salesValue', naira(summary.totalSalesValue))
   footAt('amount', naira(summary.totalBankPaid))
   footAt('differential', plain(summary.totalDifferential))
+  footAt('balance', plain(summary.totalBalance))
   footAt('transfers', signed(summary.totalTransferred))
 
   const refColumnIndex = PDF_COLUMNS.findIndex((c) => c.key === 'ref')
@@ -1400,6 +1424,7 @@ export async function exportFinanceReportPdf(
         data.section === 'foot'
           ? ({
               [diffCol]: summary.totalDifferential,
+              [balanceCol]: summary.totalBalance,
               [transfersCol]: summary.totalTransferred,
             } as Record<number, number>)
           : signedAt[data.row.index]

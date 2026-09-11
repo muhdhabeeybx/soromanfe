@@ -31,7 +31,7 @@ import { routeGuard } from '#/lib/route-guard'
 import {
   useFinanceReport, paymentRecorder, paymentPayer, paymentPaidInto, paymentDate, narrationText,
   transferOrigin, visiblePayments, legacyAmount,
-  orderPaidInto, orderCompany, orderAmountPaid, orderDifferential, orderSalesValue,
+  orderPaidInto, orderCompany, orderAmountPaid, orderDifferential, orderBalance, orderSalesValue,
   isTransferLeg, isUnreconciled, isSystemDecided, walletSurplusFrom,
   useRemoveOrderPayment,
   useReverseOrderTransfer,
@@ -50,7 +50,7 @@ import {
 // Which columns render right-aligned — the numeric ones. Everything else
 // about the table's shape comes from REPORT_COLUMNS itself (see COLUMNS in
 // -finance-report-export.ts), so the screen and the exports cannot drift.
-const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential'])
+const NUMERIC_COLUMNS = new Set(['qty', 'rate', 'salesValue', 'amount', 'transfers', 'differential', 'balance'])
 
 export const Route = createFileRoute('/confirmed-payments/')({
   beforeLoad: () => routeGuard('/confirmed-payments'),
@@ -689,9 +689,19 @@ function FinanceReportPage() {
     [rows],
   )
 
-  /** Sales value against that. Positive is owed, negative is overpaid. */
+  /**
+   * Sales value against the bank figure, and sales value against everything.
+   *
+   * Two sums because the table now has two columns: the differential is what
+   * a reconciliation sees — did the bank pay what this order is worth — and
+   * the balance is what is left once transfers are counted too.
+   */
   const totalDifferential = useMemo(
     () => rows.reduce((sum, o) => sum + orderDifferential(o), 0),
+    [rows],
+  )
+  const totalBalance = useMemo(
+    () => rows.reduce((sum, o) => sum + orderBalance(o), 0),
     [rows],
   )
 
@@ -710,6 +720,7 @@ function FinanceReportPage() {
     totalAmountPaid,
     totalBankPaid,
     totalTransferred,
+    totalBalance,
     totalDifferential,
     initialStock: selectedPfi ? selectedPfi.startingQtyLitres ?? 0 : null,
     tankBalanceAfter: selectedPfi ? selectedPfi.financials?.remaining ?? 0 : null,
@@ -1130,8 +1141,8 @@ function FinanceReportPage() {
                     // clean order reads as a quiet dash rather than a loud
                     // zero. The figure itself is unsigned: colour carries the
                     // direction, here and in both exports.
-                    differential: (() => {
-                      const d = orderDifferential(o)
+                    balance: (() => {
+                      const d = orderBalance(o)
                       /**
                        * Zero is printed as zero.
                        *
@@ -1141,6 +1152,23 @@ function FinanceReportPage() {
                        * A reader checking a day's trading wants to see the
                        * zero and tick it off, not infer it from an absence.
                        */
+                      if (Math.abs(d) < 0.005) {
+                        return <span className="whitespace-nowrap text-muted-foreground">{naira(0)}</span>
+                      }
+                      return (
+                        <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
+                          {naira(Math.abs(d))}
+                        </span>
+                      )
+                    })(),
+                    /**
+                     * Sales value against the bank figure beside it, before
+                     * any transfer — the over or underpayment a reconciliation
+                     * sees. Owed reads red, paid beyond the order's value
+                     * reads green, and zero reads as zero.
+                     */
+                    differential: (() => {
+                      const d = orderDifferential(o)
                       if (Math.abs(d) < 0.005) {
                         return <span className="whitespace-nowrap text-muted-foreground">{naira(0)}</span>
                       }
