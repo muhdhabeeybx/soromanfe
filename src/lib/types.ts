@@ -738,10 +738,17 @@ export interface Commission {
   quantity: number
   commissionRate: number
   commissionAmount: number
-  status: 'pending' | 'paid'
+  /**
+   * 'skipped' is settled without paying anybody — an order the desk decided
+   * carries no commission. Its own status rather than a flag beside 'pending',
+   * so a query for what is still payable cannot accidentally include it.
+   */
+  status: 'pending' | 'paid' | 'skipped'
   paidAt?: string | null
   paidBy?: number | null
   paidByName?: string | null
+  skippedAt?: string | null
+  skipReason?: string | null
   trucks?: { truckNumber: string; quantity: number }[]
   createdAt?: string
 }

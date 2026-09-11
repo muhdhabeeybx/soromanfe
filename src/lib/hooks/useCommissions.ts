@@ -99,3 +99,72 @@ export function useUpsertCommissionRate() {
     },
   })
 }
+
+/**
+ * Settle a commission without paying it.
+ *
+ * The second exit. Some orders carry no commission — a flat-rate deal, a
+ * correction, a facilitator paid another way — and before this those rows sat
+ * pending forever, so "pending" meant both "still to pay" and "never going to
+ * be" with no way to tell them apart.
+ *
+ * Nobody is credited. A reason is required by the server, because the row
+ * outlives everyone's memory of the order and "why was this not paid" is the
+ * only question it will ever be asked.
+ */
+export function useSkipCommission() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ commissionId, reason }: { commissionId: number; reason: string }) => {
+      const res = await api.patch(`/commissions/${commissionId}/skip`, { reason })
+      return res.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] })
+      queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
+      toast.success('Commission skipped — nobody was credited')
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+/**
+ * Confirm or skip a selection in one request.
+ *
+ * Partial success is a real outcome and is reported as one — confirming
+ * credits a wallet, so a batch that got halfway cannot be rolled back and must
+ * instead say how far it got.
+ */
+export function useBulkResolveCommissions() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ ids, action, reason }: {
+      ids: number[]
+      action: 'confirm' | 'skip'
+      reason?: string
+    }) => {
+      const res = await api.post('/commissions/bulk', { ids, action, reason })
+      return res.data as {
+        success: boolean
+        message: string
+        data: { done: number[]; failed: Array<{ id: number; message: string }> }
+      }
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] })
+      queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
+      // The server's own message already counts both sides, so it is used
+      // rather than reconstructed — and a partial result is a warning, not a
+      // success, because half of what was asked for did not happen.
+      if (res.data.failed.length) toast.error(res.message)
+      else toast.success(res.message)
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}

@@ -32,8 +32,12 @@ import {
   DialogDescription,
 } from '#/components/ui/dialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
-import { DollarSign, Search, X, RefreshCw, CheckCircle, Fuel, FileText, Download, Loader2, Banknote, Package } from 'lucide-react'
-import { useCommissions, useCommissionSummary, useConfirmCommissionPayment } from '#/lib/hooks/useCommissions'
+import { DollarSign, Search, X, RefreshCw, CheckCircle, Fuel, FileText, Download, Loader2, Banknote, Package, MinusCircle, Clock } from 'lucide-react'
+import {
+  useCommissions, useCommissionSummary, useConfirmCommissionPayment,
+  useSkipCommission, useBulkResolveCommissions,
+} from '#/lib/hooks/useCommissions'
+import { cn } from '#/lib/utils'
 import { useDepots } from '#/lib/hooks/useDepots'
 
 import { SummaryCards, type SummaryCard } from '#/components/SummaryCards'
@@ -120,9 +124,46 @@ function CommissionsTab() {
   const [customDateTo, setCustomDateTo] = useState('')
   const [page, setPage] = useState(1)
 
+  /**
+   * Which commissions to list.
+   *
+   * The page used to send status: 'pending' and nothing else, so a confirmed
+   * commission simply vanished and a skipped one would have had nowhere to be
+   * seen at all. Still opens on Pending — this is a work queue, and what is
+   * outstanding is the question it exists to answer — but the other two are
+   * now one select away rather than unreachable.
+   */
+  const [statusFilter, setStatusFilter] = useState<'pending' | 'paid' | 'skipped' | 'all'>('pending')
+
   // Confirm Commission dialog
   const [confirmTarget, setConfirmTarget] = useState<Commission | null>(null)
   const confirmMutation = useConfirmCommissionPayment()
+
+  /**
+   * Skipping: the second exit, for an order that carries no commission.
+   *
+   * A reason is taken here rather than assumed, because the server requires
+   * one and, more to the point, the row outlives everyone's memory of the
+   * order — "why was this not paid" is the only question it will ever be
+   * asked.
+   */
+  const [skipTarget, setSkipTarget] = useState<Commission | null>(null)
+  const [skipReason, setSkipReason] = useState('')
+  const skipMutation = useSkipCommission()
+
+  /**
+   * Selection, and what may be in it.
+   *
+   * Only pending rows can be ticked: a paid commission has already credited
+   * somebody and a skipped one has already been decided, so neither is
+   * something a bulk action could do anything with. Held by id rather than by
+   * row so a refetch, a page change or a filter cannot quietly re-point the
+   * selection at different commissions.
+   */
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [bulkAction, setBulkAction] = useState<'confirm' | 'skip' | null>(null)
+  const [bulkReason, setBulkReason] = useState('')
+  const bulkMutation = useBulkResolveCommissions()
 
   // Daily Report dialog
   const [showDailyReport, setShowDailyReport] = useState(false)
@@ -139,14 +180,14 @@ function CommissionsTab() {
   const queryParams = useMemo(
     () => ({
       search: searchQuery || undefined,
-      status: 'pending',
+      status: statusFilter,
       depotId: depotFilter !== 'all' ? depotFilter : undefined,
       dateFrom: dateRange.dateFrom || undefined,
       dateTo: dateRange.dateTo || undefined,
       page,
       limit: 50,
     }),
-    [searchQuery, depotFilter, dateRange, page]
+    [searchQuery, statusFilter, depotFilter, dateRange, page]
   )
 
   const { data, isLoading, isError, error, refetch } = useCommissions(queryParams)
@@ -158,6 +199,35 @@ function CommissionsTab() {
 
   const commissions = data?.commissions || []
   const pagination = data?.pagination
+
+  // What a bulk action can actually touch on this page.
+  const openRows = useMemo(() => commissions.filter((c) => c.status === 'pending'), [commissions])
+  const selectedRows = useMemo(
+    () => commissions.filter((c) => selectedIds.includes(c.id)),
+    [commissions, selectedIds],
+  )
+  const allOpenSelected = openRows.length > 0 && openRows.every((c) => selectedIds.includes(c.id))
+  const someOpenSelected = openRows.some((c) => selectedIds.includes(c.id))
+  const selectedTotal = selectedRows.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0)
+
+  const toggleOne = useCallback((id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }, [])
+
+  /**
+   * Select-all covers this page's open rows and nothing else.
+   *
+   * Not every open row in the filter: the desk can see what it is ticking, and
+   * a control that silently selected four hundred rows across pages it has not
+   * looked at is how a bulk confirm credits somebody by accident.
+   */
+  const toggleAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const ids = openRows.map((c) => c.id)
+      const every = ids.length > 0 && ids.every((id) => prev.includes(id))
+      return every ? prev.filter((id) => !ids.includes(id)) : [...new Set([...prev, ...ids])]
+    })
+  }, [openRows])
 
   const summaryCards: SummaryCard[] = useMemo(
     () => [
@@ -420,6 +490,23 @@ function CommissionsTab() {
         />
         </div>
         )}
+        {/* Pending first: this is a work queue, and what is still outstanding
+            is the question it exists to answer. The settled states are one
+            select away rather than unreachable, which is what they were. */}
+        <Select
+          value={statusFilter}
+          onValueChange={(v) => { setStatusFilter(v as typeof statusFilter); setSelectedIds([]); setPage(1) }}
+        >
+        <SelectTrigger className="h-8 w-36 text-xs">
+        <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+        <SelectItem value="pending">Pending</SelectItem>
+        <SelectItem value="paid">Paid</SelectItem>
+        <SelectItem value="skipped">Skipped</SelectItem>
+        <SelectItem value="all">All statuses</SelectItem>
+        </SelectContent>
+        </Select>
         {/* Depot Filter */}
         <Select value={depotFilter} onValueChange={(v) => { setDepotFilter(v); setPage(1) }}>
         <SelectTrigger className="h-8 w-40 text-xs">
@@ -469,108 +556,192 @@ function CommissionsTab() {
             </div>
           ) : (
             <>
+              {/* The bulk bar, and only while something is selected.
+                  A permanent toolbar of disabled buttons is noise on every
+                  page view; this appears the moment it has something to act
+                  on and says exactly what it would act on. */}
+              {selectedIds.length > 0 && (
+                <div className="flex flex-wrap items-center gap-3 border-b border-border bg-accent/5 px-4 py-3">
+                  <span className="text-sm font-semibold">
+                    {selectedIds.length} selected
+                    <span className="ml-2 font-mono font-normal text-muted-foreground">
+                      {formatNaira(selectedTotal)}
+                    </span>
+                  </span>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Button
+                      size="sm" variant="outline"
+                      className="gap-1.5 border-accent/40 text-accent hover:bg-accent/10 hover:text-accent"
+                      disabled={bulkMutation.isPending}
+                      onClick={() => setBulkAction('confirm')}
+                    >
+                      <CheckCircle className="size-3.5" />
+                      Confirm as paid
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="gap-1.5"
+                      disabled={bulkMutation.isPending}
+                      onClick={() => { setBulkAction('skip'); setBulkReason('') }}
+                    >
+                      <MinusCircle className="size-3.5" />
+                      Skip
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>
+                      <X className="size-3.5" />
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/50 text-xs uppercase font-semibold text-muted-foreground">
-                      <TableHead className="w-10 text-center">#</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Date</TableHead>
+                      {/* Selection first, and only over what can still be
+                          acted on — a page of already-settled rows offers
+                          nothing to tick, which is itself the answer. */}
+                      <TableHead className="w-10">
+                        <input
+                          type="checkbox"
+                          aria-label="Select every open commission on this page"
+                          className="size-4 cursor-pointer accent-accent align-middle"
+                          checked={allOpenSelected}
+                          ref={(el) => { if (el) el.indeterminate = someOpenSelected && !allOpenSelected }}
+                          disabled={openRows.length === 0}
+                          onChange={toggleAll}
+                        />
+                      </TableHead>
+                      <TableHead>Order</TableHead>
                       <TableHead>Facilitator</TableHead>
-                      <TableHead>Phone</TableHead>
                       <TableHead>Location</TableHead>
-                      <TableHead>Trucks</TableHead>
                       <TableHead className="text-right">Quantity</TableHead>
                       <TableHead className="text-right">Commission</TableHead>
-                      <TableHead>Commission Account</TableHead>
-                      <TableHead className="text-center">Action</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {commissions.map((c, idx) => (
-                      <TableRow key={c.id} className="hover:bg-muted/40 transition-colors duration-250 ease-luxe">
-                        <TableCell className="text-center text-xs text-muted-foreground font-mono">
-                          {(page - 1) * 50 + idx + 1}
-                        </TableCell>
-                        <TableCell>
-                          <span className="font-mono text-sm font-semibold text-primary">
-                            {c.orderNumber}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {c.orderCreatedAt ? new Date(c.orderCreatedAt).toLocaleDateString() : '—'}
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-semibold text-sm text-foreground">{c.customerName}</div>
-                          {c.customerCompanyName && (
-                            <div className="text-xs text-muted-foreground">{c.customerCompanyName}</div>
+                    {commissions.map((c) => {
+                      const open = c.status === 'pending'
+                      const selected = selectedIds.includes(c.id)
+                      return (
+                        <TableRow
+                          key={c.id}
+                          className={cn(
+                            'transition-colors duration-250 ease-luxe',
+                            selected ? 'bg-accent/5 hover:bg-accent/10' : 'hover:bg-muted/40',
+                            // A settled row is still worth reading — it is the
+                            // record of what was decided — but it should not
+                            // compete with the ones still needing a decision.
+                            !open && 'opacity-70',
                           )}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          <PhoneLink value={c.customerPhone} />
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {c.depotName}
-                          {c.depotCity && <div className="text-xs">{c.depotCity}</div>}
-                        </TableCell>
-                        <TableCell>
-                          {c.trucks && c.trucks.length > 0 ? (
-                            <div className="space-y-0.5">
-                              {c.trucks.map((t, ti) => (
-                                <div key={ti} className="text-xs font-mono">
-                                  <span className="font-semibold">{t.truckNumber || 'N/A'}</span>
-                                  <span className="text-muted-foreground ml-1">
-                                    {Number(t.quantity).toLocaleString()} L
-                                  </span>
-                                </div>
-                              ))}
+                        >
+                          <TableCell>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${c.orderNumber}`}
+                              className="size-4 cursor-pointer accent-accent align-middle disabled:cursor-not-allowed disabled:opacity-40"
+                              checked={selected}
+                              disabled={!open}
+                              onChange={() => toggleOne(c.id)}
+                            />
+                          </TableCell>
+
+                          {/* Order and date in one cell. They are read
+                              together — "which order, and when" — and cost two
+                              columns of width to say separately. */}
+                          <TableCell className="whitespace-nowrap">
+                            <div className="font-mono text-sm font-semibold text-primary">{c.orderNumber}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {c.orderCreatedAt ? new Date(c.orderCreatedAt).toLocaleDateString() : '—'}
                             </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground/50">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm font-semibold">
-                          {c.quantity.toLocaleString()} L
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="font-mono text-sm font-semibold text-foreground">
-                            {formatNaira(c.commissionAmount)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            ₦{c.commissionRate}/L
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {c.customerCommissionBankName ? (
-                            <div className="text-xs space-y-0.5">
-                              <div className="font-semibold">{c.customerCommissionBankName}</div>
-                              <div className="text-muted-foreground">{c.customerCommissionAccountName}</div>
-                              <div className="font-mono">{c.customerCommissionAccountNumber}</div>
+                          </TableCell>
+
+                          {/* Facilitator, company and phone folded together for
+                              the same reason: one person, three facts, one
+                              column. The phone stays a link. */}
+                          <TableCell className="max-w-[15rem]">
+                            <div className="truncate text-sm font-semibold text-foreground">{c.customerName}</div>
+                            {c.customerCompanyName && (
+                              <div className="truncate text-xs text-muted-foreground">{c.customerCompanyName}</div>
+                            )}
+                            {c.customerPhone && (
+                              <div className="text-xs text-muted-foreground"><PhoneLink value={c.customerPhone} /></div>
+                            )}
+                          </TableCell>
+
+                          <TableCell className="text-sm text-muted-foreground">
+                            <div className="whitespace-nowrap">{c.depotName}</div>
+                            {c.depotCity && <div className="text-xs">{c.depotCity}</div>}
+                          </TableCell>
+
+                          <TableCell className="text-right font-mono text-sm whitespace-nowrap">
+                            {c.quantity.toLocaleString()} L
+                          </TableCell>
+
+                          <TableCell className="text-right whitespace-nowrap">
+                            <div className="font-mono text-sm font-semibold text-foreground">
+                              {formatNaira(c.commissionAmount)}
                             </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground/50">Not set</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {c.status === 'pending' ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 px-2 text-accent hover:text-accent/80 hover:bg-accent/10 gap-1 text-xs"
-                              onClick={() => setConfirmTarget(c)}
-                            >
-                              <CheckCircle className="size-3.5" />
-                              Confirm Commission
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-accent flex items-center justify-center gap-1">
-                              <CheckCircle className="size-3.5" />
-                              Confirmed
-                            </span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                            <div className="text-xs text-muted-foreground">₦{c.commissionRate}/L</div>
+                          </TableCell>
+
+                          {/* Status carries its own explanation where it has
+                              one. A skipped row that cannot say why is a dead
+                              end somebody will have to go and ask about. */}
+                          <TableCell>
+                            {c.status === 'paid' ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+                                <CheckCircle className="size-3" /> Paid
+                              </span>
+                            ) : c.status === 'skipped' ? (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
+                                title={c.skipReason || 'Skipped'}
+                              >
+                                <MinusCircle className="size-3" /> Skipped
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning">
+                                <Clock className="size-3" /> Pending
+                              </span>
+                            )}
+                            {c.status === 'skipped' && c.skipReason && (
+                              <div className="mt-0.5 max-w-[12rem] truncate text-xs text-muted-foreground/80">
+                                {c.skipReason}
+                              </div>
+                            )}
+                          </TableCell>
+
+                          <TableCell className="text-right">
+                            {open ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost" size="sm"
+                                  className="h-8 gap-1 px-2 text-xs text-accent hover:bg-accent/10 hover:text-accent"
+                                  onClick={() => setConfirmTarget(c)}
+                                >
+                                  <CheckCircle className="size-3.5" />
+                                  Paid
+                                </Button>
+                                <Button
+                                  variant="ghost" size="sm"
+                                  className="h-8 gap-1 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                                  onClick={() => { setSkipTarget(c); setSkipReason('') }}
+                                >
+                                  <MinusCircle className="size-3.5" />
+                                  Skip
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/60">—</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -624,6 +795,91 @@ function CommissionsTab() {
         onConfirm={handleConfirmCommission}
         loading={confirmMutation.isPending}
       />
+
+      {/* Skipping one. Nobody is credited, so the dialog leads with that
+          rather than with the amount — the amount is the thing NOT happening. */}
+      <ConfirmDialog
+        open={!!skipTarget}
+        onOpenChange={(open) => { if (!open) { setSkipTarget(null); setSkipReason('') } }}
+        title={skipTarget ? `Skip commission on ${skipTarget.orderNumber}?` : ''}
+        description={
+          skipTarget
+            ? `No commission will be paid on this order and nobody is credited. ${formatNaira(skipTarget.commissionAmount)} stays where it is. The row moves out of Pending and can be found under Skipped.`
+            : ''
+        }
+        confirmLabel="Skip this order"
+        loading={skipMutation.isPending}
+        onConfirm={async () => {
+          if (!skipTarget || skipReason.trim().length < 3) return
+          await skipMutation.mutateAsync({ commissionId: skipTarget.id, reason: skipReason.trim() })
+          setSelectedIds((prev) => prev.filter((id) => id !== skipTarget.id))
+          setSkipTarget(null)
+          setSkipReason('')
+        }}
+      >
+        <div className="space-y-1.5">
+          <Label className="text-xs">Why (required)</Label>
+          <Input
+            autoFocus
+            value={skipReason}
+            onChange={(e) => setSkipReason(e.target.value)}
+            placeholder="e.g. flat-rate deal, no commission agreed"
+          />
+          {skipReason.trim().length > 0 && skipReason.trim().length < 3 && (
+            <p className="text-xs text-destructive">Give a reason somebody can read later.</p>
+          )}
+        </div>
+      </ConfirmDialog>
+
+      {/* Skipping or confirming a selection. One dialog, because from the
+          desk's point of view they are the same act over the same rows — and
+          only the skip needs a reason. */}
+      <ConfirmDialog
+        open={bulkAction !== null}
+        onOpenChange={(open) => { if (!open) { setBulkAction(null); setBulkReason('') } }}
+        title={
+          bulkAction === 'skip'
+            ? `Skip ${selectedIds.length} commission${selectedIds.length === 1 ? '' : 's'}?`
+            : `Confirm ${selectedIds.length} commission${selectedIds.length === 1 ? '' : 's'} as paid?`
+        }
+        description={
+          bulkAction === 'skip'
+            ? `No commission is paid on ${selectedIds.length === 1 ? 'this order' : 'these orders'} and nobody is credited. ${formatNaira(selectedTotal)} stays where it is.`
+            : `${formatNaira(selectedTotal)} will be credited across ${selectedIds.length} customer account${selectedIds.length === 1 ? '' : 's'}. Each is credited on its own, so if one fails the rest still go through and you will be told which did not.`
+        }
+        confirmLabel={bulkAction === 'skip' ? 'Skip them' : 'Confirm & credit'}
+        loading={bulkMutation.isPending}
+        onConfirm={async () => {
+          if (!bulkAction) return
+          if (bulkAction === 'skip' && bulkReason.trim().length < 3) return
+          const res = await bulkMutation.mutateAsync({
+            ids: selectedIds,
+            action: bulkAction,
+            reason: bulkAction === 'skip' ? bulkReason.trim() : undefined,
+          })
+          // Anything that failed stays selected, so a retry acts on exactly
+          // what did not go rather than on the whole batch again.
+          const failed = new Set((res.data?.failed || []).map((f) => f.id))
+          setSelectedIds((prev) => prev.filter((id) => failed.has(id)))
+          setBulkAction(null)
+          setBulkReason('')
+        }}
+      >
+        {bulkAction === 'skip' && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Why (required)</Label>
+            <Input
+              autoFocus
+              value={bulkReason}
+              onChange={(e) => setBulkReason(e.target.value)}
+              placeholder="e.g. flat-rate deal, no commission agreed"
+            />
+            <p className="text-xs text-muted-foreground">
+              The same reason is recorded on all {selectedIds.length}.
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
 
       {/* Daily Report Dialog */}
       <DailyReportDialog
