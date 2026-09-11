@@ -309,32 +309,55 @@ function CommissionsTab() {
     })
   }, [openRows])
 
-  const summaryCards: SummaryCard[] = useMemo(
-    () => [
+  /**
+   * The cards total exactly the rows on screen.
+   *
+   * They used to come from a separate summary endpoint that knew only the
+   * depot and the date range — so filtering to one PFI, or to Paid, or typing
+   * a search moved the table and left the cards stating the old figures. Three
+   * numbers that confidently disagreed with the list directly beneath them.
+   *
+   * Summed from `commissions` instead, which IS what the table renders, so
+   * they cannot drift apart: every filter the page offers is already applied
+   * by the time it gets here. The page loading its whole filtered set
+   * unpaginated is what makes this a total and not a page subtotal.
+   */
+  const summaryCards: SummaryCard[] = useMemo(() => {
+    const litres = commissions.reduce((sum, c) => sum + Number(c.quantity || 0), 0)
+    const amount = commissions.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0)
+
+    // The third card's subtitle follows the status filter: on a Paid view
+    // "to be credited" is simply untrue, and on a mixed view neither word is.
+    const amountNote =
+      statusFilter === 'paid' ? 'Already credited to facilitators'
+        : statusFilter === 'skipped' ? 'Not paid — these orders were skipped'
+          : statusFilter === 'pending' ? 'To be credited to facilitators'
+            : 'Across every status shown'
+
+    return [
       {
-        title: 'Eligible Orders',
-        value: String(summary?.totalOrders || 0),
-        description: 'Orders with commission',
+        title: 'Orders shown',
+        value: commissions.length.toLocaleString(),
+        description: pfiFilter !== 'all' ? `On ${pfiFilter}` : 'Matching the filters above',
         icon: <Package className="size-5" />,
         tone: 'blue',
       },
       {
-        title: 'Total Quantity Loaded',
-        value: `${(summary?.totalQuantity || 0).toLocaleString()} L`,
-        description: 'Litres across all orders',
+        title: 'Total quantity',
+        value: `${litres.toLocaleString()} Litres`,
+        description: 'Across the orders shown',
         icon: <Fuel className="size-5" />,
         tone: 'neutral',
       },
       {
-        title: 'Total Commission',
-        value: formatNaira(summary?.pendingAmount || 0),
-        description: 'To be credited to facilitators',
+        title: 'Total commission',
+        value: formatNaira(amount),
+        description: amountNote,
         icon: <Banknote className="size-5" />,
         tone: 'amber',
       },
-    ],
-    [summary]
-  )
+    ]
+  }, [commissions, statusFilter, pfiFilter])
 
   const handleConfirmCommission = useCallback(async () => {
     if (!confirmTarget) return
@@ -371,15 +394,22 @@ function CommissionsTab() {
       dateRange.dateTo ? `To: ${dateRange.dateTo}` : '',
     ].filter(Boolean).join(' | ') || 'All Time'
 
-    // Summary
+    /**
+     * Totalled from the rows being exported, not from the summary endpoint.
+     *
+     * The file lists exactly what the filters left on screen, so its header
+     * has to total exactly that. It used to head a PFI-filtered, status-
+     * filtered export with the depot-and-date figures, which is a document
+     * disagreeing with itself on page one.
+     */
     sheet.getCell('A6').value = 'Summary'
     sheet.getCell('A6').font = { bold: true, size: 12 }
-    sheet.getCell('A7').value = 'Total Orders'
-    sheet.getCell('B7').value = summary?.totalOrders || 0
-    sheet.getCell('A8').value = 'Total Quantity (L)'
-    sheet.getCell('B8').value = summary?.totalQuantity || 0
+    sheet.getCell('A7').value = 'Orders'
+    sheet.getCell('B7').value = commissions.length
+    sheet.getCell('A8').value = 'Total Quantity (Litres)'
+    sheet.getCell('B8').value = commissions.reduce((sum, c) => sum + Number(c.quantity || 0), 0)
     sheet.getCell('A9').value = 'Total Commission'
-    sheet.getCell('B9').value = formatNaira(summary?.pendingAmount || 0)
+    sheet.getCell('B9').value = formatNaira(commissions.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0))
 
     // Table headers
     const headers = ['#', 'Reference', 'Date', 'Facilitator', 'Phone', 'Location', 'Quantity (L)', 'Rate (₦/L)', 'Commission (₦)']
@@ -457,9 +487,10 @@ function CommissionsTab() {
     doc.text('Summary', 14, 32)
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
-    doc.text(`Total Orders: ${summary?.totalOrders || 0}`, 14, 39)
-    doc.text(`Total Quantity: ${(summary?.totalQuantity || 0).toLocaleString()} L`, 14, 45)
-    doc.text(`Total Commission: ${formatNaira(summary?.pendingAmount || 0)}`, 100, 39)
+    // The rows being printed, totalled — see the workbook's copy of this note.
+    doc.text(`Orders: ${commissions.length}`, 14, 39)
+    doc.text(`Total Quantity: ${commissions.reduce((sum, c) => sum + Number(c.quantity || 0), 0).toLocaleString()} Litres`, 14, 45)
+    doc.text(`Total Commission: ${formatNaira(commissions.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0))}`, 100, 39)
 
     // Table
     autoTable(doc, {
