@@ -792,8 +792,12 @@ function FinanceReportPage() {
     if (!rows.length) return
     setExporting(kind)
     try {
-      if (kind === 'excel') await exportFinanceReportExcel(rows, summary, exportFilters, pfiStock, customerDifferentials)
-      else await exportFinanceReportPdf(rows, summary, exportFilters, pfiStock, customerDifferentials)
+      // The all-time customer block is a screen-only section: it describes a
+      // different span from everything else in the file, and an all-time
+      // figure inside a document headed with a period is how a reader ends up
+      // believing a customer overpaid that much today.
+      if (kind === 'excel') await exportFinanceReportExcel(rows, summary, exportFilters, pfiStock)
+      else await exportFinanceReportPdf(rows, summary, exportFilters, pfiStock)
     } finally {
       setExporting(null)
     }
@@ -984,31 +988,13 @@ function FinanceReportPage() {
           <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
 
           {/*
-            One card per money column, each named after the column it foots.
+            One net figure, and it is the balance.
 
-            There was a single "Net differential" here, and once the table
-            split into Differential and Balance it was footing neither
-            unambiguously — it summed one column while carrying a name a
-            reader would attach to either. Two cards, two names, and each ties
-            to the column above it.
-
-            Net balance is the one to read for "where do we stand": it is
-            after the transfers, so it is the position the desk actually
-            holds. Net differential is the reconciliation figure — what the
-            bank paid against what was billed, before any money moved.
+            The differential has a column of its own two cells along; what the
+            summary is for is "where does the book stand", and that is after
+            the transfers. A second card footing the earlier column was a
+            figure to reconcile against the first rather than an answer.
           */}
-          <SummaryItem
-            icon={Scale}
-            label="Net differential"
-            value={naira(Math.abs(summary.totalDifferential))}
-            tone={
-              Math.abs(summary.totalDifferential) < 0.005
-                ? 'plain'
-                : summary.totalDifferential > 0
-                  ? 'owed'
-                  : 'over'
-            }
-          />
           <SummaryItem
             icon={Scale}
             label="Net balance"
