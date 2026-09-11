@@ -62,9 +62,24 @@ const NGN_SIGNED_PLAIN = '+₦#,##0.00;-₦#,##0.00;₦0.00'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function paintOwed(cell: any, value: number, key?: string) {
+  /**
+   * Transfers read by DIRECTION, which is the opposite mapping to everything
+   * else on this report.
+   *
+   * On the differential a positive number is money still owed, so positive is
+   * red. On a transfer a negative number is money that left the order, and
+   * that is the one to see in red — so the rule inverts. Both are "red is the
+   * bad direction for this order", which is why they look consistent on the
+   * page while the sign test is reversed.
+   *
+   * This replaces the single blue both legs used to take. Blue said a movement
+   * between two orders is neither a gain nor a loss, which is true of the
+   * business and not the question the reader is asking: they are looking at
+   * one order, and on it the money either came or went.
+   */
   const ink =
     key === 'transfers'
-      ? (Math.abs(value) < 0.005 ? null : XL.internal)
+      ? (Math.abs(value) < 0.005 ? null : value < 0 ? XL.loss : XL.gain)
       : value > 0.005
         ? XL.loss
         : value < -0.005
@@ -236,13 +251,17 @@ const COLUMNS: Array<{
    * and showed a ₦54,450,000 shortfall. There is one gap now and it is this
    * one; Balance is gone because it was already this subtraction.
    */
-  { header: 'Differential', key: 'differential', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
   /**
    * Movement between orders, on its own. Negative where money left, positive
    * where it landed, so it nets to zero across a window holding both ends —
    * and the sub-row beneath names the order at the other end.
+   *
+   * Before the differential, because it is one of the things the differential
+   * is made of. Reading left to right now follows the arithmetic: what the
+   * bank paid in, what moved between orders, and what is left over.
    */
   { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED_PLAIN, scope: 'funding', signed: true },
+  { header: 'Differential', key: 'differential', width: 16, fmt: NGN_PLAIN, scope: 'order', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -571,7 +590,13 @@ export function writeFinanceTable(
         cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
         if (internal) cell.font = { color: { argb: XL.internal } }
         if (c.key === 'amount') cell.numFmt = NGN
-        if (c.key === 'transfers') cell.numFmt = NGN_SIGNED_PLAIN
+        if (c.key === 'transfers') {
+          cell.numFmt = NGN_SIGNED_PLAIN
+          // Direction beats the row tint: the rest of a movement row reads
+          // blue, the figure itself reads red out / green in.
+          const v = (subRow.getCell('transfers').value as number) ?? 0
+          if (typeof v === 'number') paintOwed(cell, v, 'transfers')
+        }
       }
       if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
@@ -1111,7 +1136,7 @@ export async function exportFinanceReportPdf(
       if (data.column.index !== 1 || row.signed == null) return
       if (Math.abs(row.signed) < 0.005) return
       data.cell.styles.textColor = row.transfer
-        ? PDF.internal
+        ? (row.signed < 0 ? PDF.loss : PDF.gain)
         : row.signed > 0 ? PDF.loss : PDF.gain
     },
   })
@@ -1380,8 +1405,13 @@ export async function exportFinanceReportPdf(
           : signedAt[data.row.index]
       const value = signed?.[data.column.index]
       if (typeof value === 'number' && Math.abs(value) >= 0.005) {
+        // Transfers colour by direction — out red, in green — which inverts
+        // the differential's rule. See paintOwed for why both read as "red is
+        // the bad direction for this order" despite the opposite sign test.
         data.cell.styles.textColor =
-          data.column.index === transfersCol ? PDF.internal : value > 0 ? PDF.loss : PDF.gain
+          data.column.index === transfersCol
+            ? (value < 0 ? PDF.loss : PDF.gain)
+            : value > 0 ? PDF.loss : PDF.gain
       }
     },
     /**

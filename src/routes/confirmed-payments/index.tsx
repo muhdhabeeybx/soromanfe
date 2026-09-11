@@ -211,7 +211,10 @@ function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?
               receipts and take no sign — a "+" on every line would stop
               meaning anything, and the two the report needs to tell apart are
               the two directions of a movement. */}
-          <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
+          <span className={cn(
+            'text-sm font-semibold',
+            transfer && (payment.amount < 0 ? 'text-destructive' : 'text-accent'),
+          )}>
             {transfer ? (payment.amount < 0 ? '−' : '+') : ''}{naira(Math.abs(payment.amount))}
           </span>
           {/*
@@ -1252,8 +1255,25 @@ function FinanceReportPage() {
                            * the same way, and the Depositor column beside it
                            * already names the order at the other end.
                            */
+                          /**
+                           * Signed with a + or a −, and coloured by direction:
+                           * money leaving the order is red, money arriving is
+                           * green.
+                           *
+                           * This replaces the blue both legs used to share. The
+                           * reasoning for blue was that a movement between two
+                           * orders is neither a gain nor a loss to the business
+                           * — true of the business, and not what the person
+                           * reading a row is asking. They are looking at one
+                           * order, and on that order the money either came or
+                           * went, which is exactly what red and green say
+                           * everywhere else on this report.
+                           */
                           transfers: internal ? (
-                            <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
+                            <span className={cn(
+                              'whitespace-nowrap font-semibold',
+                              p.amount < 0 ? TONE_CLASS.owed : TONE_CLASS.over,
+                            )}>
                               {p.amount < 0 ? '−' : '+'}{naira(Math.abs(p.amount))}
                             </span>
                           ) : null,
