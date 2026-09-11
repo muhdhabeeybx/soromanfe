@@ -206,25 +206,39 @@ function PaymentCard({ payment, onUnmatch }: { payment: OrderPayment; onUnmatch?
                 : 'Bank statement match'}
         </Badge>
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* Signed, so an outgoing leg says so in the character everyone
+              reads the same way rather than in accountant's brackets. */}
           <span className={cn('text-sm font-semibold', payment.amount < 0 && 'text-info')}>
-            {payment.amount < 0 ? `(${naira(Math.abs(payment.amount))})` : naira(payment.amount)}
+            {payment.amount < 0 ? '−' : ''}{naira(Math.abs(payment.amount))}
           </span>
           {/*
             Undoing lives here rather than on the report row itself: the table
             is scanned all day and a destructive control sitting in it is more
-            hazard than help. What the bin undoes depends on the row — a bank
-            row is unmatched and its line returns to the pool; a movement is
-            reversed whole, both legs at once, so its two halves cannot come
-            apart. A legacy row has neither, so it gets no bin.
+            hazard than help.
+
+            What the bin undoes depends on the row. A bank row is unmatched and
+            its line goes back to the pool. A movement is reversed whole, both
+            legs at once, so its halves cannot come apart. And a wallet row is
+            deleted outright — there is no line to return and no other leg,
+            because the money it claims never had a bank record in the first
+            place.
+
+            That last case used to have no bin at all, on the reasoning that a
+            legacy row had nothing to undo. But it is a figure holding an order
+            up: the wallet path is gone, and an order reading as overpaid on
+            the strength of a wallet entry nobody can trace is exactly the row
+            somebody needs to be able to take off.
           */}
-          {onUnmatch && (transfer ? payment.transferId != null : payment.statementLineId != null) && (
+          {onUnmatch && (transfer ? payment.transferId != null : true) && (
             <Button
               type="button" variant="ghost" size="icon"
               className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-              aria-label={transfer ? 'Reverse this transfer' : 'Unmatch this payment'}
+              aria-label={transfer ? 'Reverse this transfer' : legacy ? 'Remove this wallet entry' : 'Unmatch this payment'}
               title={transfer
                 ? 'Reverse — takes the surplus back to where it came from'
-                : 'Unmatch — returns the bank line to the pool'}
+                : legacy
+                  ? 'Remove — deletes this wallet entry and recalculates the order'
+                  : 'Unmatch — returns the bank line to the pool'}
               onClick={onUnmatch}
             >
               <Trash2 className="size-4" />
@@ -554,6 +568,14 @@ function FinanceReportPage() {
   const reverseTransfer = useReverseOrderTransfer()
   /** True when the bin was pressed on a movement rather than a bank row. */
   const undoingTransfer = unmatching != null && isTransferLeg(unmatching.payment)
+  /**
+   * A wallet row: no bank line to return to any pool, and no second leg.
+   *
+   * Removing one is a plain deletion, and the dialog has to say that rather
+   * than promising a line will be waiting in the unmatched pool afterwards —
+   * there was never a line.
+   */
+  const removingWallet = unmatching != null && !undoingTransfer && isUnreconciled(unmatching.payment)
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null)
 
   // A range, not a day. resolveRange already understood `to` — only the UI
@@ -1104,7 +1126,18 @@ function FinanceReportPage() {
                     // direction, here and in both exports.
                     differential: (() => {
                       const d = orderDifferential(o)
-                      if (Math.abs(d) < 0.005) return <span className="text-muted-foreground">—</span>
+                      /**
+                       * Zero is printed as zero.
+                       *
+                       * A dash says "nothing to report here", and on the one
+                       * column that measures whether an order is settled that
+                       * is not the same statement as "this order is square".
+                       * A reader checking a day's trading wants to see the
+                       * zero and tick it off, not infer it from an absence.
+                       */
+                      if (Math.abs(d) < 0.005) {
+                        return <span className="whitespace-nowrap text-muted-foreground">{naira(0)}</span>
+                      }
                       return (
                         <span className={cn('whitespace-nowrap font-semibold', d > 0 ? 'text-destructive' : 'text-accent')}>
                           {naira(Math.abs(d))}
@@ -1187,9 +1220,21 @@ function FinanceReportPage() {
                           amount: internal ? null : (
                             <span className="whitespace-nowrap font-semibold">{naira(p.amount)}</span>
                           ),
+                          /**
+                           * Signed with a + or a −, not bracketed.
+                           *
+                           * Brackets are the accountant's minus and are read
+                           * as one by accountants; on a report scanned by the
+                           * desk they were read as a note. Which way the money
+                           * went is the whole question a transfer row answers
+                           * — money in from another order, or money out to one
+                           * — so it is said in the character everybody reads
+                           * the same way, and the Depositor column beside it
+                           * already names the order at the other end.
+                           */
                           transfers: internal ? (
                             <span className={cn('whitespace-nowrap font-semibold', TONE_CLASS.internal)}>
-                              {p.amount < 0 ? `(${naira(Math.abs(p.amount))})` : naira(p.amount)}
+                              {p.amount < 0 ? '−' : '+'}{naira(Math.abs(p.amount))}
                             </span>
                           ) : null,
                           recordedBy: <span className="block max-w-[10rem] truncate">{paymentRecorder(p) || '—'}</span>,
@@ -1381,7 +1426,9 @@ function FinanceReportPage() {
             <DialogTitle>
               {undoingTransfer
                 ? `Reverse this transfer on ${unmatching?.order.reference}?`
-                : `Unmatch this payment from ${unmatching?.order.reference}?`}
+                : removingWallet
+                  ? `Remove this wallet entry from ${unmatching?.order.reference}?`
+                  : `Unmatch this payment from ${unmatching?.order.reference}?`}
             </DialogTitle>
             <DialogDescription>
               {unmatching && (undoingTransfer ? (
@@ -1411,6 +1458,16 @@ function FinanceReportPage() {
                   {unmatching?.payment.counterpartOrderRef || 'the other order'} is relying
                   on this money to cover its own value, the reversal will be refused
                   rather than leaving it short.
+                </>
+              ) : removingWallet ? (
+                <>
+                  This entry has no bank record behind it — it was written before
+                  payments were kept against orders, by the wallet path that no longer
+                  exists. Removing it deletes it outright: there is no statement line to
+                  return to the pool and no second leg to move with it. The order is
+                  recalculated without it, so an order reading as overpaid on the
+                  strength of this entry will settle back to what the bank can actually
+                  account for.
                 </>
               ) : (
                 <>
@@ -1444,7 +1501,11 @@ function FinanceReportPage() {
                 autoFocus
                 value={unmatchReason}
                 onChange={(e) => setUnmatchReason(e.target.value)}
-                placeholder={undoingTransfer ? 'Moved to the wrong order' : 'Matched to the wrong order'}
+                placeholder={
+                  undoingTransfer ? 'Moved to the wrong order'
+                    : removingWallet ? 'No bank record supports this entry'
+                      : 'Matched to the wrong order'
+                }
                 onKeyDown={(e) => { if (e.key === 'Enter' && unmatchReason.trim().length >= 3) e.currentTarget.blur() }}
               />
             </div>
@@ -1486,7 +1547,9 @@ function FinanceReportPage() {
               {(removePayment.isPending || reverseTransfer.isPending) && (
                 <Loader2 className="mr-1.5 size-4 animate-spin" />
               )}
-              {undoingTransfer ? 'Reverse transfer' : 'Unmatch and return to pool'}
+              {undoingTransfer ? 'Reverse transfer'
+                : removingWallet ? 'Remove wallet entry'
+                  : 'Unmatch and return to pool'}
             </Button>
           </DialogFooter>
         </DialogContent>

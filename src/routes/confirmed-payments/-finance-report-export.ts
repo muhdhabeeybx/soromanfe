@@ -45,6 +45,20 @@ import {
  */
 const NGN_PLAIN = '₦#,##0.00;₦#,##0.00;₦0.00'
 
+/**
+ * The same money, with the direction kept.
+ *
+ * For the Transferred column only. NGN_PLAIN deliberately drops the sign
+ * because colour carries it — right for a differential, where the question is
+ * how much is owed and red already says which way. On a transfer the
+ * direction IS the fact: in from another order, or out to one. A workbook is
+ * also read printed and re-sorted, where the colour is gone and the row's
+ * neighbours are not the ones it was filed next to, so the sign has to be in
+ * the cell. No brackets — an accountant reads them as a minus and everybody
+ * else reads them as a footnote.
+ */
+const NGN_SIGNED_PLAIN = '+₦#,##0.00;-₦#,##0.00;₦0.00'
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function paintOwed(cell: any, value: number, key?: string) {
@@ -228,7 +242,7 @@ const COLUMNS: Array<{
    * where it landed, so it nets to zero across a window holding both ends —
    * and the sub-row beneath names the order at the other end.
    */
-  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_PLAIN, scope: 'funding', signed: true },
+  { header: 'Transferred', key: 'transfers', width: 18, fmt: NGN_SIGNED_PLAIN, scope: 'funding', signed: true },
   { header: 'Paid Into', key: 'paidInto', width: 38, scope: 'order' },
   { header: 'Recorded By', key: 'recordedBy', width: 18, scope: 'funding' },
 ]
@@ -447,7 +461,7 @@ function summaryColumns(
      * by exactly the transfers. On screen the table has no totals row, so
      * there is nothing to reconcile and the summary stays at nine items.
      */
-    { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_PLAIN, signed: true },
+    { header: 'Of Which Transferred', value: summary.totalTransferred, fmt: NGN_SIGNED_PLAIN, signed: true },
     { header: 'Total Differential', value: summary.totalDifferential, fmt: NGN_PLAIN, signed: true },
   ]
   // The same two words the screen uses. Both only exist when a PFI is
@@ -544,7 +558,7 @@ export function writeFinanceTable(
         cell.fill = internal ? { type: 'pattern', pattern: 'solid', fgColor: { argb: XL.internalTint } } : SUBROW_FILL
         if (internal) cell.font = { color: { argb: XL.internal } }
         if (c.key === 'amount') cell.numFmt = NGN
-        if (c.key === 'transfers') cell.numFmt = NGN_PLAIN
+        if (c.key === 'transfers') cell.numFmt = NGN_SIGNED_PLAIN
       }
       if (subRow.getCell('depositDate').value) subRow.getCell('depositDate').numFmt = DATE_FMT
       cursor++
@@ -943,9 +957,19 @@ export async function exportFinanceReportPdf(
    * construction, so they stay on pdfNaira.
    */
   const plain = (n: number) => pdfNaira(Math.abs(n))
+  /**
+   * A transfer keeps its direction, here as on screen and in the workbook.
+   * Which way the money went is the fact the row exists to state.
+   */
+  const signed = (n: number) =>
+    // ASCII + and -, not the typographic minus the screen uses: Satoshi is
+    // already missing the naira glyph (see applySatoshi), and a sign that
+    // renders as a box would be worse than no sign at all.
+    Math.abs(n) < 0.005 ? pdfNaira(0) : `${n < 0 ? '-' : '+'}${pdfNaira(Math.abs(n))}`
   const displayValue = (c: { value: string | number; fmt?: string }) => {
     if (typeof c.value !== 'number') return c.value
     if (c.fmt === NGN) return naira(c.value)
+    if (c.fmt === NGN_SIGNED_PLAIN) return signed(c.value)
     if (c.fmt === NGN_PLAIN) return plain(c.value)
     if (c.fmt === QTY) return `${c.value.toLocaleString()} L`
     return c.value.toLocaleString()
@@ -1158,7 +1182,9 @@ export async function exportFinanceReportPdf(
       qtyBlock: '',
       rate: naira(v.rate),
       salesValue: naira(v.salesValue),
-      differential: Math.abs(v.differential) < 0.005 ? '—' : plain(v.differential),
+      // Zero printed as zero: on the column that says whether an order is
+      // settled, a dash reads as "no data" and not as "square".
+      differential: plain(v.differential),
     })
     // cellsFor() only fills the columns of the scope it was asked for, so the
     // legacy amount — which lives in two funding-scope columns but belongs on
@@ -1187,7 +1213,7 @@ export async function exportFinanceReportPdf(
           depositor: pv.depositor,
           depositRef: pv.depositRef,
           amount: pv.amount == null ? '' : naira(pv.amount),
-          transfers: pv.transfers == null ? '' : plain(pv.transfers),
+          transfers: pv.transfers == null ? '' : signed(pv.transfers),
         }),
       )
       if (pv.transfers != null) signedAt[body.length - 1] = { [transfersCol]: pv.transfers }
@@ -1206,7 +1232,7 @@ export async function exportFinanceReportPdf(
   footAt('salesValue', naira(summary.totalSalesValue))
   footAt('amount', naira(summary.totalBankPaid))
   footAt('differential', plain(summary.totalDifferential))
-  footAt('transfers', plain(summary.totalTransferred))
+  footAt('transfers', signed(summary.totalTransferred))
 
   const refColumnIndex = PDF_COLUMNS.findIndex((c) => c.key === 'ref')
   const depositRefIndex = PDF_COLUMNS.findIndex((c) => c.key === 'depositRef')
