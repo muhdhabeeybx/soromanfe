@@ -4,7 +4,11 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   Search, Plus, Package, Banknote, Droplets, TriangleAlert,
   ArrowUpDown, Lock, Pencil, Download, X, TrendingUp, TrendingDown,
-  FileSpreadsheet, Gauge, Play, Trash2,
+  FileSpreadsheet, Gauge, Play,
+  // Used only by the Delete control in the card footer, which is commented
+  // out. Kept so restoring it stays a one-block uncomment.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  Trash2,
 } from 'lucide-react'
 
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
@@ -155,7 +159,10 @@ function PFIDashboard() {
   const deletePfi = useDeletePfi()
   // The same gate the delivery register puts on deleting a batch. Deleting a
   // PFI takes its movements, its allowed locations and its expense categories
-  // with it, and there is no undo.
+  // with it, and there is no undo. Read only by the commented-out Delete
+  // control in the card footer; kept live so the gate cannot rot while the
+  // button is off.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { isSuperAdmin: canDelete } = useRoles()
   const startPfi = useStartPfi()
 
@@ -850,12 +857,21 @@ function PFIDashboard() {
                       <FileSpreadsheet data-icon="inline-start" />
                       Report
                     </Button>
-                    {/* Last, and the only control here that destroys
-                        anything. Offered on every batch and refused by the
-                        server where it must be, rather than hidden: "why can I
-                        not delete this" is a question worth an answer, and a
-                        missing button answers nothing. */}
-                    {canDelete && (
+                    {/*
+                      Delete, commented out — the same call the finance report
+                      made about its own delete column.
+
+                      The whole path behind it is live and wired: the gate, the
+                      dialog that says what cascades and what is left
+                      orphaned, and the server check that refuses any batch an
+                      order still points at. What is not settled is whether a
+                      control that destroys a batch belongs on a card people
+                      scan all day, next to Edit and Report. Restoring it is
+                      uncommenting this block and nothing else; the state,
+                      the mutation and the dialog below all stay in place so
+                      they cannot rot while it is off.
+                    */}
+                    {/* {canDelete && (
                       <Button
                         variant="outline" size="sm"
                         className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -864,7 +880,7 @@ function PFIDashboard() {
                         <Trash2 data-icon="inline-start" />
                         Delete
                       </Button>
-                    )}
+                    )} */}
                   </div>
                 </div>
               )
