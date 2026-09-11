@@ -16,12 +16,13 @@ import {
   Truck, Wallet, TrendingUp, Banknote, MapPin, Users,
   Filter, Tag, Receipt, ArrowRightLeft, ChevronRight, ChevronDown,
   Calendar as CalendarIcon, X, Eye, Loader2, FileSpreadsheet, FileText,
+  CheckCircle2, RotateCcw, AlertTriangle,
 } from 'lucide-react'
 import {
   format, parseISO, startOfDay, endOfDay, startOfWeek, endOfWeek,
   startOfMonth, endOfMonth, startOfYear, endOfYear, subDays, isWithinInterval,
 } from 'date-fns'
-import { useFilingStations } from '#/lib/hooks/useFilingStations'
+import { useFilingStations, useStationCycleStatuses, useSetStationCycleStatus } from '#/lib/hooks/useFilingStations'
 import { useDeliveryCustomerList } from '#/lib/hooks/useDeliveryCustomers'
 import { useDeliverySalesList, useCreateDeliverySale, useUpdateDeliverySale, useDeleteDeliverySale, useSetDepositStatus } from '#/lib/hooks/useDeliverySales'
 import { useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryInventory } from '#/lib/hooks/useDeliveryInventory'
@@ -187,6 +188,17 @@ interface LedgerGroup {
   collectionAccounts: AccountEntry[]
   remittanceAccounts: AccountEntry[]
   cycleNum?: number
+  /**
+   * Closed, or still running.
+   *
+   * A cycle has no row of its own — it is a loading with the sales that answer
+   * to it — so this comes from delivery_cycle_closures, keyed by `key` above,
+   * and a cycle with no entry there is active. Closing says the desk is
+   * finished with it and touches nothing else. See migration 0029.
+   */
+  status: 'active' | 'completed'
+  closedAt: string | null
+  closedBy: string
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -293,6 +305,15 @@ function FilingStationsDashboard() {
   const { data: customerListRes, isLoading: isLoadingDeliveryCusts } = useDeliveryCustomerList({ type: 'filling_station' })
   const { data: allSales = [], isLoading: isLoadingSales } = useDeliverySalesList()
   const { data: allLoadings = [], isLoading: isLoadingInventory } = useDeliveryInventoryList()
+  const { data: cycleStatuses } = useStationCycleStatuses()
+  const setCycleStatus = useSetStationCycleStatus()
+  /** The cycle a close or reopen has been asked for, awaiting confirmation. */
+  const [closingCycle, setClosingCycle] = useState<LedgerGroup | null>(null)
+  /**
+   * Open cycles or closed ones. Defaults to open: this register is a list of
+   * what is still owed and still selling, and a finished cycle is history.
+   */
+  const [cycleStatusFilter, setCycleStatusFilter] = useState<'active' | 'completed' | 'all'>('active')
 
   const deliveryCustomers = useMemo(() => {
     if (!customerListRes) return []
@@ -446,7 +467,10 @@ function FilingStationsDashboard() {
 
   // ── Build Ledger Groups ────────────────────────────────────────────
   const ledgerGroups = useMemo(() => {
-    const groups: LedgerGroup[] = []
+    // Built without the close state, which is stamped on at the end — see
+    // the note there. Typed as such so a missing status is a compile error
+    // rather than a row that quietly defaults to open.
+    const groups: Array<Omit<LedgerGroup, 'status' | 'closedAt' | 'closedBy'>> = []
     const matchedSaleIds = new Set<string>()
     const salesByCycleKey = new Map<string, DeliverySale[]>()
 
@@ -591,8 +615,21 @@ function FilingStationsDashboard() {
       })
     })
 
-    return groups
-  }, [stationLoadings, stationSales, stationMap, cycleAliasMap, cycleNumberMap])
+    /**
+     * The close state, stamped on once both kinds of group exist.
+     *
+     * Done here rather than inside each push so the two shapes — a cycle built
+     * from a loading, and one built from sales with no loading behind them —
+     * cannot drift apart on the one field that decides whether the row is on
+     * the page at all.
+     */
+    return groups.map((g) => ({
+      ...g,
+      status: (cycleStatuses?.[g.key]?.status ?? 'active') as 'active' | 'completed',
+      closedAt: cycleStatuses?.[g.key]?.closedAt ?? null,
+      closedBy: cycleStatuses?.[g.key]?.closedBy ?? '',
+    }))
+  }, [stationLoadings, stationSales, stationMap, cycleAliasMap, cycleNumberMap, cycleStatuses])
 
   // ── Filtered Groups ────────────────────────────────────────────────
   const filteredLedgerGroups = useMemo(() => {
@@ -611,6 +648,10 @@ function FilingStationsDashboard() {
     if (locationFilter !== 'all') result = result.filter(g => g.location === locationFilter)
     if (stationFilter !== 'all') result = result.filter(g => g.stationId === stationFilter)
     if (allocationCodeFilter !== 'all') result = result.filter(g => g.code === allocationCodeFilter)
+    // A fact about the cycle rather than about any payment on it, so it filters
+    // the groups and everything downstream — the totals, both exports —
+    // describes the same set the page shows.
+    if (cycleStatusFilter !== 'all') result = result.filter(g => g.status === cycleStatusFilter)
     if (cycleFilter !== 'all') {
       const targetCycle = Number(cycleFilter)
       result = result.filter(g => g.cycleNum === targetCycle)
@@ -642,7 +683,7 @@ function FilingStationsDashboard() {
       if (dateDiff !== 0) return dateDiff
       return (a.truckNumber || '').localeCompare(b.truckNumber || '')
     })
-  }, [ledgerGroups, dateRange, truckFilter, locationFilter, stationFilter, allocationCodeFilter, cycleFilter, rateFilter, searchQuery])
+  }, [ledgerGroups, dateRange, truckFilter, locationFilter, stationFilter, allocationCodeFilter, cycleFilter, rateFilter, searchQuery, cycleStatusFilter])
 
   // ── Totals ─────────────────────────────────────────────────────────
   const totals = useMemo(() => {
@@ -1130,6 +1171,17 @@ function FilingStationsDashboard() {
             {uniqueAllocationCodes.length > 0 && (
               <div className="space-y-1">
                 <label className="flex items-center gap-1 text-xs font-semibold text-muted-foreground uppercase"><Tag className="size-2.5" /> Code</label>
+                {/* Open or closed. About the cycle, not about its payments —
+                    the deposit status on each entry below is a different
+                    question and keeps its own column. */}
+                <select aria-label="Cycle status" value={cycleStatusFilter}
+                  onChange={e => setCycleStatusFilter(e.target.value as 'active' | 'completed' | 'all')}
+                  className={cn('h-8 w-full rounded-md border bg-background text-foreground px-2 text-xs', cycleStatusFilter !== 'active' ? 'border-border font-semibold text-foreground dark:text-muted-foreground bg-muted dark:bg-foreground/40' : 'border-border text-muted-foreground')}>
+                  <option value="active">Open cycles</option>
+                  <option value="completed">Completed cycles</option>
+                  <option value="all">All cycles</option>
+                </select>
+
                 <select aria-label="Code" value={allocationCodeFilter} onChange={e => setAllocationCodeFilter(e.target.value)}
                   className={cn('h-8 w-full rounded-md border bg-background text-foreground px-2 text-xs', allocationCodeFilter !== 'all' ? 'border-border font-semibold text-foreground dark:text-muted-foreground bg-muted dark:bg-foreground/40' : 'border-border text-muted-foreground')}>
                   <option value="all">All</option>
@@ -1188,6 +1240,7 @@ function FilingStationsDashboard() {
           <>
             {filteredLedgerGroups.map((group) => {
               const isExpanded = expandedCards.has(group.key)
+              const isClosed = group.status === 'completed'
               const theme = getCodeTheme(group.code)
               const pctSold = group.quantity > 0 ? Math.min(100, Math.round((group.totalQtySold / group.quantity) * 100)) : 0
 
@@ -1196,7 +1249,8 @@ function FilingStationsDashboard() {
                   key={group.key}
                   className={cn(
                     'bg-card rounded-xl border overflow-hidden transition-all duration-250 ease-luxe',
-                    isExpanded ? 'border-accent/40 dark:border-accent ring-1 ring-accent dark:ring-accent/30' : 'border-border'
+                    isExpanded ? 'border-accent/40 dark:border-accent ring-1 ring-accent dark:ring-accent/30' : 'border-border',
+                    isClosed && !isExpanded && 'opacity-75',
                   )}
  >
                   {/* Card Header */}
@@ -1212,9 +1266,27 @@ function FilingStationsDashboard() {
                         </button>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-semibold text-foreground text-sm uppercase tracking-tight truncate">
+                            <h3 className={cn(
+                              'font-semibold text-sm uppercase tracking-tight truncate',
+                              // A closed cycle is still worth reading — it is
+                              // the record of what happened — but it should not
+                              // compete with the open ones while scanning.
+                              isClosed ? 'text-muted-foreground' : 'text-foreground',
+                            )}>
                               {group.stationName || 'Unnamed Station'}
                             </h3>
+                            {isClosed && (
+                              <span
+                                className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
+                                title={
+                                  group.closedBy
+                                    ? `Closed by ${group.closedBy}${group.closedAt ? ` on ${format(parseISO(group.closedAt), 'dd MMM yyyy')}` : ''}`
+                                    : 'Closed'
+                                }
+                              >
+                                Completed
+                              </span>
+                            )}
                             {group.cycleNum && (
                               <span className="shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold bg-accent/10 text-accent border border-accent/20">
                                 Cycle {group.cycleNum}
@@ -1267,6 +1339,21 @@ function FilingStationsDashboard() {
                           onClick={() => navigate({ to: '/filing-stations/details' as any, search: { stationId: group.stationId } as any })}
  >
                           <Eye className="size-3.5" /> View Details
+                        </Button>
+                        {/* Closing is not deleting: every entry, payment and
+                            expense on this cycle stays exactly where it is,
+                            and the same button puts it back. So no permission
+                            gate and no blockers — it takes nothing away. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className={cn('h-8 text-xs gap-1.5 cursor-pointer', !isClosed && 'text-accent hover:text-accent')}
+                          title={isClosed ? 'Reopen this cycle' : 'Close this cycle'}
+                          onClick={() => setClosingCycle(group)}
+ >
+                          {isClosed
+                            ? <><RotateCcw className="size-3.5" /> Reopen</>
+                            : <><CheckCircle2 className="size-3.5" /> Close</>}
                         </Button>
                       </div>
                     </div>
@@ -1484,6 +1571,84 @@ function FilingStationsDashboard() {
       </div>
 
       {/* Quick Record Entry Dialog */}
+      {/* ── Closing a delivery cycle, and reopening it ─────────────────── */}
+      <Dialog
+        open={closingCycle !== null}
+        onOpenChange={(open) => { if (!open && !setCycleStatus.isPending) setClosingCycle(null) }}
+      >
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const cycle = closingCycle
+            if (!cycle) return null
+            const closing = cycle.status !== 'completed'
+            const label = `${cycle.stationName || 'This cycle'}${cycle.truckNumber ? ` · ${cycle.truckNumber}` : ''}`
+            const unsold = Math.max(0, cycle.quantity - cycle.totalQtySold)
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{closing ? `Close ${label}?` : `Reopen ${label}?`}</DialogTitle>
+                  <DialogDescription>
+                    {closing
+                      ? 'Every entry, payment and expense on this cycle stays exactly as it is. It moves out of the open list, and you can reopen it at any time.'
+                      : 'This cycle goes back to the open list. Nothing else about it changes.'}
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* Said, never blocked. The desk knows things the register does
+                    not — a station that settled in cash, a load written off —
+                    and the close is undone with the same button. */}
+                {closing && (cycle.balance > 0.005 || unsold > 0.005) && (
+                  <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                    <span>
+                      {cycle.balance > 0.005 && (
+                        <><strong>{fmt(cycle.balance)}</strong> is still outstanding on this cycle. </>
+                      )}
+                      {unsold > 0.005 && (
+                        <><strong>{unsold.toLocaleString()}</strong> of the load is not recorded as sold. </>
+                      )}
+                      You can close it anyway.
+                    </span>
+                  </div>
+                )}
+
+                {!closing && cycle.closedBy && (
+                  <p className="text-sm text-muted-foreground">
+                    Closed by {cycle.closedBy}
+                    {cycle.closedAt ? ` on ${format(parseISO(cycle.closedAt), 'dd MMM yyyy')}` : ''}.
+                  </p>
+                )}
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    disabled={setCycleStatus.isPending}
+                    onClick={() => setClosingCycle(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={setCycleStatus.isPending}
+                    onClick={async () => {
+                      await setCycleStatus.mutateAsync({
+                        key: cycle.key,
+                        label,
+                        status: closing ? 'completed' : 'active',
+                      })
+                      setClosingCycle(null)
+                    }}
+                  >
+                    {setCycleStatus.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                    {closing ? 'Close cycle' : 'Reopen cycle'}
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!quickPaymentTarget} onOpenChange={(open) => { if (!open) setQuickPaymentTarget(null) }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
