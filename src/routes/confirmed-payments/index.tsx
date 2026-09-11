@@ -985,7 +985,11 @@ function FinanceReportPage() {
           <SummaryItem icon={Hash} label="PFI" value={selectedPfi?.pfiNumber || 'All PFIs'} />
           <SummaryItem icon={Droplets} label="Product" value={productName} />
           <SummaryItem icon={Banknote} label="Total sales value" value={naira(summary.totalSalesValue)} />
-          <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalAmountPaid)} />
+          {/* The Amount Paid column's total. It used to be money-on-orders,
+              which counts transfers the column does not, so the card and the
+              column it names were apart by exactly the transfers — and
+              Transferred is a column of its own now. */}
+          <SummaryItem icon={TrendingUp} label="Total amount paid" value={naira(summary.totalBankPaid)} />
 
           {/*
             One net figure, and it is the balance.

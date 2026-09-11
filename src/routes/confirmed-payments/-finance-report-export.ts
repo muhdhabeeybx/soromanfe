@@ -502,7 +502,20 @@ function summaryColumns(
     { header: 'Number of Orders', value: summary.count },
     { header: 'Total Quantity', value: summary.totalQuantity, fmt: QTY },
     { header: 'Total Sales Value', value: summary.totalSalesValue, fmt: NGN },
-    { header: 'Total Amount Paid', value: summary.totalAmountPaid, fmt: NGN },
+    /**
+     * The Amount Paid COLUMN's total, not money-on-orders.
+     *
+     * These were two different figures under one name: the summary counted
+     * transfers and the column did not, so the sheet showed N55,432,391,631.99
+     * here and N55,408,930,231.99 at the foot of the column it names — apart
+     * by exactly the transfers. A cell called "Of Which Transferred" used to
+     * sit beside it explaining the gap, which is a poor trade for simply
+     * footing the column.
+     *
+     * The money that moved has its own column now, and what it leaves behind
+     * has the one after that. This states the bank figure once.
+     */
+    { header: 'Total Amount Paid', value: summary.totalBankPaid, fmt: NGN },
     /**
      * One net figure, matching the screen: the balance, after transfers.
      *
