@@ -169,9 +169,9 @@ function CommissionsTab() {
   /**
    * Selection, and what may be in it.
    *
-   * Only pending rows can be ticked: a paid commission has already credited
-   * somebody and a skipped one has already been decided, so neither is
-   * something a bulk action could do anything with. Held by id rather than by
+   * Only pending rows can be ticked: a paid commission has already gone out
+   * and a skipped one has already been decided, so neither is something a
+   * bulk action could do anything with. Held by id rather than by
    * row so a refetch, a page change or a filter cannot quietly re-point the
    * selection at different commissions.
    */
@@ -299,7 +299,7 @@ function CommissionsTab() {
    *
    * Not every open row in the filter: the desk can see what it is ticking, and
    * a control that silently selected four hundred rows across pages it has not
-   * looked at is how a bulk confirm credits somebody by accident.
+   * looked at is how a whole page gets marked paid by accident.
    */
   const toggleAll = useCallback(() => {
     setSelectedIds((prev) => {
@@ -326,12 +326,12 @@ function CommissionsTab() {
     const litres = commissions.reduce((sum, c) => sum + Number(c.quantity || 0), 0)
     const amount = commissions.reduce((sum, c) => sum + Number(c.commissionAmount || 0), 0)
 
-    // The third card's subtitle follows the status filter: on a Paid view
-    // "to be credited" is simply untrue, and on a mixed view neither word is.
+    // The subtitle follows the status filter: on a Paid view "still to pay"
+    // is simply untrue, and on a mixed view neither phrase is.
     const amountNote =
-      statusFilter === 'paid' ? 'Already credited to facilitators'
-        : statusFilter === 'skipped' ? 'Not paid — these orders were skipped'
-          : statusFilter === 'pending' ? 'To be credited to facilitators'
+      statusFilter === 'paid' ? 'Already paid to facilitators'
+        : statusFilter === 'skipped' ? 'Not owed — these orders were skipped'
+          : statusFilter === 'pending' ? 'Still to pay out'
             : 'Across every status shown'
 
     return [
@@ -946,30 +946,29 @@ function CommissionsTab() {
       <ConfirmDialog
         open={!!confirmTarget}
         onOpenChange={(open) => { if (!open) setConfirmTarget(null) }}
-        title="Confirm Commission"
+        title={confirmTarget ? `Mark ${confirmTarget.orderNumber} as paid?` : ''}
         description={
           confirmTarget
-            ? `You're about to confirm this commission. The amount will be credited to the customer's account balance.\n\n` +
-              `Customer: ${confirmTarget.customerName}\n` +
-              `Quantity: ${confirmTarget.quantity.toLocaleString()} L\n` +
-              `Rate: ₦${confirmTarget.commissionRate}/L\n` +
-              `Amount: ${formatNaira(confirmTarget.commissionAmount)} will be credited`
+            ? `Marking this commission paid. It records that the money has gone out to the facilitator's own bank account — nothing is transferred from here.\n\n` +
+              `Facilitator: ${confirmTarget.customerName}\n` +
+              `Quantity: ${confirmTarget.quantity.toLocaleString()} Litres\n` +
+              `Amount: ${formatNaira(confirmTarget.commissionAmount)}`
             : ''
         }
-        confirmLabel="Confirm & Credit"
+        confirmLabel="Mark as paid"
         onConfirm={handleConfirmCommission}
         loading={confirmMutation.isPending}
       />
 
-      {/* Skipping one. Nobody is credited, so the dialog leads with that
-          rather than with the amount — the amount is the thing NOT happening. */}
+      {/* Skipping one. The dialog leads with "no commission is owed" rather
+          than with the amount — the amount is the thing NOT happening. */}
       <ConfirmDialog
         open={!!skipTarget}
         onOpenChange={(open) => { if (!open) { setSkipTarget(null); setSkipReason('') } }}
         title={skipTarget ? `Skip commission on ${skipTarget.orderNumber}?` : ''}
         description={
           skipTarget
-            ? `No commission will be paid on this order and nobody is credited. ${formatNaira(skipTarget.commissionAmount)} stays where it is. The row moves out of Pending and can be found under Skipped.`
+            ? `No commission is owed on this order, so ${formatNaira(skipTarget.commissionAmount)} will not be paid out. The row moves out of Pending and can be found under Skipped.`
             : ''
         }
         confirmLabel="Skip this order"
@@ -1009,10 +1008,10 @@ function CommissionsTab() {
         }
         description={
           bulkAction === 'skip'
-            ? `No commission is paid on ${selectedIds.length === 1 ? 'this order' : 'these orders'} and nobody is credited. ${formatNaira(selectedTotal)} stays where it is.`
-            : `${formatNaira(selectedTotal)} will be credited across ${selectedIds.length} customer account${selectedIds.length === 1 ? '' : 's'}. Each is credited on its own, so if one fails the rest still go through and you will be told which did not.`
+            ? `No commission is owed on ${selectedIds.length === 1 ? 'this order' : 'these orders'}, so ${formatNaira(selectedTotal)} will not be paid out.`
+            : `Recording ${formatNaira(selectedTotal)} as paid across ${selectedIds.length} order${selectedIds.length === 1 ? '' : 's'} — the money goes out to the facilitators' own bank accounts, nothing is transferred from here. Each row is marked on its own, so if one fails the rest still go through and you will be told which did not.`
         }
-        confirmLabel={bulkAction === 'skip' ? 'Skip them' : 'Confirm & credit'}
+        confirmLabel={bulkAction === 'skip' ? 'Skip them' : 'Mark as paid'}
         loading={bulkMutation.isPending}
         onConfirm={async () => {
           if (!bulkAction) return

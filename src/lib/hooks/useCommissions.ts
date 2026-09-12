@@ -62,7 +62,7 @@ export function useConfirmCommissionPayment() {
       queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
       queryClient.invalidateQueries({ queryKey: ['customers'] })
       queryClient.invalidateQueries({ queryKey: ['deposits'] })
-      toast.success('Commission confirmed — amount credited to customer account')
+      toast.success('Commission marked paid')
     },
     onError: (err: any) => {
       toast.error(getErrorMessage(err))
@@ -108,9 +108,9 @@ export function useUpsertCommissionRate() {
  * pending forever, so "pending" meant both "still to pay" and "never going to
  * be" with no way to tell them apart.
  *
- * Nobody is credited. A reason is required by the server, because the row
- * outlives everyone's memory of the order and "why was this not paid" is the
- * only question it will ever be asked.
+ * A reason is required by the server, because the row outlives everyone's
+ * memory of the order and "why was this not paid" is the only question it will
+ * ever be asked.
  */
 export function useSkipCommission() {
   const queryClient = useQueryClient()
@@ -125,7 +125,7 @@ export function useSkipCommission() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['commissions'] })
       queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
-      toast.success('Commission skipped — nobody was credited')
+      toast.success('Commission skipped — no payment is owed on this order')
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   })
@@ -134,9 +134,9 @@ export function useSkipCommission() {
 /**
  * Confirm or skip a selection in one request.
  *
- * Partial success is a real outcome and is reported as one — confirming
- * credits a wallet, so a batch that got halfway cannot be rolled back and must
- * instead say how far it got.
+ * Partial success is a real outcome and is reported as one: the rows that went
+ * through are named, and so is every row that did not, with the reason it
+ * gave.
  */
 export function useBulkResolveCommissions() {
   const queryClient = useQueryClient()
