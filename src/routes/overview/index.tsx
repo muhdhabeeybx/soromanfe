@@ -1,11 +1,17 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { ArrowRight, CheckCircle2, CircleAlert, LayoutDashboard } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Skeleton } from '#/components/ui/skeleton'
 import { PageError } from '#/components/PageError'
-import { useWorkQueues, type WorkQueue } from '#/lib/hooks/useDashboard'
+import {
+  useWorkQueues, useDeskBacklogs, useSendDeskNudges, useSmsDesk,
+  type WorkQueue, type DeskBacklog,
+} from '#/lib/hooks/useDashboard'
+import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { Button } from '#/components/ui/button'
+import { BellRing, MessageSquare } from 'lucide-react'
 import { useRoles } from '#/lib/hooks/useRoles'
 import { useAuthStore } from '#/modules/auth'
 import { canAccessRoute, isSuperAdmin, ROLE_STRING_TO_ID } from '#/lib/rbac'
@@ -239,6 +245,15 @@ function MyDashboard() {
         </section>
       )}
 
+      {/*
+        Chasing the desks. Admins only — this is the company's backlog, not
+        the reader's own, and the actions on it reach other people's phones.
+
+        It sits under the personal queues rather than above them because
+        "what should I do" comes before "who should I chase".
+      */}
+      {canSeeCompany && <DeskBacklogPanel />}
+
       {queues.length === 0 && (
         <section className={PANEL}>
           <div className={PANEL_RAIL}><span className={MICRO}>Your work</span></div>
@@ -274,5 +289,152 @@ function MyDashboard() {
         </section>
       )}
     </div>
+  )
+}
+
+/**
+ * The company's backlogs, and the two ways of chasing them.
+ *
+ * Separate from the queue cards above, which are about the reader. This is
+ * about everybody else: what each desk is sitting on, who is on that desk, and
+ * a way to reach them. It only renders for somebody who can act on it.
+ *
+ * A desk with nothing waiting is drawn quiet rather than hidden — "the gate is
+ * clear" is worth seeing, and a panel whose contents move around as queues
+ * empty is harder to read than one whose rows stay put.
+ */
+function DeskBacklogPanel() {
+  const { data: desks = [], isLoading } = useDeskBacklogs()
+  const sendNudges = useSendDeskNudges()
+  const smsDesk = useSmsDesk()
+
+  /** The desk a text has been asked for, holding the previewed message. */
+  const [texting, setTexting] = useState<{
+    desk: DeskBacklog
+    text: string
+    recipients: Array<{ name: string; phone: string | null }>
+  } | null>(null)
+
+  const NAMES: Record<string, { label: string; action: string }> = {
+    tickets: { label: 'Awaiting loading tickets', action: 'Generate them' },
+    entry: { label: 'Trucks not gated in', action: 'Record their entry' },
+    exit: { label: 'Trucks still on the yard', action: 'Gate them out' },
+  }
+
+  const withWork = desks.filter((d) => d.count > 0)
+  if (isLoading || desks.length === 0) return null
+
+  const waited = (h: number) => (h >= 48 ? `${Math.floor(h / 24)} days` : `${h} hours`)
+
+  return (
+    <section className={PANEL} aria-label="Desk backlogs">
+      <div className={PANEL_RAIL}>
+        <span className={MICRO}>Desk backlogs</span>
+        {withWork.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto gap-1.5"
+            disabled={sendNudges.isPending}
+            onClick={() => sendNudges.mutate()}
+          >
+            <BellRing className="size-3.5" />
+            Notify all desks
+          </Button>
+        )}
+      </div>
+
+      <div className={cn(PANEL_BODY, 'space-y-3')}>
+        {desks.map((d) => {
+          const meta = NAMES[d.desk] || { label: d.desk, action: '' }
+          const reachable = d.contacts.filter((c) => c.reachable)
+          return (
+            <div
+              key={d.desk}
+              className={cn(
+                'rounded-lg border p-3',
+                d.count > 0 ? 'border-warning/30 bg-warning/5' : 'border-foreground/10 bg-muted/20',
+              )}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">
+                    {d.count > 0 ? `${d.count} ${meta.label.toLowerCase()}` : `${meta.label} — clear`}
+                  </p>
+                  {d.count > 0 && (
+                    <p className={cn(MICRO, 'mt-0.5 text-muted-foreground')}>
+                      Oldest waiting {waited(d.oldestHours)}
+                      {d.depots?.length ? ` · ${d.depots.join(', ')}` : ''}
+                      {` · ${d.contacts.length} on this desk`}
+                      {reachable.length < d.contacts.length
+                        ? `, ${d.contacts.length - reachable.length} with no number`
+                        : ''}
+                    </p>
+                  )}
+                </div>
+
+                {d.count > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={reachable.length === 0 || smsDesk.isPending}
+                    title={reachable.length === 0 ? 'Nobody on this desk has a phone number on file' : undefined}
+                    onClick={async () => {
+                      // Preview first, always. Nobody should find out who was
+                      // texted after the fact.
+                      const res = await smsDesk.mutateAsync({ desk: d.desk, dryRun: true })
+                      setTexting({
+                        desk: d,
+                        text: res.data?.text || '',
+                        recipients: res.data?.wouldText || [],
+                      })
+                    }}
+                  >
+                    <MessageSquare className="size-3.5" />
+                    Text the desk
+                  </Button>
+                )}
+              </div>
+
+              {/* A few of the actual rows. A count says how bad it is; the
+                  examples say whether it is one stuck order or a real pile. */}
+              {d.examples?.length > 0 && (
+                <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                  {d.examples.slice(0, 3).map((e, i) => <li key={i}>{e}</li>)}
+                  {d.count > 3 && <li className="text-muted-foreground/70">and {d.count - 3} more</li>}
+                </ul>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* The text, and who gets it, before it goes. */}
+      <ConfirmDialog
+        open={texting !== null}
+        onOpenChange={(open: boolean) => { if (!open) setTexting(null) }}
+        title={texting ? `Text ${texting.recipients.length} people on the ${texting.desk.desk} desk?` : ''}
+        description="This sends an SMS to each of them now. It costs money and reaches personal phones, so it is worth being sure."
+        confirmLabel="Send the text"
+        loading={smsDesk.isPending}
+        onConfirm={async () => {
+          if (!texting) return
+          await smsDesk.mutateAsync({ desk: texting.desk.desk })
+          setTexting(null)
+        }}
+      >
+        {texting && (
+          <div className="space-y-2">
+            <p className="rounded-lg border border-foreground/15 bg-muted/30 p-3 text-sm">
+              {texting.text}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {texting.recipients.map((r: { name: string }) => r.name).join(', ')}
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
+    </section>
   )
 }

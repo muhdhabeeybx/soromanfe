@@ -1,5 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '#/lib/api/http'
+import { useToast } from '#/lib/hooks/useToast'
+import { getErrorMessage } from '#/lib/utils'
 
 export function useDashboardStats() {
   return useQuery({
@@ -116,5 +118,92 @@ export function useWorkQueues() {
       const res = await api.get('/dashboard/work-queues')
       return res.data.data as { counts: Record<string, number>; queues: WorkQueue[] }
     },
+  })
+}
+
+// ── Desk backlogs, and chasing them ─────────────────────────────────────────
+
+/**
+ * What is sitting on each desk, company-wide, with the staff a text would
+ * reach.
+ *
+ * Distinct from useWorkQueues, which answers "what is waiting on ME". This
+ * answers "what is waiting on anybody, and who do I chase" — the question an
+ * admin asks, and the reason it carries contacts rather than just counts.
+ */
+export interface DeskBacklog {
+  desk: 'tickets' | 'entry' | 'exit'
+  count: number
+  hours: number
+  oldestHours: number
+  examples: string[]
+  depots: string[]
+  contacts: Array<{
+    id: number
+    name: string
+    phone: string | null
+    email: string | null
+    reachable: boolean
+  }>
+}
+
+export function useDeskBacklogs() {
+  return useQuery({
+    queryKey: ['dashboard', 'desk-nudges'],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const res = await api.get('/dashboard/desk-nudges')
+      return (res.data?.data?.desks || []) as DeskBacklog[]
+    },
+  })
+}
+
+/** Send the in-app nudge to every desk with a backlog, now. */
+export function useSendDeskNudges() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async () => (await api.post('/dashboard/desk-nudges/notify', {})).data,
+    onSuccess: (res) => {
+      toast.success(res?.message || 'Desks notified')
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  })
+}
+
+/**
+ * Text one desk.
+ *
+ * `dryRun` returns the exact message and recipient list without sending, which
+ * is what the confirm dialog shows — nobody should discover who was texted
+ * afterwards.
+ */
+export function useSmsDesk() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async ({ desk, dryRun }: { desk: string; dryRun?: boolean }) => {
+      const res = await api.post('/dashboard/desk-nudges/sms', { desk, dryRun: dryRun === true })
+      return res.data as {
+        success: boolean
+        message: string
+        data: {
+          text?: string
+          wouldText?: Array<{ name: string; phone: string | null }>
+          sent?: Array<{ name: string }>
+          failed?: Array<{ name: string; error?: string }>
+          unreachable?: Array<{ name: string }>
+        }
+      }
+    },
+    onSuccess: (res, vars) => {
+      if (vars.dryRun) return
+      if (res.success) toast.success(res.message)
+      else toast.error(res.message)
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'desk-nudges'] })
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
   })
 }
