@@ -11,6 +11,15 @@ import { Textarea } from '#/components/ui/textarea'
 import { MICRO } from '#/lib/panel'
 import { cn } from '#/lib/utils'
 import { useFinishPfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+
+/** What the server hands back when it refuses the first close. */
+interface Outstanding {
+  unticketed: Array<{ id: number; orderNumber: string; customerName: string | null; shortBy: number }>
+  trucksDue: Array<{ id: number; truckNumber: string | null; orderNumber: string }>
+  trucksIn: Array<{ id: number; truckNumber: string | null; orderNumber: string }>
+  unticketedLitres: number
+  clean: boolean
+}
 import { naira, qty } from '#/routes/pfi/-pfi-utils'
 
 function Field({
@@ -70,21 +79,43 @@ export function PfiCloseDialog({
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
 
+  /**
+   * What is still moving on this batch, refused once before it can be buried.
+   *
+   * The server answers the first close with 409 and the list. Holding it here
+   * turns that into something readable — which orders were never ticketed and
+   * which trucks never reached the gate — and the second press carries
+   * `acknowledgeOutstanding`, so nobody closes a batch without having been
+   * shown what they are closing over.
+   */
+  const [outstanding, setOutstanding] = useState<Outstanding | null>(null)
+
   const submit = async () => {
     if (!pfi) return
-    await finish.mutateAsync({
-      id: Number(pfi.id),
-      data: {
-        closure_date: form.closureDate,
-        total_inflow: form.totalInflow,
-        closure_bank: form.closureBank,
-        purchase_cost: form.purchaseCost,
-        aggregate_expenses: form.aggregateExpenses,
-        closure_handler: form.closureHandler,
-        closure_remarks: form.closureRemarks,
-      },
-    })
-    onOpenChange(false)
+    try {
+      await finish.mutateAsync({
+        id: Number(pfi.id),
+        data: {
+          closure_date: form.closureDate,
+          total_inflow: form.totalInflow,
+          closure_bank: form.closureBank,
+          purchase_cost: form.purchaseCost,
+          aggregate_expenses: form.aggregateExpenses,
+          closure_handler: form.closureHandler,
+          closure_remarks: form.closureRemarks,
+          // Only on the second press, once the list below has been shown.
+          ...(outstanding ? { acknowledgeOutstanding: true } : {}),
+        },
+      })
+      onOpenChange(false)
+      setOutstanding(null)
+    } catch (err: any) {
+      if (err?.response?.status === 409 && err?.response?.data?.code === 'OUTSTANDING_WORK') {
+        setOutstanding(err.response.data.data.outstanding)
+        return
+      }
+      // Anything else already raised its own toast through useMoneyMutation.
+    }
   }
 
   const f = pfi?.financials
@@ -109,6 +140,73 @@ export function PfiCloseDialog({
               <span className="font-normal text-foreground">{qty(f.remaining, pfi?.productUnit)}</span> still shows as
               remaining ({Math.round((f.sellThrough ?? 0) * 100)}% sold). Either that stock is genuinely
               unsold, or movements were never recorded against it. Worth checking before closing.
+            </p>
+          </div>
+        )}
+
+        {/*
+          The work still on the batch, shown after the first press.
+
+          Three lists rather than one count, because they need three different
+          people: the loading desk generates the missing tickets, security
+          gates the waiting trucks in, security gates the yard's trucks out.
+          Closing over them is allowed — the desk knows things the system does
+          not — but not without having read them.
+        */}
+        {outstanding && (
+          <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+            <p className="flex items-start gap-2 text-sm font-semibold text-destructive">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              This batch still has work on it. Closing now buries it.
+            </p>
+
+            {outstanding.unticketed.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-foreground">
+                  {outstanding.unticketed.length} order{outstanding.unticketed.length === 1 ? '' : 's'} never
+                  ticketed — {outstanding.unticketedLitres.toLocaleString()} litres
+                </p>
+                <ul className="space-y-0.5 text-xs text-muted-foreground">
+                  {outstanding.unticketed.slice(0, 6).map((o) => (
+                    <li key={o.id}>
+                      <span className="font-mono">{o.orderNumber}</span> · {o.customerName || '—'} ·
+                      {' '}short {o.shortBy.toLocaleString()} litres
+                    </li>
+                  ))}
+                  {outstanding.unticketed.length > 6 && (
+                    <li>and {outstanding.unticketed.length - 6} more</li>
+                  )}
+                </ul>
+                <p className="text-xs text-muted-foreground/80">Generate their tickets first.</p>
+              </div>
+            )}
+
+            {outstanding.trucksDue.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-foreground">
+                  {outstanding.trucksDue.length} truck{outstanding.trucksDue.length === 1 ? '' : 's'} ticketed but never gated in
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {outstanding.trucksDue.slice(0, 6).map((t) => t.truckNumber || '—').join(', ')}
+                  {outstanding.trucksDue.length > 6 && ` and ${outstanding.trucksDue.length - 6} more`}
+                </p>
+              </div>
+            )}
+
+            {outstanding.trucksIn.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-foreground">
+                  {outstanding.trucksIn.length} truck{outstanding.trucksIn.length === 1 ? '' : 's'} still on the yard — never gated out
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {outstanding.trucksIn.slice(0, 6).map((t) => `${t.truckNumber || '—'} (${t.orderNumber})`).join(', ')}
+                  {outstanding.trucksIn.length > 6 && ` and ${outstanding.trucksIn.length - 6} more`}
+                </p>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              Press Close again to close the batch anyway.
             </p>
           </div>
         )}
