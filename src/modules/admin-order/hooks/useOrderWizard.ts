@@ -35,6 +35,20 @@ export function useOrderWizard() {
   // Step 3: Product
   const [selectedProduct, setSelectedProduct] = useState<any>(null)
   const [orderQuantity, setOrderQuantity] = useState('')
+  /**
+   * How many trucks this order will take.
+   *
+   * Asked here because nothing else can ask it: truck rows are only created
+   * when tickets are generated, so without a figure stated up front the
+   * loading desk, the gate and every report count orders instead of trucks —
+   * and an order needing six with two ticketed reads exactly like a finished
+   * two-truck order.
+   *
+   * Optional. An order can genuinely be raised before the haulage is settled,
+   * and a blank is honest where a guess would not be: the pages then say
+   * "3 ticketed" rather than inventing a total.
+   */
+  const [expectedTrucks, setExpectedTrucks] = useState('')
 
   // Step 4: Delivery
   const [deliveryType, setDeliveryType] = useState<'delivery' | 'pickup'>('pickup')
@@ -126,6 +140,11 @@ export function useOrderWizard() {
         depot: selectedDepot.id || selectedDepot._id,
         product: selectedProduct.product._id || selectedProduct.product.id,
         quantity: Number(orderQuantity),
+        // Omitted entirely when blank — the column is nullable and "not
+        // stated" is a different fact from zero.
+        ...(expectedTrucks && Number(expectedTrucks) > 0
+          ? { expectedTrucks: Number(expectedTrucks) }
+          : {}),
         price: Number(selectedProduct.currentPrice),
         totalAmount,
         deliveryType,
@@ -231,6 +250,7 @@ export function useOrderWizard() {
     setSelectedDepot(null)
     setSelectedProduct(null)
     setOrderQuantity('')
+    setExpectedTrucks('')
     setDeliveryState('')
     setDeliveryTown('')
     setPlacedOrder(null)
@@ -275,6 +295,9 @@ export function useOrderWizard() {
     setSelectedProduct,
     activeDepots,
     isLoadingDepots,
+
+    expectedTrucks,
+    setExpectedTrucks,
 
     // Product state
     selectedProduct,

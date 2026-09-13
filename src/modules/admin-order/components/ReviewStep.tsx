@@ -27,6 +27,7 @@ export function ReviewStep({ wizard }: ReviewStepProps) {
     selectedDepot,
     selectedProduct,
     orderQuantity,
+    expectedTrucks,
     deliveryType,
     deliveryState,
     deliveryTown,
@@ -103,6 +104,14 @@ export function ReviewStep({ wizard }: ReviewStepProps) {
           <div>
             <span className="text-xs text-muted-foreground block">Order Volume</span>
             <span className="font-semibold text-foreground">{Number(orderQuantity).toLocaleString()} {selectedProduct?.product?.unit || 'Liters'}</span>
+            {/* Stated only when it was given. A blank here is the honest
+                rendering of "nobody has said yet", and every downstream count
+                depends on not inventing one. */}
+            {expectedTrucks && Number(expectedTrucks) > 0 && (
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                over {Number(expectedTrucks).toLocaleString()} truck{Number(expectedTrucks) === 1 ? '' : 's'}
+              </span>
+            )}
           </div>
           <div>
             <span className="text-xs text-muted-foreground block">Unit Price</span>

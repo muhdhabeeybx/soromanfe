@@ -23,7 +23,9 @@ import { TicketPrintDialog } from '#/components/TicketPrintDialog'
 import { TruckEditDialog } from '#/components/TruckEditDialog'
 import { PANEL, MICRO, PANEL_RAIL } from '#/lib/panel'
 import { cn } from '#/lib/utils'
-import { useAllOrders } from '#/lib/hooks/useOrders'
+import { useAllOrders, useUpdateOrder } from '#/lib/hooks/useOrders'
+import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { Label } from '#/components/ui/label'
 import { useOrderForTicketing, type TruckLoad } from '#/lib/hooks/useTickets'
 import {
   DATE_PRESETS, resolveRange, toNumber, formatQty, type DatePreset,
@@ -68,6 +70,16 @@ function LoadingTicketsPage() {
   const [ticketOrder, setTicketOrder] = useState<any | null>(null)
   const [printOrder, setPrintOrder] = useState<any | null>(null)
   const [editOrder, setEditOrder] = useState<any | null>(null)
+  /**
+   * Setting the truck count on an order that never had one.
+   *
+   * Kept on this page rather than sending somebody to the order form: this is
+   * where the gap is noticed, and 55 live orders predate the field. The count
+   * is what turns "3 ticketed" into "3 of 6", so it is worth one click.
+   */
+  const [truckCountOrder, setTruckCountOrder] = useState<any | null>(null)
+  const [truckCountValue, setTruckCountValue] = useState('')
+  const updateOrder = useUpdateOrder()
   const [exporting, setExporting] = useState(false)
 
   const { data, isLoading, isError, error, refetch } = useAllOrders()
@@ -347,9 +359,12 @@ function LoadingTicketsPage() {
                       <TableHead>Product</TableHead>
                       <TableHead className="text-right">Quantity</TableHead>
                       <TableHead>PFI</TableHead>
-                      {/* Truck No., Driver, Tickets and Status columns are
-                          deliberately not rendered — they belong to the ticket
-                          rather than the order, and the row would not fit. */}
+                      {/* Trucks, as counts rather than rows.
+                          The individual plates belong to the ticket and would
+                          not fit here — but "how many, and where are they" is
+                          the whole question this desk works from, and until now
+                          the page answered none of it. */}
+                      <TableHead>Trucks</TableHead>
                       <TableHead className="text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -364,6 +379,7 @@ function LoadingTicketsPage() {
                           onGenerate={() => setTicketOrder(o)}
                           onView={() => setPrintOrder(o)}
                           onEdit={() => setEditOrder(o)}
+                          onSetTruckCount={() => { setTruckCountOrder(o); setTruckCountValue('') }}
                         />
                       )
                     })}
@@ -407,6 +423,42 @@ function LoadingTicketsPage() {
         onEdit={() => { setEditOrder(printOrder); setPrintOrder(null) }}
       />
 
+      {/* Setting the count on an order raised before the form asked for one. */}
+      <ConfirmDialog
+        open={truckCountOrder !== null}
+        onOpenChange={(open: boolean) => { if (!open) { setTruckCountOrder(null); setTruckCountValue('') } }}
+        title={truckCountOrder ? `How many trucks on ${truckCountOrder.orderNumber}?` : ''}
+        description="Stating this turns the progress on this order from a count into a fraction — 3 of 6 ticketed rather than 3 ticketed. It can be changed later if the haulage changes."
+        confirmLabel="Save"
+        loading={updateOrder.isPending}
+        onConfirm={async () => {
+          const n = Number(truckCountValue)
+          if (!truckCountOrder || !Number.isFinite(n) || n <= 0) return
+          await updateOrder.mutateAsync({
+            id: truckCountOrder.id,
+            data: { expectedTrucks: Math.trunc(n) },
+          })
+          setTruckCountOrder(null)
+          setTruckCountValue('')
+        }}
+      >
+        <div className="space-y-1.5">
+          <Label className="text-xs">Trucks</Label>
+          <Input
+            autoFocus
+            inputMode="numeric"
+            placeholder="6"
+            value={truckCountValue}
+            onChange={(e) => setTruckCountValue(e.target.value.replace(/[^0-9]/g, ''))}
+          />
+          {truckCountOrder && Number(truckCountOrder.trucksTicketed) > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {truckCountOrder.trucksTicketed} already ticketed on this order.
+            </p>
+          )}
+        </div>
+      </ConfirmDialog>
+
       <TruckEditDialog
         orderId={editOrder?.id ?? null}
         orderNumber={editOrder?.orderNumber}
@@ -432,13 +484,14 @@ function LoadingTicketsPage() {
  * it does not disappear the moment Add or Edit does.
  */
 function OrderRow({
-  sn, order, onGenerate, onView, onEdit,
+  sn, order, onGenerate, onView, onEdit, onSetTruckCount,
 }: {
   sn: number
   order: any
   onGenerate: () => void
   onView: () => void
   onEdit: () => void
+  onSetTruckCount?: () => void
 }) {
   const { data } = useOrderForTicketing(order.id)
   const loads: TruckLoad[] = data?.trucks || []
@@ -447,6 +500,17 @@ function OrderRow({
 
   const fullyTicketed = releasable > 0 && allocated >= releasable
   const hasTickets = loads.length > 0
+
+  /**
+   * The truck counts, straight off the order row.
+   *
+   * Not derived from `loads` above: that comes from a per-row request, and the
+   * counts now ride on the list itself. Reading them here means the column is
+   * right the moment the table paints rather than after a dozen round trips.
+   */
+  const expectedTrucks = Number(order.expectedTrucks) || 0
+  const ticketed = Number(order.trucksTicketed) || 0
+  const toTicket = expectedTrucks ? Math.max(0, expectedTrucks - ticketed) : 0
   const departed = hasTickets && loads.every((l) => l.status === 'gated_out')
 
   return (
@@ -467,6 +531,62 @@ function OrderRow({
         )}
       </TableCell>
       <TableCell className="text-muted-foreground">{order.pfiNumber || '—'}</TableCell>
+
+      {/*
+        Where this order's trucks are, at a glance.
+
+        The headline is the ticketing fraction, because that is this desk's
+        own work. Underneath, only the states that are actually occupied —
+        a row of four zeros teaches the eye to skip the column, whereas
+        "2 to ticket" in red on the one order that has any gets read.
+
+        Where nobody stated a truck count the fraction has no denominator and
+        says so. It is not filled in from litres: an inferred total is exactly
+        the guessing this column replaces.
+      */}
+      <TableCell className="whitespace-nowrap">
+        <div className="text-sm font-semibold">
+          {expectedTrucks
+            ? <>{ticketed} <span className="font-normal text-muted-foreground">of</span> {expectedTrucks}</>
+            : <>{ticketed} <span className="font-normal text-muted-foreground">ticketed</span></>}
+        </div>
+        <div className="mt-0.5 flex flex-wrap gap-1">
+          {toTicket > 0 && (
+            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
+              {toTicket} to ticket
+            </span>
+          )}
+          {order.trucksAwaitingIn > 0 && (
+            <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">
+              {order.trucksAwaitingIn} due in
+            </span>
+          )}
+          {order.trucksOnYard > 0 && (
+            <span className="rounded bg-info/10 px-1.5 py-0.5 text-[10px] font-semibold text-info">
+              {order.trucksOnYard} on yard
+            </span>
+          )}
+          {order.trucksOut > 0 && (
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+              {order.trucksOut} loaded
+            </span>
+          )}
+          {/* Fill it in from here. 55 live orders were raised before the
+              order form asked, and the count is only useful if the desk can
+              add it to the order in front of them rather than going back to
+              edit the order. */}
+          {!expectedTrucks && (
+            <button
+              type="button"
+              className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground hover:text-foreground"
+              onClick={() => onSetTruckCount?.()}
+            >
+              set truck count
+            </button>
+          )}
+        </div>
+      </TableCell>
+
       <TableCell className="text-right">
         <div className="flex items-center justify-end gap-1.5">
           {hasTickets && (

@@ -16,6 +16,8 @@ export function ProductStep({ wizard }: ProductStepProps) {
     selectedProduct,
     setSelectedProduct,
     orderQuantity,
+    expectedTrucks,
+    setExpectedTrucks,
     setOrderQuantity,
   } = wizard
 
@@ -125,6 +127,42 @@ export function ProductStep({ wizard }: ProductStepProps) {
                   className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground"
                 >
                   {unit === 'Litres' ? 'L' : unit}
+                </span>
+              </div>
+            </div>
+
+            {/*
+              How many trucks it will take.
+
+              Beside the quantity because it is the same question asked in the
+              other unit, and this is the only moment anybody knows it: truck
+              rows are not created until tickets are generated, so without a
+              figure here the loading desk, the gate and every report count
+              orders rather than trucks — and a six-truck order with two
+              ticketed reads exactly like a finished two-truck one.
+
+              Optional, and blank is a real answer. An order can be raised
+              before the haulage is settled, and the pages then say "3
+              ticketed" rather than inventing a total nobody gave.
+            */}
+            <div className="space-y-1.5">
+              <Label htmlFor="order-trucks">
+                Trucks <span className="font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              <div className="relative w-32">
+                <NumberInput
+                  id="order-trucks"
+                  placeholder="6"
+                  value={expectedTrucks}
+                  onValueChange={setExpectedTrucks}
+                  aria-describedby="trucks-hint"
+                  className="pr-16 text-right"
+                />
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground"
+                >
+                  trucks
                 </span>
               </div>
             </div>

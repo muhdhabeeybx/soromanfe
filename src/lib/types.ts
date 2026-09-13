@@ -381,6 +381,19 @@ export interface Order {
    * is the address — and on deliveries raised before the wizard asked for it.
    */
   deliveryAddress?: string | null
+  /**
+   * How many trucks the order is expected to take, and where they have got to.
+   *
+   * `expectedTrucks` is the denominator somebody stated when the order was
+   * raised; null means nobody has, and the UI must say "3 ticketed" rather
+   * than invent a total. The other four are counted off order_trucks on the
+   * order row itself, so a list can show progress without a request per row.
+   */
+  expectedTrucks?: number | null
+  trucksTicketed?: number
+  trucksAwaitingIn?: number
+  trucksOnYard?: number
+  trucksOut?: number
   pfiId?: number | null
   pfiNumber?: string | null
   virtualAccountNumber?: string
