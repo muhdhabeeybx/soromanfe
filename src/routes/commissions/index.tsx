@@ -32,10 +32,10 @@ import {
   DialogDescription,
 } from '#/components/ui/dialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
-import { DollarSign, Search, X, RefreshCw, CheckCircle, Fuel, FileText, Download, Loader2, Banknote, Package, MinusCircle, Clock } from 'lucide-react'
+import { DollarSign, Search, X, RefreshCw, CheckCircle, Fuel, FileText, Download, Loader2, Banknote, Package, MinusCircle, Clock, RotateCcw } from 'lucide-react'
 import {
   useCommissions, useCommissionSummary, useConfirmCommissionPayment,
-  useSkipCommission, useBulkResolveCommissions,
+  useSkipCommission, useBulkResolveCommissions, useRevertCommission,
 } from '#/lib/hooks/useCommissions'
 import { cn } from '#/lib/utils'
 import { NativeSelect } from '#/components/ui/native-select'
@@ -162,6 +162,19 @@ function CommissionsTab() {
    * order — "why was this not paid" is the only question it will ever be
    * asked.
    */
+  /**
+   * Undoing a settlement.
+   *
+   * `walletWarning` holds what the server sends back on a 409: a commission
+   * confirmed in the wallet era credited the customer, and undoing it here
+   * does not reverse that. Shown before the second attempt rather than
+   * discovered afterwards.
+   */
+  const [revertTarget, setRevertTarget] = useState<Commission | null>(null)
+  const [revertReason, setRevertReason] = useState('')
+  const [walletWarning, setWalletWarning] = useState<string | null>(null)
+  const revertMutation = useRevertCommission()
+
   const [skipTarget, setSkipTarget] = useState<Commission | null>(null)
   const [skipReason, setSkipReason] = useState('')
   const skipMutation = useSkipCommission()
@@ -914,7 +927,19 @@ function CommissionsTab() {
                                 </Button>
                               </div>
                             ) : (
-                              <span className="text-xs text-muted-foreground/60">—</span>
+                              /* Settled rows get an undo. The wrong row gets
+                                 ticked, a skip lands on the wrong order, a
+                                 payment is recorded that never went out — and
+                                 an exit that cannot be reversed quietly
+                                 encourages leaving the mistake in place. */
+                              <Button
+                                variant="ghost" size="sm"
+                                className="h-8 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                onClick={() => { setRevertTarget(c); setRevertReason(''); setWalletWarning(null) }}
+                              >
+                                <RotateCcw className="size-3.5" />
+                                Undo
+                              </Button>
                             )}
                           </TableCell>
                         </TableRow>
@@ -959,6 +984,61 @@ function CommissionsTab() {
         onConfirm={handleConfirmCommission}
         loading={confirmMutation.isPending}
       />
+
+      {/* Undoing a settlement, paid or skipped. */}
+      <ConfirmDialog
+        open={revertTarget !== null}
+        onOpenChange={(open) => { if (!open) { setRevertTarget(null); setRevertReason(''); setWalletWarning(null) } }}
+        variant={walletWarning ? 'destructive' : 'default'}
+        title={revertTarget ? `Undo ${revertTarget.status === 'paid' ? 'payment' : 'skip'} on ${revertTarget.orderNumber}?` : ''}
+        description={
+          revertTarget
+            ? revertTarget.status === 'paid'
+              ? `This says the ${formatNaira(revertTarget.commissionAmount)} was not actually paid out. The commission goes back to Pending.`
+              : `This puts the commission back in the queue as owing ${formatNaira(revertTarget.commissionAmount)}.`
+            : ''
+        }
+        confirmLabel={walletWarning ? 'Undo anyway' : 'Undo'}
+        loading={revertMutation.isPending}
+        onConfirm={async () => {
+          if (!revertTarget || revertReason.trim().length < 3) return
+          try {
+            await revertMutation.mutateAsync({
+              commissionId: revertTarget.id,
+              reason: revertReason.trim(),
+              // Only on the second press, once the credit has been shown.
+              acknowledgeWalletCredit: walletWarning !== null,
+            })
+            setRevertTarget(null)
+            setRevertReason('')
+            setWalletWarning(null)
+          } catch (err: any) {
+            const data = err?.response?.data
+            if (data?.code === 'WALLET_CREDIT_EXISTS') {
+              setWalletWarning(data.message)
+              return
+            }
+          }
+        }}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Why (required)</Label>
+            <Input
+              autoFocus
+              value={revertReason}
+              onChange={(e) => setRevertReason(e.target.value)}
+              placeholder={revertTarget?.status === 'paid' ? 'Marked paid in error' : 'Skipped by mistake'}
+            />
+          </div>
+          {/* The one case that is not a clean undo — see the service. */}
+          {walletWarning && (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+              {walletWarning}
+            </p>
+          )}
+        </div>
+      </ConfirmDialog>
 
       {/* Skipping one. The dialog leads with "no commission is owed" rather
           than with the amount — the amount is the thing NOT happening. */}

@@ -168,3 +168,46 @@ export function useBulkResolveCommissions() {
     onError: (err) => toast.error(getErrorMessage(err)),
   })
 }
+
+/**
+ * Undo a settlement — paid or skipped — putting the row back in the queue.
+ *
+ * A reason is required by the server. The row is read again months later, and
+ * "why does this say pending when we recorded it as paid" needs an answer
+ * written at the time.
+ *
+ * A commission confirmed in the wallet era credited the customer's balance,
+ * and undoing it here does not reverse that. The server answers 409 with the
+ * deposit it found; the dialog shows it and retries with
+ * acknowledgeWalletCredit once somebody has seen it.
+ */
+export function useRevertCommission() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async ({ commissionId, reason, acknowledgeWalletCredit }: {
+      commissionId: number
+      reason: string
+      acknowledgeWalletCredit?: boolean
+    }) => {
+      const res = await api.patch(`/commissions/${commissionId}/revert`, {
+        reason,
+        ...(acknowledgeWalletCredit ? { acknowledgeWalletCredit: true } : {}),
+      })
+      return res.data
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] })
+      queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
+      toast.success(res?.message || 'Moved back to pending')
+    },
+    // 409 is handled by the caller — it carries the wallet credit to show —
+    // so it must not raise a toast of its own on the way past.
+    onError: (err: any) => {
+      if (err?.response?.data?.code === 'WALLET_CREDIT_EXISTS') return
+      toast.error(getErrorMessage(err))
+    },
+  })
+}
