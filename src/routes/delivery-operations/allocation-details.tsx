@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { PageHeader } from '#/components/PageHeader'
+import { EditAllocationDialog, type AllocationTruckRow } from '#/components/delivery-operations/EditAllocationDialog'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -233,6 +234,38 @@ function AllocationDetailsPage() {
         return dateB.localeCompare(dateA)
       })
   }, [codeEntries, truckIndex, customerMap, pfiMap, salesByRecord])
+
+  // ── Editing the allocation itself ───────────────────────────────────────
+  const [editOpen, setEditOpen] = useState(false)
+
+  /**
+   * The trucks as the edit dialog needs them: an id to delete by, and whether
+   * money is attached. salesByRecord is the same match the page totals with,
+   * so a row the dialog calls removable is one this page also shows nothing
+   * sold against.
+   */
+  const editRows = useMemo((): AllocationTruckRow[] => truckRecords.map((r) => ({
+    id: String((r as any)._id || (r as any).id || ''),
+    plate: r.truckPlate || r.truckNumber || '',
+    qty: r.qty,
+    unitLabel: r.unitLabel,
+    statusLabel: r.status?.label,
+    salesCount: (salesByRecord.get((r as any)._id || (r as any).id || '') ?? []).length,
+  })).filter((r) => r.id), [truckRecords, salesByRecord])
+
+  /**
+   * What an added truck inherits. Taken from the rows already here rather
+   * than asked for again — a code is one load, and retyping the depot per
+   * truck is how one allocation ends up with three depots on it.
+   */
+  const inherited = useMemo(() => {
+    const first = truckRecords.find((r) => r.depotDisplay) || truckRecords[0]
+    return {
+      depotName: first?.depotDisplay || '',
+      productName: (first as any)?.pfiProduct || (first as any)?.pfi_product || '',
+      unit: first?.unitLabel || 'Litres',
+    }
+  }, [truckRecords])
 
   // ── All matched sales for this allocation ───────────────────────────────
   const allocationSales = useMemo((): DeliverySale[] => {
@@ -636,6 +669,15 @@ function AllocationDetailsPage() {
               disabled={truckRecords.length === 0}
             >
               <Download className="size-3.5" /> Export CSV
+            </Button>
+            {/* Creating an allocation had a screen; changing one had nothing,
+                so a truck that turned up late could only be fixed by somebody
+                with database access. */}
+            <Button
+              className="gap-2 cursor-pointer h-9 text-xs font-semibold"
+              onClick={() => setEditOpen(true)}
+            >
+              <Truck className="size-3.5" /> Edit allocation
             </Button>
           </div>
         </div>
@@ -1160,6 +1202,16 @@ function AllocationDetailsPage() {
         onConfirm={handleBulkAssign}
         loading={bulkAssigning}
       />
+      <EditAllocationDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        code={normalizedCode}
+        rows={editRows}
+        depotName={inherited.depotName}
+        productName={inherited.productName}
+        unit={inherited.unit}
+      />
+
     </div>
   )
 }
