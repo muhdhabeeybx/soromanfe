@@ -1,8 +1,10 @@
-import { format } from 'date-fns'
 import api from '#/lib/api/http'
 import { ALL_TYPES, REPORTS, allFields, reportValue } from '#/routes/my-report/-report-config'
 import { naira } from '#/routes/pfi/-pfi-utils'
-import { variancesOn, actualsOf, type DailyReportRow } from './-hub-data'
+import {
+  variancesOn, checkSourceFor, SYSTEM_CHECKED_FIELDS,
+  type DailyReportRow, type SystemActuals,
+} from './-hub-data'
 
 /**
  * Real numbers with a cell format, never pre-formatted strings — a column
@@ -53,125 +55,143 @@ function sheetName(location: string, used: Set<string>) {
 export async function buildReportsHubWorkbook(
   rows: DailyReportRow[],
   opts: { date: string; location: string; pfi: string },
+  /** Live system figures for reports with no snapshot — see checkSourceFor. */
+  live?: Map<string, SystemActuals>,
 ): Promise<{ buffer: ArrayBuffer; filename: string }> {
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Soroman System'
   wb.created = new Date()
 
-  const byLocation = new Map<string, DailyReportRow[]>()
-  for (const r of rows) {
-    const loc = r.location?.trim() || 'Unknown'
-    if (!byLocation.has(loc)) byLocation.set(loc, [])
-    byLocation.get(loc)!.push(r)
-  }
-  const locations = [...byLocation.keys()].sort((a, b) =>
-    a === 'Unknown' ? 1 : b === 'Unknown' ? -1 : a.localeCompare(b),
-  )
-
-  // Widest field set across the five types, so every sheet's columns are wide
-  // enough for whichever role's block is currently occupying them — column
-  // width is a sheet property, but each role's header row redraws its own
-  // labels into the same columns.
-  const maxFields = Math.max(...ALL_TYPES.map((t) => allFields(REPORTS[t]).length))
+  /**
+   * One sheet per ROLE, mirroring the page.
+   *
+   * It used to be one sheet per location, which put a sales sheet, a security
+   * sheet and a commissions sheet side by side and scattered each role across
+   * the workbook. Comparing one sales manager against another meant opening
+   * six tabs. A role to a tab, ordered by batch, puts the outlier beside its
+   * peers — and it means a tab can be sent to the person who owns it.
+   *
+   * Location becomes a column, so nothing is lost by not being a tab.
+   */
   const usedNames = new Set<string>()
 
-  for (const loc of locations) {
-    const ws = wb.addWorksheet(sheetName(loc, usedNames))
-    // +1 for the system check, which every role block carries.
-    const lastCol = 3 + maxFields + 1
+  for (const type of ALL_TYPES) {
+    const typeRows = rows
+      .filter((r) => r.reportType === type)
+      .sort((a, b) => (
+        (a.pfiNumber || '').localeCompare(b.pfiNumber || '')
+          || (a.location || '').localeCompare(b.location || '')
+      ))
+    if (typeRows.length === 0) continue
+
+    const def = REPORTS[type]
+    const fields = allFields(def)
+    const ws = wb.addWorksheet(sheetName(def.roleLabel, usedNames))
+
+    /**
+     * Each figure the system can speak to is followed by its own column, the
+     * same pairing the page shows. Two numbers in one cell read as a figure
+     * with a footnote; side by side they read as a comparison.
+     */
+    const columns: Array<{ label: string; field?: typeof fields[number]; system?: boolean }> = [
+      { label: 'PFI' }, { label: 'Location' }, { label: 'Submitted by' }, { label: 'Status' },
+    ]
+    for (const f of fields) {
+      columns.push({ label: f.label, field: f })
+      if (SYSTEM_CHECKED_FIELDS.has(f.key)) {
+        columns.push({ label: `${f.label} (system)`, field: f, system: true })
+      }
+    }
+    columns.push({ label: 'System check' })
+    const lastCol = columns.length
 
     ws.mergeCells(1, 1, 1, lastCol)
     const title = ws.getCell(1, 1)
-    title.value = `Soroman — Staff Reports · ${loc}`
+    title.value = `Soroman — ${def.roleLabel} · ${opts.date}`
     title.font = { bold: true, size: 13 }
 
     ws.mergeCells(2, 1, 2, lastCol)
     const meta = ws.getCell(2, 1)
-    const filters = [
-      `Date: ${opts.date}`,
+    meta.value = [
+      `${typeRows.length} report${typeRows.length === 1 ? '' : 's'}`,
       opts.location !== 'all' ? `Location filter: ${opts.location}` : '',
       opts.pfi !== 'all' ? `PFI filter: ${opts.pfi}` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ')
-    meta.value = `${filters} · Generated ${format(new Date(), 'd MMM yyyy, HH:mm')}`
-    meta.font = { italic: true, size: 9, color: { argb: 'FF666666' } }
+    ].filter(Boolean).join('   ·   ')
+    meta.font = { size: 9, color: { argb: 'FF6B7280' } }
 
-    let cursor = 4
-    const locRows = byLocation.get(loc)!
+    const headerRow = ws.getRow(4)
+    headerRow.values = columns.map((c) => c.label)
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
 
-    for (const type of ALL_TYPES) {
-      const def = REPORTS[type]
-      const typeRows = locRows.filter((r) => r.reportType === type)
-      if (typeRows.length === 0) continue
+    let cursor = 5
+    for (const r of typeRows) {
+      const src = checkSourceFor(r, live)
+      const row = ws.getRow(cursor)
+      row.values = columns.map((c) => {
+        if (!c.field) {
+          switch (c.label) {
+            case 'PFI': return r.pfiNumber || ''
+            case 'Location': return r.location?.trim() || ''
+            case 'Submitted by': return r.submittedByName || ''
+            case 'Status': return STATUS_LABEL[r.status] || r.status
+            default: return systemCheck(r, fields, live)
+          }
+        }
+        const f = c.field
+        if (c.system) {
+          const sv = src?.fields[f.key]
+          return sv == null ? null : sv
+        }
+        // reportValue, not r[f.key]: the commission report's two outstanding
+        // figures postdate the rows that still have to state them, and those
+        // work out from what the row does carry.
+        const v = reportValue(r, f.key)
+        if (f.type === 'priceBands') {
+          return Array.isArray(v) && v.length
+            ? (v as Array<{ price: unknown; litres: unknown }>)
+              .map((b) => `${naira(Number(b.price))}×${Number(b.litres).toLocaleString()}L`).join('; ')
+            : null
+        }
+        if (f.type === 'topCustomers') {
+          return Array.isArray(v) && v.length
+            ? (v as Array<{ name?: string; litres: unknown }>)
+              .map((c2) => `${c2.name || '—'} (${Number(c2.litres).toLocaleString()}L)`).join(', ')
+            : null
+        }
+        if (v == null || v === '') return null
+        return f.type === 'money' || f.type === 'number' ? Number(v) : String(v)
+      })
 
-      const fields = allFields(def)
-      const headers = ['PFI', 'Submitted by', 'Status', ...fields.map((f) => f.label), 'System check']
-
-      ws.mergeCells(cursor, 1, cursor, lastCol)
-      const banner = ws.getCell(cursor, 1)
-      banner.value = `${def.roleLabel} (${typeRows.length})`
-      banner.font = { bold: true, color: { argb: 'FFFFFFFF' } }
-      banner.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${def.color}` } }
+      // Real numbers with a cell format, on the filed figure and the system's
+      // alike — a System column that cannot be subtracted from the one beside
+      // it is not much of a comparison.
+      columns.forEach((c, i) => {
+        const t = c.field?.type
+        if (t !== 'money' && t !== 'number') return
+        row.getCell(i + 1).numFmt = t === 'money' ? NGN : QTY
+      })
       cursor++
-
-      const headerRow = ws.getRow(cursor)
-      headerRow.values = headers
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
-      cursor++
-
-      for (const r of typeRows) {
-        const row = ws.getRow(cursor)
-        row.values = [
-          r.pfiNumber || '',
-          r.submittedByName || '',
-          STATUS_LABEL[r.status] || r.status,
-          ...fields.map((f) => {
-            // reportValue, not r[f.key]: the commission report's two
-            // outstanding figures postdate the rows that still have to state
-            // them, and those work out from what the row does carry.
-            const v = reportValue(r, f.key)
-            if (f.type === 'priceBands') {
-              return Array.isArray(v) && v.length
-                ? (v as Array<{ price: unknown; litres: unknown }>)
-                  .map((b) => `${naira(Number(b.price))}×${Number(b.litres).toLocaleString()}L`).join('; ')
-                : null
-            }
-            if (f.type === 'topCustomers') {
-              return Array.isArray(v) && v.length
-                ? (v as Array<{ name?: string; litres: unknown }>)
-                  .map((c) => `${c.name || '—'} (${Number(c.litres).toLocaleString()}L)`).join(', ')
-                : null
-            }
-            if (v == null || v === '') return null
-            return f.type === 'money' || f.type === 'number' ? Number(v) : String(v)
-          }),
-          // What the system held when this was filed, where it disagrees.
-          // Spelt out rather than flagged: the sheet is read away from the
-          // app, often by somebody who cannot go and look the figure up.
-          systemCheck(r, fields),
-        ]
-        fields.forEach((f, i) => {
-          if (f.type !== 'money' && f.type !== 'number') return
-          row.getCell(4 + i).numFmt = f.type === 'money' ? NGN : QTY
-        })
-        cursor++
-      }
-      cursor += 2 // blank row between role blocks
     }
 
-    ws.getColumn(1).width = 18
-    ws.getColumn(2).width = 22
-    ws.getColumn(3).width = 12
-    for (let i = 4; i <= lastCol; i++) ws.getColumn(i).width = 20
-    // Remarks reads better wide than wrapped across a narrow column.
-    for (const type of ALL_TYPES) {
-      const idx = allFields(REPORTS[type]).findIndex((f) => f.key === 'remarks')
-      if (idx >= 0) ws.getColumn(4 + idx).width = 36
+    ws.getColumn(1).width = 26
+    ws.getColumn(2).width = 24
+    ws.getColumn(3).width = 22
+    ws.getColumn(4).width = 12
+    for (let i = 5; i <= lastCol; i++) {
+      const c = columns[i - 1]
+      ws.getColumn(i).width = c.field?.key === 'remarks' ? 36 : c.system ? 16 : 20
     }
     ws.getColumn(lastCol).width = 52
+    ws.views = [{ state: 'frozen', ySplit: 4 }]
+  }
+
+  // Every role empty means nothing was filed; a workbook with no sheets cannot
+  // be written at all, so say so rather than throwing from ExcelJS.
+  if (wb.worksheets.length === 0) {
+    const ws = wb.addWorksheet('No reports')
+    ws.getCell(1, 1).value = `No reports filed for ${opts.date}`
   }
 
   const buffer = await wb.xlsx.writeBuffer()
@@ -187,25 +207,32 @@ export async function buildReportsHubWorkbook(
  * That last one is not agreement — nobody checked — and a blank cell would
  * read as clean, so it says so.
  */
-function systemCheck(r: DailyReportRow, fields: Array<{ key: string; label: string; type?: string }>): string {
-  if (!actualsOf(r)) return 'Not checked — filed before the system comparison'
-  const off = variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k))
-  if (!off.length) return 'Agrees with the system'
+function systemCheck(
+  r: DailyReportRow,
+  fields: Array<{ key: string; label: string; type?: string }>,
+  live?: Map<string, SystemActuals>,
+): string {
+  const src = checkSourceFor(r, live)
+  if (!src) return 'Not checked'
+  const off = variancesOn(src, fields.map((f) => f.key), (k) => reportValue(r, k))
+  const when = src.when === 'now' ? ' (checked now, not on the day)' : ''
+  if (!off.length) return `Agrees with the system${when}`
   return off
     .map((x) => {
       const label = fields.find((f) => f.key === x.key)?.label ?? x.key
       const dir = x.off.diff > 0 ? 'over' : 'under'
       return `${label}: filed ${x.off.typed.toLocaleString()} vs system ${x.off.system.toLocaleString()} (${dir} by ${Math.abs(x.off.diff).toLocaleString()})`
     })
-    .join('; ')
+    .join('; ') + when
 }
 
 /** Download button: build the workbook, hand it straight to the browser. */
 export async function exportReportsHub(
   rows: DailyReportRow[],
   opts: { date: string; location: string; pfi: string },
+  live?: Map<string, SystemActuals>,
 ) {
-  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts)
+  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts, live)
   triggerDownload(
     new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
     filename,
@@ -226,12 +253,13 @@ export async function emailReportsHub(
   rows: DailyReportRow[],
   opts: { date: string; location: string; pfi: string },
   recipients: string[],
+  live?: Map<string, SystemActuals>,
 ): Promise<{ message: string }> {
   // The workbook goes up with it, so the email carries the very report on
   // screen — the same filters, the same rows, the same file the Download
   // button gives. The server attaches it beside the readable summary; the
   // summary is for reading on a phone, the workbook for working at a desk.
-  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts)
+  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts, live)
   const attachmentBase64 = await blobToBase64(new Blob([buffer]))
 
   const res = await api.post('/daily-reports/email', {

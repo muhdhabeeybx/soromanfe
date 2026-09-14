@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { AlertTriangle, Download, FileSpreadsheet, Loader2, Mail, RefreshCw, Send, X } from 'lucide-react'
+import { AlertTriangle, Check, Download, FileSpreadsheet, Loader2, Mail, RefreshCw, Send, X } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -25,7 +25,11 @@ import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
-import { fetchDailyReportsForDate, actualsOf, varianceOf, variancesOn, type DailyReportRow } from './-hub-data'
+import {
+  fetchDailyReportsForDate, checkSourceFor, useLiveActuals, varianceOf, variancesOn,
+  SYSTEM_CHECKED_FIELDS,
+  type CheckSource, type DailyReportRow, type SystemActuals,
+} from './-hub-data'
 import { exportReportsHub, emailReportsHub } from './-export'
 
 export const Route = createFileRoute('/admin-reports/')({
@@ -49,7 +53,6 @@ const formatTopCustomers = (v: unknown) => (
     : ''
 )
 
-type LocationGroup = { type: ReportType; rows: DailyReportRow[] }
 
 function AdminReportsPage() {
   const toast = useToast()
@@ -83,6 +86,20 @@ function AdminReportsPage() {
     }
   }, [rows])
 
+  /**
+   * A live system read for every batch on the page.
+   *
+   * Reports filed before snapshots existed carry none, and without this the
+   * whole history reads "not checked" — true, but useless. The live read fills
+   * those in and is labelled as checked now rather than on the day, since it
+   * is today's book being compared against an older sheet.
+   */
+  const pfiNumbers = useMemo(
+    () => [...new Set(rows.map((r) => (r.pfiNumber || '').trim()).filter(Boolean))].sort(),
+    [rows],
+  )
+  const live = useLiveActuals(selectedDate, pfiNumbers)
+
   const filtered = useMemo(
     () => rows.filter(
       (r) => (locationFilter === 'all' || r.location === locationFilter)
@@ -92,25 +109,20 @@ function AdminReportsPage() {
     [rows, locationFilter, pfiFilter, roleFilter],
   )
 
-  // Location (alphabetical, blank -> "Unknown") -> role, in the five reports'
-  // fixed order, empty roles dropped -> rows.
-  const sections = useMemo(() => {
-    const byLocation = new Map<string, DailyReportRow[]>()
-    for (const r of filtered) {
-      const loc = r.location?.trim() || 'Unknown'
-      if (!byLocation.has(loc)) byLocation.set(loc, [])
-      byLocation.get(loc)!.push(r)
-    }
-    const locations = [...byLocation.keys()].sort((a, b) => (
-      a === 'Unknown' ? 1 : b === 'Unknown' ? -1 : a.localeCompare(b)
-    ))
-    return locations.map((location) => ({
-      location,
-      groups: ALL_TYPES
-        .map((type) => ({ type, rows: byLocation.get(location)!.filter((r) => r.reportType === type) }))
-        .filter((g): g is LocationGroup => g.rows.length > 0),
-    }))
-  }, [filtered])
+  /**
+   * Role first, in the five reports' fixed order — the page's whole shape.
+   *
+   * Location used to be the outer grouping, which scattered a role's sheets
+   * across every block on the page. Comparing one sales manager against
+   * another meant reading six sections; now they are one table, and the
+   * outlier sits beside its peers.
+   */
+  const sections = useMemo(
+    () => ALL_TYPES
+      .map((type) => ({ type, rows: filtered.filter((r) => r.reportType === type) }))
+      .filter((g) => g.rows.length > 0),
+    [filtered],
+  )
 
   // Each figure is scoped to the roles that actually own it — summing
   // litresSold across a security officer's rows would silently add zeros,
@@ -127,8 +139,9 @@ function AdminReportsPage() {
     const locations = new Set<string>()
     for (const r of filtered) {
       const keys = allFields(REPORTS[r.reportType]).map((f) => f.key)
-      if (!actualsOf(r)) unchecked++
-      else if (variancesOn(r, keys, (k) => reportValue(r, k)).length) withVariance++
+      const src = checkSourceFor(r, live)
+      if (!src) unchecked++
+      else if (variancesOn(src, keys, (k) => reportValue(r, k)).length) withVariance++
       litres += Number(r.litresSold || 0)
       if (r.reportType === 'sales_manager' || r.reportType === 'product_manager') {
         sales += Number(r.totalSalesAmount || 0)
@@ -138,7 +151,7 @@ function AdminReportsPage() {
       locations.add(r.location?.trim() || 'Unknown')
     }
     return { litres, sales, commission, trucksExited, withVariance, unchecked, locations: locations.size, count: filtered.length }
-  }, [filtered])
+  }, [filtered, live])
 
   const hasFilters = locationFilter !== 'all' || pfiFilter !== 'all' || roleFilter !== 'all'
   const clearFilters = () => { setLocationFilter('all'); setPfiFilter('all'); setRoleFilter('all') }
@@ -163,7 +176,7 @@ function AdminReportsPage() {
         date: selectedDate,
         location: scope.location ?? locationFilter,
         pfi: scope.pfi ?? pfiFilter,
-      })
+      }, live)
     } catch (e) {
       toast.error(getErrorMessage(e))
     } finally {
@@ -175,7 +188,7 @@ function AdminReportsPage() {
     if (!filtered.length) return
     setExporting(true)
     try {
-      await exportReportsHub(filtered, { date: selectedDate, location: locationFilter, pfi: pfiFilter })
+      await exportReportsHub(filtered, { date: selectedDate, location: locationFilter, pfi: pfiFilter }, live)
     } catch (e) {
       toast.error(getErrorMessage(e))
     } finally {
@@ -299,11 +312,12 @@ function AdminReportsPage() {
           onClearFilters={clearFilters}
         />
       ) : (
-        sections.map(({ location, groups }) => (
-          <LocationSection
-            key={location}
-            location={location}
-            groups={groups}
+        sections.map(({ type, rows: roleRows }) => (
+          <RoleSection
+            key={type}
+            type={type}
+            rows={roleRows}
+            live={live}
             onDownload={downloadSubset}
             downloading={downloading}
           />
@@ -315,6 +329,7 @@ function AdminReportsPage() {
         onOpenChange={setEmailDialogOpen}
         rows={filtered}
         opts={{ date: selectedDate, location: locationFilter, pfi: pfiFilter }}
+        live={live}
       />
 
     </div>
@@ -330,12 +345,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
  * is sent until "Send" is pressed.
  */
 function EmailReportDialog({
-  open, onOpenChange, rows, opts,
+  open, onOpenChange, rows, opts, live,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   rows: DailyReportRow[]
   opts: { date: string; location: string; pfi: string }
+  live: Map<string, SystemActuals>
 }) {
   const toast = useToast()
   const [recipients, setRecipients] = useState<string[]>(() => {
@@ -365,7 +381,7 @@ function EmailReportDialog({
     if (!recipients.length) return
     setSending(true)
     try {
-      const res = await emailReportsHub(rows, opts, recipients)
+      const res = await emailReportsHub(rows, opts, recipients, live)
       toast.success(res.message)
       localStorage.setItem(RECIPIENTS_KEY, JSON.stringify(recipients))
       onOpenChange(false)
@@ -461,185 +477,237 @@ type DownloadFn = (
   scope: { location?: string; pfi?: string; key: string },
 ) => void
 
-function LocationSection({
-  location, groups, onDownload, downloading,
-}: {
-  location: string
-  groups: LocationGroup[]
-  onDownload: DownloadFn
-  downloading: string | null
-}) {
-  const total = groups.reduce((s, g) => s + g.rows.length, 0)
-  const allRows = groups.flatMap((g) => g.rows)
-  const key = `loc:${location}`
-  return (
-    <section className={PANEL}>
-      <div className={PANEL_RAIL}>
-        <span className={cn(MICRO, 'text-muted-foreground')}>{location}</span>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{total} report{total === 1 ? '' : 's'}</span>
-          <Button
-            variant="ghost" size="sm"
-            onClick={() => onDownload(allRows, { location, key })}
-            disabled={downloading !== null}
-          >
-            {downloading === key ? <Loader2 className="animate-spin" /> : <Download data-icon="inline-start" />}
-            This location
-          </Button>
-        </div>
-      </div>
-      <div className="divide-y divide-foreground/10">
-        {groups.map((g) => (
-          <RoleTable
-            key={g.type} type={g.type} rows={g.rows}
-            location={location} onDownload={onDownload} downloading={downloading}
-          />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function RoleTable({
-  type, rows, location, onDownload, downloading,
+/**
+ * One role, every sheet filed for it, ordered by batch.
+ *
+ * Role first, location second — deliberately reversed from how this page used
+ * to read. Grouping by location put one sales sheet beside one security sheet
+ * and one commissions sheet, which is the arrangement that makes a role's
+ * figures impossible to compare: to see whether the sales managers agreed with
+ * each other you had to read six blocks and hold them in your head. Every
+ * sales sheet in one table, sorted by batch, puts the outlier next to its
+ * peers where it is obvious. Location is a column and a filter instead.
+ */
+function RoleSection({
+  type, rows, live, onDownload, downloading,
 }: {
   type: ReportType
   rows: DailyReportRow[]
-  location: string
+  live: Map<string, SystemActuals>
   onDownload: DownloadFn
   downloading: string | null
 }) {
   const def = REPORTS[type]
   const fields = allFields(def)
-  const key = `role:${location}:${type}`
-  // How many sheets in this block disagree with the system — the number that
-  // decides whether this block needs reading at all.
-  const offCount = rows.filter(
-    (r) => variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k)).length > 0,
+  const key = `role:${type}`
+
+  // PFI first, then location — so the same batch's sheets sit together even
+  // when two locations filed against it.
+  const ordered = useMemo(() => [...rows].sort((a, b) => (
+    (a.pfiNumber || '').localeCompare(b.pfiNumber || '')
+      || (a.location || '').localeCompare(b.location || '')
+  )), [rows])
+
+  const checks = useMemo(
+    () => new Map(ordered.map((r) => [r.id, checkSourceFor(r, live)])),
+    [ordered, live],
+  )
+
+  const offCount = ordered.filter(
+    (r) => variancesOn(checks.get(r.id) ?? null, fields.map((f) => f.key), (k) => reportValue(r, k)).length > 0,
   ).length
+  const uncheckedCount = ordered.filter((r) => !checks.get(r.id)).length
+
   return (
-    <div>
+    <section className={PANEL}>
       <div
-        className="flex items-center gap-2 border-l-[3px] px-6 py-2.5"
-        style={{ borderColor: `#${def.color}` }}
+        className={cn(PANEL_RAIL, 'border-l-[3px]')}
+        style={{ borderLeftColor: `#${def.color}` }}
       >
         <span className="text-xs font-semibold uppercase" style={{ color: `#${def.color}` }}>
           {def.roleLabel}
         </span>
-        <span className="text-xs text-muted-foreground">· {rows.length}</span>
-        {offCount > 0 && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">
-            <AlertTriangle className="size-2.5" />
-            {offCount} with a discrepancy
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            {ordered.length} report{ordered.length === 1 ? '' : 's'}
           </span>
-        )}
-        <Button
-          variant="ghost" size="sm" className="ml-auto"
-          onClick={() => onDownload(rows, { location, key })}
-          disabled={downloading !== null}
-        >
-          {downloading === key ? <Loader2 className="animate-spin" /> : <Download data-icon="inline-start" />}
-          This role
-        </Button>
+          {offCount > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium whitespace-nowrap text-amber-600 dark:text-amber-500">
+              <AlertTriangle className="size-2.5" />
+              {offCount} with a discrepancy
+            </span>
+          )}
+          {uncheckedCount > 0 && (
+            <span className="text-[10px] whitespace-nowrap text-muted-foreground/60">
+              {uncheckedCount} not checked
+            </span>
+          )}
+          <Button
+            variant="ghost" size="sm"
+            onClick={() => onDownload(ordered, { key })}
+            disabled={downloading !== null}
+          >
+            {downloading === key ? <Loader2 className="animate-spin" /> : <Download data-icon="inline-start" />}
+            This role
+          </Button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>PFI</TableHead>
+              <TableHead>Location</TableHead>
               <TableHead>Submitted by</TableHead>
               <TableHead>Status</TableHead>
-              {fields.map((f) => (
+              {fields.map((f) => [
                 <TableHead
                   key={f.key}
                   className={f.type === 'money' || f.type === 'number' ? 'text-right' : undefined}
                 >
                   {f.label}
-                </TableHead>
-              ))}
+                </TableHead>,
+                // Its own column, not a second line inside the filed one. Two
+                // numbers stacked in one cell read as one figure with a
+                // footnote; side by side they read as a comparison, which is
+                // what they are.
+                SYSTEM_CHECKED_FIELDS.has(f.key) ? (
+                  <TableHead
+                    key={`${f.key}:sys`}
+                    className="border-l border-foreground/10 text-right text-muted-foreground"
+                  >
+                    System
+                  </TableHead>
+                ) : null,
+              ])}
+              <TableHead>System check</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => {
-              // Every figure on this sheet that disagrees with what the system
-              // held when it was filed. Summarised beside the status so a
-              // reviewer scanning the day sees which sheets need reading,
-              // rather than having to compare column by column.
-              const off = variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k))
+            {ordered.map((r) => {
+              const src = checks.get(r.id) ?? null
+              const off = variancesOn(src, fields.map((f) => f.key), (k) => reportValue(r, k))
               return (
-              <TableRow key={r.id}>
-                <TableCell className="whitespace-nowrap">{r.pfiNumber || '—'}</TableCell>
-                <TableCell className="whitespace-nowrap">{r.submittedByName || '—'}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5">
+                <TableRow key={r.id}>
+                  <TableCell className="whitespace-nowrap">{r.pfiNumber || '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{r.location?.trim() || '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{r.submittedByName || '—'}</TableCell>
+                  <TableCell>
                     <StatusChip
                       tone={STATUS_TONE[r.status] ?? 'inert'}
                       title={r.status === 'rejected' ? r.reviewComment || undefined : undefined}
                     >
                       {r.status}
                     </StatusChip>
-                    {off.length > 0 && (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-amber-600 dark:text-amber-500"
-                        title={off
-                          .map((x) => {
-                            const label = fields.find((f) => f.key === x.key)?.label ?? x.key
-                            return `${label}: filed ${x.off.typed.toLocaleString()}, system ${x.off.system.toLocaleString()}`
-                          })
-                          .join('\n')}
+                  </TableCell>
+                  {fields.map((f) => {
+                    // reportValue, not r[f.key]: the commission report's two
+                    // outstanding figures postdate the rows that still have to
+                    // state them, and those work out from what the row carries.
+                    const v = reportValue(r, f.key)
+                    const systemValue = src?.fields[f.key]
+                    const cellOff = varianceOf(src, f.key, v)
+                    const isStructured = f.type === 'priceBands' || f.type === 'topCustomers'
+                    const display = f.type === 'priceBands' ? formatPriceBands(v)
+                      : f.type === 'topCustomers' ? formatTopCustomers(v)
+                        : null
+                    const empty = display != null ? display === '' : (v == null || v === '')
+                    return [
+                      <TableCell
+                        key={f.key}
+                        className={cn(
+                          f.type === 'money' || f.type === 'number' ? 'text-right' : undefined,
+                          (f.key === 'remarks' || isStructured) && 'max-w-xs truncate',
+                        )}
+                        title={(f.key === 'remarks' || isStructured) && !empty ? (display ?? String(v)) : undefined}
                       >
-                        <AlertTriangle className="size-2.5" />
-                        {off.length} off
-                      </span>
-                    )}
-                    {!actualsOf(r) && (
-                      // Filed before the system started keeping its own copy.
-                      // Not the same as agreeing, and must not read as clean.
-                      <span className="text-[10px] whitespace-nowrap text-muted-foreground/60" title="This report predates the system check — no comparison was taken on the day.">
-                        unchecked
-                      </span>
-                    )}
-                  </div>
-                </TableCell>
-                {fields.map((f) => {
-                  // reportValue, not r[f.key]: the commission report's two
-                  // outstanding figures postdate the rows that still have to
-                  // state them, and those work out from what the row carries.
-                  const v = reportValue(r, f.key)
-                  const cellOff = varianceOf(r, f.key, v)
-                  const isStructured = f.type === 'priceBands' || f.type === 'topCustomers'
-                  const display = f.type === 'priceBands' ? formatPriceBands(v)
-                    : f.type === 'topCustomers' ? formatTopCustomers(v)
-                      : null
-                  const empty = display != null ? display === '' : (v == null || v === '')
-                  return (
-                    <TableCell
-                      key={f.key}
-                      className={cn(
-                        f.type === 'money' || f.type === 'number' ? 'text-right' : undefined,
-                        (f.key === 'remarks' || isStructured) && 'max-w-xs truncate',
-                      )}
-                      title={(f.key === 'remarks' || isStructured) && !empty ? (display ?? String(v)) : undefined}
-                    >
-                      {empty
-                        ? '—'
-                        : display != null
-                          ? display
-                          : f.type === 'money' ? money(v) : f.type === 'number' ? num(v) : String(v)}
-                      {cellOff && (
-                        <span className="block text-[10px] whitespace-nowrap text-amber-600 dark:text-amber-500">
-                          system {f.type === 'money' ? money(cellOff.system) : num(cellOff.system)}
-                        </span>
-                      )}
-                    </TableCell>
-                  )
-                })}
-              </TableRow>
+                        {empty
+                          ? '—'
+                          : display != null
+                            ? display
+                            : f.type === 'money' ? money(v) : f.type === 'number' ? num(v) : String(v)}
+                        {/* The system's own figure, under every figure it can
+                            speak to — not only the ones that disagree. Seeing
+                            "sys 21,925,484" under a matching 21,925,484 is what
+                            makes the amber one mean something; a page that shows
+                            the comparison only when it fails leaves a reader
+                            unable to tell a checked figure from an unchecked
+                            one. */}
+                      </TableCell>,
+                      SYSTEM_CHECKED_FIELDS.has(f.key) ? (
+                        <TableCell
+                          key={`${f.key}:sys`}
+                          className={cn(
+                            'border-l border-foreground/10 text-right whitespace-nowrap',
+                            cellOff
+                              ? 'font-medium text-amber-600 dark:text-amber-500'
+                              : 'text-muted-foreground',
+                          )}
+                          title={cellOff
+                            ? `Filed ${cellOff.typed.toLocaleString()}, system ${cellOff.system.toLocaleString()}`
+                            : undefined}
+                        >
+                          {systemValue == null
+                            ? '—'
+                            : f.type === 'money' ? money(systemValue) : num(systemValue)}
+                        </TableCell>
+                      ) : null,
+                    ]
+                  })}
+                  <TableCell className="max-w-xs">
+                    <SystemCheckCell src={src} off={off} fields={fields} />
+                  </TableCell>
+                </TableRow>
               )
             })}
           </TableBody>
         </Table>
       </div>
+    </section>
+  )
+}
+
+/** The verdict in words, so a reader never has to scan the row to find it. */
+function SystemCheckCell({
+  src, off, fields,
+}: {
+  src: CheckSource
+  off: Array<{ key: string; off: { typed: number; system: number; diff: number } }>
+  fields: Array<{ key: string; label: string }>
+}) {
+  if (!src) {
+    return <span className="text-xs whitespace-nowrap text-muted-foreground/60">Not checked</span>
+  }
+  if (!off.length) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-emerald-600 dark:text-emerald-500">
+        <Check className="size-3" />
+        Agrees
+        {src.when === 'now' && <span className="text-muted-foreground/60">(checked now)</span>}
+      </span>
+    )
+  }
+  return (
+    <div className="space-y-0.5">
+      {off.slice(0, 3).map((x) => {
+        const label = fields.find((f) => f.key === x.key)?.label ?? x.key
+        return (
+          <p key={x.key} className="text-xs text-amber-600 dark:text-amber-500">
+            {label} {x.off.diff > 0 ? 'over' : 'under'} by {Math.abs(x.off.diff).toLocaleString()}
+          </p>
+        )
+      })}
+      {off.length > 3 && (
+        <p className="text-[10px] text-muted-foreground">+{off.length - 3} more</p>
+      )}
+      {src.when === 'now' && (
+        <p
+          className="text-[10px] text-muted-foreground/60"
+          title="This report was filed before the system kept its own copy, so it is being checked against today's book rather than the day's."
+        >
+          checked now, not on the day
+        </p>
+      )}
     </div>
   )
 }
