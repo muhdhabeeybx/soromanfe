@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { AlertTriangle, FileSpreadsheet, Loader2, Mail, MessageCircle, RefreshCw, Send, X } from 'lucide-react'
+import { AlertTriangle, Download, FileSpreadsheet, Loader2, Mail, RefreshCw, Send, X } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -26,7 +26,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
 import { fetchDailyReportsForDate, actualsOf, varianceOf, variancesOn, type DailyReportRow } from './-hub-data'
-import { exportReportsHub, emailReportsHub, whatsappReportsHub, type WhatsappReportResult } from './-export'
+import { exportReportsHub, emailReportsHub } from './-export'
 
 export const Route = createFileRoute('/admin-reports/')({
   beforeLoad: () => routeGuard('/admin-reports'),
@@ -59,9 +59,9 @@ function AdminReportsPage() {
   const [selectedDate, setSelectedDate] = useState(today)
   const [locationFilter, setLocationFilter] = useState('all')
   const [pfiFilter, setPfiFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState<ReportType | 'all'>('all')
   const [exporting, setExporting] = useState(false)
   const [emailDialogOpen, setEmailDialogOpen] = useState(false)
-  const [whatsappDialogOpen, setWhatsappDialogOpen] = useState(false)
 
   const {
     data: rows = [], isLoading, isFetching, isError, error, refetch,
@@ -77,15 +77,19 @@ function AdminReportsPage() {
     return {
       locations: uniq(rows.map((r) => r.location?.trim())),
       pfis: uniq(rows.map((r) => r.pfiNumber?.trim())),
+      // Roles in the five reports' fixed order, not alphabetical — the page,
+      // the workbook and this dropdown all read in the same sequence.
+      roles: ALL_TYPES.filter((t) => rows.some((r) => r.reportType === t)),
     }
   }, [rows])
 
   const filtered = useMemo(
     () => rows.filter(
       (r) => (locationFilter === 'all' || r.location === locationFilter)
-        && (pfiFilter === 'all' || r.pfiNumber === pfiFilter),
+        && (pfiFilter === 'all' || r.pfiNumber === pfiFilter)
+        && (roleFilter === 'all' || r.reportType === roleFilter),
     ),
-    [rows, locationFilter, pfiFilter],
+    [rows, locationFilter, pfiFilter, roleFilter],
   )
 
   // Location (alphabetical, blank -> "Unknown") -> role, in the five reports'
@@ -116,8 +120,15 @@ function AdminReportsPage() {
     let sales = 0
     let commission = 0
     let trucksExited = 0
+    // Sheets that disagree with the system, and sheets nobody could check.
+    // Counted apart: an unchecked report is not a clean one.
+    let withVariance = 0
+    let unchecked = 0
     const locations = new Set<string>()
     for (const r of filtered) {
+      const keys = allFields(REPORTS[r.reportType]).map((f) => f.key)
+      if (!actualsOf(r)) unchecked++
+      else if (variancesOn(r, keys, (k) => reportValue(r, k)).length) withVariance++
       litres += Number(r.litresSold || 0)
       if (r.reportType === 'sales_manager' || r.reportType === 'product_manager') {
         sales += Number(r.totalSalesAmount || 0)
@@ -126,11 +137,39 @@ function AdminReportsPage() {
       if (r.reportType === 'security_gate') trucksExited += Number(r.truckCount || 0)
       locations.add(r.location?.trim() || 'Unknown')
     }
-    return { litres, sales, commission, trucksExited, locations: locations.size, count: filtered.length }
+    return { litres, sales, commission, trucksExited, withVariance, unchecked, locations: locations.size, count: filtered.length }
   }, [filtered])
 
-  const hasFilters = locationFilter !== 'all' || pfiFilter !== 'all'
-  const clearFilters = () => { setLocationFilter('all'); setPfiFilter('all') }
+  const hasFilters = locationFilter !== 'all' || pfiFilter !== 'all' || roleFilter !== 'all'
+  const clearFilters = () => { setLocationFilter('all'); setPfiFilter('all'); setRoleFilter('all') }
+
+  /**
+   * Download a slice of the day — one location, or one role inside it.
+   *
+   * The same builder as the main button, given fewer rows: a per-role sheet
+   * has to be the same sheet, or the depot manager and the person who sent it
+   * are reading two documents that disagree. The filter labels ride along so
+   * the filename says what is inside it.
+   */
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const downloadSubset = async (
+    subset: DailyReportRow[],
+    scope: { location?: string; pfi?: string; key: string },
+  ) => {
+    if (!subset.length) return
+    setDownloading(scope.key)
+    try {
+      await exportReportsHub(subset, {
+        date: selectedDate,
+        location: scope.location ?? locationFilter,
+        pfi: scope.pfi ?? pfiFilter,
+      })
+    } catch (e) {
+      toast.error(getErrorMessage(e))
+    } finally {
+      setDownloading(null)
+    }
+  }
 
   const handleExport = async () => {
     if (!filtered.length) return
@@ -158,13 +197,19 @@ function AdminReportsPage() {
         )}
       />
 
-      <StatCardGrid count={6}>
+      <StatCardGrid count={7}>
         <StatCard label="Reports filed" value={num(summary.count)} tone="neutral" />
         <StatCard label="Locations reporting" value={num(summary.locations)} tone="neutral" />
         <StatCard label="Total litres" value={num(summary.litres)} tone="blue" />
         <StatCard label="Total sales" value={money(summary.sales)} tone="green" />
         <StatCard label="Commission paid" value={money(summary.commission)} tone="amber" />
         <StatCard label="Trucks exited" value={num(summary.trucksExited)} tone="neutral" />
+        <StatCard
+          label="With a discrepancy"
+          value={num(summary.withVariance)}
+          tone={summary.withVariance > 0 ? 'red' : 'green'}
+          description={summary.unchecked > 0 ? `${summary.unchecked} not checked` : undefined}
+        />
       </StatCardGrid>
 
       <section className={PANEL}>
@@ -175,13 +220,9 @@ function AdminReportsPage() {
               <Mail data-icon="inline-start" />
               Email report
             </Button>
-            {/* The same day, as a message rather than a workbook. Deliberately
-                a separate button: the two go to different people, and sending
-                both to everyone is how a report stops being read. */}
-            <Button variant="outline" size="sm" onClick={() => setWhatsappDialogOpen(true)} disabled={!filtered.length}>
-              <MessageCircle data-icon="inline-start" />
-              WhatsApp summary
-            </Button>
+            {/* WhatsApp is switched off. The email now carries the workbook
+                itself, so there is one way the day goes out and one thing it
+                says. The dialog below is line-commented, not deleted. */}
             <Button size="sm" onClick={handleExport} disabled={!filtered.length || exporting}>
               {exporting ? <Loader2 className="animate-spin" /> : <FileSpreadsheet data-icon="inline-start" />}
               Download report
@@ -189,7 +230,7 @@ function AdminReportsPage() {
           </div>
         </div>
         <div className={cn(PANEL_BODY, 'space-y-4')}>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <div className="flex gap-1.5">
               <Button
                 variant={selectedDate === today ? 'default' : 'outline'} size="sm" className="flex-1"
@@ -216,6 +257,15 @@ function AdminReportsPage() {
               <option value="all">All PFIs</option>
               {options.pfis.map((p) => <option key={p} value={p}>{p}</option>)}
             </NativeSelect>
+            <NativeSelect
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as ReportType | 'all')}
+            >
+              <option value="all">All roles</option>
+              {options.roles.map((t) => (
+                <option key={t} value={t}>{REPORTS[t].roleLabel}</option>
+              ))}
+            </NativeSelect>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -225,6 +275,9 @@ function AdminReportsPage() {
               )}
               {pfiFilter !== 'all' && (
                 <FilterChip onClear={() => setPfiFilter('all')}>{pfiFilter}</FilterChip>
+              )}
+              {roleFilter !== 'all' && (
+                <FilterChip onClear={() => setRoleFilter('all')}>{REPORTS[roleFilter].roleLabel}</FilterChip>
               )}
             </div>
             <span className="text-xs text-muted-foreground">
@@ -247,7 +300,13 @@ function AdminReportsPage() {
         />
       ) : (
         sections.map(({ location, groups }) => (
-          <LocationSection key={location} location={location} groups={groups} />
+          <LocationSection
+            key={location}
+            location={location}
+            groups={groups}
+            onDownload={downloadSubset}
+            downloading={downloading}
+          />
         ))
       )}
 
@@ -258,11 +317,6 @@ function AdminReportsPage() {
         opts={{ date: selectedDate, location: locationFilter, pfi: pfiFilter }}
       />
 
-      <WhatsappReportDialog
-        open={whatsappDialogOpen}
-        onOpenChange={setWhatsappDialogOpen}
-        opts={{ date: selectedDate }}
-      />
     </div>
   )
 }
@@ -311,7 +365,7 @@ function EmailReportDialog({
     if (!recipients.length) return
     setSending(true)
     try {
-      const res = await emailReportsHub(opts, recipients)
+      const res = await emailReportsHub(rows, opts, recipients)
       toast.success(res.message)
       localStorage.setItem(RECIPIENTS_KEY, JSON.stringify(recipients))
       onOpenChange(false)
@@ -402,24 +456,67 @@ function FilterChip({ children, onClear }: { children: React.ReactNode; onClear:
   )
 }
 
-function LocationSection({ location, groups }: { location: string; groups: LocationGroup[] }) {
+type DownloadFn = (
+  subset: DailyReportRow[],
+  scope: { location?: string; pfi?: string; key: string },
+) => void
+
+function LocationSection({
+  location, groups, onDownload, downloading,
+}: {
+  location: string
+  groups: LocationGroup[]
+  onDownload: DownloadFn
+  downloading: string | null
+}) {
   const total = groups.reduce((s, g) => s + g.rows.length, 0)
+  const allRows = groups.flatMap((g) => g.rows)
+  const key = `loc:${location}`
   return (
     <section className={PANEL}>
       <div className={PANEL_RAIL}>
         <span className={cn(MICRO, 'text-muted-foreground')}>{location}</span>
-        <span className="text-xs text-muted-foreground">{total} report{total === 1 ? '' : 's'}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">{total} report{total === 1 ? '' : 's'}</span>
+          <Button
+            variant="ghost" size="sm"
+            onClick={() => onDownload(allRows, { location, key })}
+            disabled={downloading !== null}
+          >
+            {downloading === key ? <Loader2 className="animate-spin" /> : <Download data-icon="inline-start" />}
+            This location
+          </Button>
+        </div>
       </div>
       <div className="divide-y divide-foreground/10">
-        {groups.map((g) => <RoleTable key={g.type} type={g.type} rows={g.rows} />)}
+        {groups.map((g) => (
+          <RoleTable
+            key={g.type} type={g.type} rows={g.rows}
+            location={location} onDownload={onDownload} downloading={downloading}
+          />
+        ))}
       </div>
     </section>
   )
 }
 
-function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] }) {
+function RoleTable({
+  type, rows, location, onDownload, downloading,
+}: {
+  type: ReportType
+  rows: DailyReportRow[]
+  location: string
+  onDownload: DownloadFn
+  downloading: string | null
+}) {
   const def = REPORTS[type]
   const fields = allFields(def)
+  const key = `role:${location}:${type}`
+  // How many sheets in this block disagree with the system — the number that
+  // decides whether this block needs reading at all.
+  const offCount = rows.filter(
+    (r) => variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k)).length > 0,
+  ).length
   return (
     <div>
       <div
@@ -430,6 +527,20 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
           {def.roleLabel}
         </span>
         <span className="text-xs text-muted-foreground">· {rows.length}</span>
+        {offCount > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">
+            <AlertTriangle className="size-2.5" />
+            {offCount} with a discrepancy
+          </span>
+        )}
+        <Button
+          variant="ghost" size="sm" className="ml-auto"
+          onClick={() => onDownload(rows, { location, key })}
+          disabled={downloading !== null}
+        >
+          {downloading === key ? <Loader2 className="animate-spin" /> : <Download data-icon="inline-start" />}
+          This role
+        </Button>
       </div>
       <div className="overflow-x-auto">
         <Table>
@@ -533,196 +644,201 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
   )
 }
 
-const WA_RECIPIENTS_KEY = 'reports-hub-whatsapp-recipients'
-/** Anything that could be a phone number. The server does the real parsing. */
-const PHONE_RE = /^[+\d][\d\s()-]{6,24}$/
-
-/**
- * Send the day as a WhatsApp message.
- *
- * Numbers persist in this browser, like the email list does, because the same
- * three or four managers get it every time and retyping them is how a nightly
- * habit stops being nightly.
- *
- * Nothing is sent until "Send" is pressed, and the result is reported per
- * number — a send that reached two of five and said "sent" would leave the
- * desk believing somebody was told something they never saw.
- */
-function WhatsappReportDialog({
-  open, onOpenChange, opts,
-}: {
-  open: boolean
-  onOpenChange: (o: boolean) => void
-  opts: { date: string }
-}) {
-  const [numbers, setNumbers] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(WA_RECIPIENTS_KEY)
-      return raw ? (JSON.parse(raw) as string[]) : []
-    } catch {
-      return []
-    }
-  })
-  const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  /** What the last preview resolved to. Cleared whenever the list changes. */
-  const [preview, setPreview] = useState<WhatsappReportResult['data'] | null>(null)
-  const toast = useToast()
-
-  const addNumber = () => {
-    const value = draft.trim().replace(/,$/, '')
-    if (!value) return
-    if (!PHONE_RE.test(value)) {
-      toast.error(`"${value}" doesn't look like a phone number`)
-      return
-    }
-    setNumbers((n) => (n.includes(value) ? n : [...n, value]))
-    setDraft('')
-    setPreview(null)
-  }
-  const removeNumber = (value: string) => {
-    setNumbers((n) => n.filter((x) => x !== value))
-    setPreview(null)
-  }
-
-  const runPreview = async () => {
-    if (!numbers.length) return
-    setSending(true)
-    try {
-      const res = await whatsappReportsHub(opts, numbers, true)
-      setPreview(res.data ?? null)
-    } catch (err) {
-      toast.error(getErrorMessage(err))
-    } finally {
-      setSending(false)
-    }
-  }
-
-  const send = async () => {
-    if (!numbers.length) return
-    setSending(true)
-    try {
-      const res = await whatsappReportsHub(opts, numbers)
-      localStorage.setItem(WA_RECIPIENTS_KEY, JSON.stringify(numbers))
-      const failed = res.data?.failed ?? []
-      const sent = res.data?.sent ?? []
-
-      if (!sent.length) {
-        // Nothing went. The server says why in one sentence — a switched-off
-        // channel, a bad template, an unreachable number — and repeating it
-        // once per recipient would bury the one thing worth reading.
-        toast.error(res.message)
-      } else if (failed.length) {
-        // Named, not counted: "3 failed" tells nobody which manager to ring.
-        toast.warning(
-          `${res.message}. Not delivered: ${failed.map((f) => `${f.to} (${f.error})`).join('; ')}`,
-        )
-      } else {
-        toast.success(res.message)
-      }
-      if (sent.length) onOpenChange(false)
-    } catch (err) {
-      toast.error(getErrorMessage(err))
-    } finally {
-      setSending(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Send the day as a WhatsApp message</DialogTitle>
-          <DialogDescription>
-            A short text summary of {format(new Date(`${opts.date}T00:00:00`), 'd MMM yyyy')} —
-            volume, value and each location. No attachment.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3">
-          {numbers.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {numbers.map((value) => (
-                <span
-                  key={value}
-                  className="inline-flex items-center gap-1 rounded-full border border-foreground/15 bg-muted/50 px-2.5 py-1 text-xs"
-                >
-                  {value}
-                  <button
-                    type="button" onClick={() => removeNumber(value)}
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={`Remove ${value}`}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="flex gap-2">
-            <Input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addNumber() }
-              }}
-              placeholder="08031234567"
-              inputMode="tel"
-            />
-            <Button type="button" variant="outline" onClick={addNumber}>Add</Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            0803…, +234803… or 234803… all work. Numbers are remembered on this device.
-          </p>
-
-          {/*
-            What Meta will actually receive.
-
-            A template send fails outright if the number of parameters does not
-            match the body approved in the console, and the failure comes back
-            as a code per recipient rather than anything readable. Showing the
-            resolved {{1}}, {{2}}, … lets the two be compared before a send
-            rather than after one that reached nobody.
-          */}
-          {preview && (
-            <div className="space-y-2 rounded-lg border border-foreground/15 bg-muted/30 p-3">
-              <p className={cn(MICRO, 'text-muted-foreground')}>
-                {preview.channel === 'template'
-                  ? `Template "${preview.templateName}" · ${preview.parameters?.length ?? 0} parameter${preview.parameters?.length === 1 ? '' : 's'}`
-                  : 'Plain text — no template'}
-              </p>
-              {preview.channel === 'template' ? (
-                <ol className="space-y-1">
-                  {(preview.parameters ?? []).map((value, i) => (
-                    <li key={i} className="flex gap-2 text-xs">
-                      <span className="shrink-0 font-mono text-muted-foreground">{`{{${i + 1}}}`}</span>
-                      <span className="break-words">{value}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="whitespace-pre-wrap text-xs">{preview.body}</p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                If this does not match the body Meta approved, the send will be rejected —
-                set WHATSAPP_REPORT_TEMPLATE_PARAMS to reorder or change the fields.
-              </p>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="outline" onClick={runPreview} disabled={!numbers.length || sending}>
-            Preview
-          </Button>
-          <Button onClick={send} disabled={!numbers.length || sending}>
-            {sending ? <Loader2 className="animate-spin" /> : <Send data-icon="inline-start" />}
-            Send to {numbers.length || 'no one'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
+// WhatsApp, switched off at the user's request — the email carries the
+// workbook now. Line-commented rather than deleted: the server route, the
+// template and the number-normalising service are all untouched, so this
+// comes back by uncommenting and re-adding one button.
+//
+// const WA_RECIPIENTS_KEY = 'reports-hub-whatsapp-recipients'
+// /** Anything that could be a phone number. The server does the real parsing. */
+// const PHONE_RE = /^[+\d][\d\s()-]{6,24}$/
+//
+// /**
+//  * Send the day as a WhatsApp message.
+//  *
+//  * Numbers persist in this browser, like the email list does, because the same
+//  * three or four managers get it every time and retyping them is how a nightly
+//  * habit stops being nightly.
+//  *
+//  * Nothing is sent until "Send" is pressed, and the result is reported per
+//  * number — a send that reached two of five and said "sent" would leave the
+//  * desk believing somebody was told something they never saw.
+//  */
+// function WhatsappReportDialog({
+//   open, onOpenChange, opts,
+// }: {
+//   open: boolean
+//   onOpenChange: (o: boolean) => void
+//   opts: { date: string }
+// }) {
+//   const [numbers, setNumbers] = useState<string[]>(() => {
+//     try {
+//       const raw = localStorage.getItem(WA_RECIPIENTS_KEY)
+//       return raw ? (JSON.parse(raw) as string[]) : []
+//     } catch {
+//       return []
+//     }
+//   })
+//   const [draft, setDraft] = useState('')
+//   const [sending, setSending] = useState(false)
+//   /** What the last preview resolved to. Cleared whenever the list changes. */
+//   const [preview, setPreview] = useState<WhatsappReportResult['data'] | null>(null)
+//   const toast = useToast()
+//
+//   const addNumber = () => {
+//     const value = draft.trim().replace(/,$/, '')
+//     if (!value) return
+//     if (!PHONE_RE.test(value)) {
+//       toast.error(`"${value}" doesn't look like a phone number`)
+//       return
+//     }
+//     setNumbers((n) => (n.includes(value) ? n : [...n, value]))
+//     setDraft('')
+//     setPreview(null)
+//   }
+//   const removeNumber = (value: string) => {
+//     setNumbers((n) => n.filter((x) => x !== value))
+//     setPreview(null)
+//   }
+//
+//   const runPreview = async () => {
+//     if (!numbers.length) return
+//     setSending(true)
+//     try {
+//       const res = await whatsappReportsHub(opts, numbers, true)
+//       setPreview(res.data ?? null)
+//     } catch (err) {
+//       toast.error(getErrorMessage(err))
+//     } finally {
+//       setSending(false)
+//     }
+//   }
+//
+//   const send = async () => {
+//     if (!numbers.length) return
+//     setSending(true)
+//     try {
+//       const res = await whatsappReportsHub(opts, numbers)
+//       localStorage.setItem(WA_RECIPIENTS_KEY, JSON.stringify(numbers))
+//       const failed = res.data?.failed ?? []
+//       const sent = res.data?.sent ?? []
+//
+//       if (!sent.length) {
+//         // Nothing went. The server says why in one sentence — a switched-off
+//         // channel, a bad template, an unreachable number — and repeating it
+//         // once per recipient would bury the one thing worth reading.
+//         toast.error(res.message)
+//       } else if (failed.length) {
+//         // Named, not counted: "3 failed" tells nobody which manager to ring.
+//         toast.warning(
+//           `${res.message}. Not delivered: ${failed.map((f) => `${f.to} (${f.error})`).join('; ')}`,
+//         )
+//       } else {
+//         toast.success(res.message)
+//       }
+//       if (sent.length) onOpenChange(false)
+//     } catch (err) {
+//       toast.error(getErrorMessage(err))
+//     } finally {
+//       setSending(false)
+//     }
+//   }
+//
+//   return (
+//     <Dialog open={open} onOpenChange={onOpenChange}>
+//       <DialogContent className="sm:max-w-lg">
+//         <DialogHeader>
+//           <DialogTitle>Send the day as a WhatsApp message</DialogTitle>
+//           <DialogDescription>
+//             A short text summary of {format(new Date(`${opts.date}T00:00:00`), 'd MMM yyyy')} —
+//             volume, value and each location. No attachment.
+//           </DialogDescription>
+//         </DialogHeader>
+//
+//         <div className="space-y-3">
+//           {numbers.length > 0 && (
+//             <div className="flex flex-wrap gap-1.5">
+//               {numbers.map((value) => (
+//                 <span
+//                   key={value}
+//                   className="inline-flex items-center gap-1 rounded-full border border-foreground/15 bg-muted/50 px-2.5 py-1 text-xs"
+//                 >
+//                   {value}
+//                   <button
+//                     type="button" onClick={() => removeNumber(value)}
+//                     className="text-muted-foreground hover:text-destructive"
+//                     aria-label={`Remove ${value}`}
+//                   >
+//                     <X className="size-3" />
+//                   </button>
+//                 </span>
+//               ))}
+//             </div>
+//           )}
+//
+//           <div className="flex gap-2">
+//             <Input
+//               value={draft}
+//               onChange={(e) => setDraft(e.target.value)}
+//               onKeyDown={(e) => {
+//                 if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addNumber() }
+//               }}
+//               placeholder="08031234567"
+//               inputMode="tel"
+//             />
+//             <Button type="button" variant="outline" onClick={addNumber}>Add</Button>
+//           </div>
+//           <p className="text-xs text-muted-foreground">
+//             0803…, +234803… or 234803… all work. Numbers are remembered on this device.
+//           </p>
+//
+//           {/*
+//             What Meta will actually receive.
+//
+//             A template send fails outright if the number of parameters does not
+//             match the body approved in the console, and the failure comes back
+//             as a code per recipient rather than anything readable. Showing the
+//             resolved {{1}}, {{2}}, … lets the two be compared before a send
+//             rather than after one that reached nobody.
+//           */}
+//           {preview && (
+//             <div className="space-y-2 rounded-lg border border-foreground/15 bg-muted/30 p-3">
+//               <p className={cn(MICRO, 'text-muted-foreground')}>
+//                 {preview.channel === 'template'
+//                   ? `Template "${preview.templateName}" · ${preview.parameters?.length ?? 0} parameter${preview.parameters?.length === 1 ? '' : 's'}`
+//                   : 'Plain text — no template'}
+//               </p>
+//               {preview.channel === 'template' ? (
+//                 <ol className="space-y-1">
+//                   {(preview.parameters ?? []).map((value, i) => (
+//                     <li key={i} className="flex gap-2 text-xs">
+//                       <span className="shrink-0 font-mono text-muted-foreground">{`{{${i + 1}}}`}</span>
+//                       <span className="break-words">{value}</span>
+//                     </li>
+//                   ))}
+//                 </ol>
+//               ) : (
+//                 <p className="whitespace-pre-wrap text-xs">{preview.body}</p>
+//               )}
+//               <p className="text-xs text-muted-foreground">
+//                 If this does not match the body Meta approved, the send will be rejected —
+//                 set WHATSAPP_REPORT_TEMPLATE_PARAMS to reorder or change the fields.
+//               </p>
+//             </div>
+//           )}
+//         </div>
+//
+//         <DialogFooter>
+//           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+//           <Button variant="outline" onClick={runPreview} disabled={!numbers.length || sending}>
+//             Preview
+//           </Button>
+//           <Button onClick={send} disabled={!numbers.length || sending}>
+//             {sending ? <Loader2 className="animate-spin" /> : <Send data-icon="inline-start" />}
+//             Send to {numbers.length || 'no one'}
+//           </Button>
+//         </DialogFooter>
+//       </DialogContent>
+//     </Dialog>
+//   )
+// }

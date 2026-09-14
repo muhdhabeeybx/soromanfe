@@ -223,56 +223,82 @@ export async function exportReportsHub(
  * there for that.
  */
 export async function emailReportsHub(
+  rows: DailyReportRow[],
   opts: { date: string; location: string; pfi: string },
   recipients: string[],
 ): Promise<{ message: string }> {
+  // The workbook goes up with it, so the email carries the very report on
+  // screen — the same filters, the same rows, the same file the Download
+  // button gives. The server attaches it beside the readable summary; the
+  // summary is for reading on a phone, the workbook for working at a desk.
+  const { buffer, filename } = await buildReportsHubWorkbook(rows, opts)
+  const attachmentBase64 = await blobToBase64(new Blob([buffer]))
+
   const res = await api.post('/daily-reports/email', {
     recipients,
     reportDate: opts.date,
     location: opts.location,
     pfi: opts.pfi,
+    reportCount: rows.length,
+    filename,
+    attachmentBase64,
   })
   return res.data as { message: string }
 }
 
-/**
- * The day's trading as a WhatsApp message.
- *
- * No attachment and no workbook — this is read on a phone, where a spreadsheet
- * is a file nobody opens. The server builds the text, so the message says the
- * same thing however it was triggered.
- */
-export interface WhatsappReportResult {
-  message: string
-  data?: {
-    preview?: boolean
-    channel?: 'template' | 'text'
-    templateName?: string | null
-    /** Resolved {{1}}, {{2}}, … in order. Empty when sending as plain text. */
-    parameters?: string[]
-    sent: string[]
-    failed: Array<{ to: string; error: string }>
-    skipped: string[]
-    body: string
-  }
+/** Base64 without the data-URL prefix, which is what the mail API wants. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
 }
 
-export async function whatsappReportsHub(
-  opts: { date: string },
-  recipients: string[],
-  /**
-   * Resolve everything and send nothing.
-   *
-   * A template send fails outright when the parameter count does not match the
-   * body Meta approved, and the error arrives as an opaque code per recipient.
-   * Seeing the parameters first turns that into a comparison.
-   */
-  preview = false,
-): Promise<WhatsappReportResult> {
-  const res = await api.post('/daily-reports/whatsapp', {
-    recipients,
-    reportDate: opts.date,
-    ...(preview ? { preview: true } : {}),
-  })
-  return res.data
-}
+// WhatsApp is switched off — the day goes out by email, which now carries the
+// workbook itself. Line-commented rather than deleted: the server route and
+// template are untouched, so this is one button away from returning.
+//
+//
+// /**
+//  * The day's trading as a WhatsApp message.
+//  *
+//  * No attachment and no workbook — this is read on a phone, where a spreadsheet
+//  * is a file nobody opens. The server builds the text, so the message says the
+//  * same thing however it was triggered.
+//  */
+// export interface WhatsappReportResult {
+//   message: string
+//   data?: {
+//     preview?: boolean
+//     channel?: 'template' | 'text'
+//     templateName?: string | null
+//     /** Resolved {{1}}, {{2}}, … in order. Empty when sending as plain text. */
+//     parameters?: string[]
+//     sent: string[]
+//     failed: Array<{ to: string; error: string }>
+//     skipped: string[]
+//     body: string
+//   }
+// }
+//
+// export async function whatsappReportsHub(
+//   opts: { date: string },
+//   recipients: string[],
+//   /**
+//    * Resolve everything and send nothing.
+//    *
+//    * A template send fails outright when the parameter count does not match the
+//    * body Meta approved, and the error arrives as an opaque code per recipient.
+//    * Seeing the parameters first turns that into a comparison.
+//    */
+//   preview = false,
+// ): Promise<WhatsappReportResult> {
+//   const res = await api.post('/daily-reports/whatsapp', {
+//     recipients,
+//     reportDate: opts.date,
+//     ...(preview ? { preview: true } : {}),
+//   })
+//   return res.data
+// }
