@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { Loader2, Trash2, Pencil, Download, Plus, X, Eye, RotateCcw } from 'lucide-react'
+import { Loader2, Trash2, Pencil, Download, Plus, X, Eye, RotateCcw, AlertTriangle } from 'lucide-react'
 
 import api from '#/lib/api/http'
 import { Button } from '#/components/ui/button'
@@ -31,6 +31,7 @@ import {
 import {
   useDayOrders, useTruckCounts, useYesterdayReport, usePfiDeposits,
   ordersForPfi, loadedOrders, suggestPriceBands, sumQuantity, countCustomers, topCustomersFrom,
+  useReportActuals, variance,
 } from './-report-autofill'
 
 const PAGE_SIZE = 1000
@@ -73,7 +74,7 @@ const blankForm = (def: ReportDef) => {
  * is the only thing an override needs that a plain field does not.
  */
 function Field({
-  field, value, onChange, unit, overridden, suggestion, onRestore,
+  field, value, onChange, unit, overridden, suggestion, onRestore, systemValue,
 }: {
   field: FieldDef
   value: string
@@ -84,7 +85,13 @@ function Field({
   /** What the derivation says, for the "back to" line. */
   suggestion?: string
   onRestore?: () => void
+  /** What the system's own records hold for this field, for the variance line. */
+  systemValue?: number
 }) {
+  // Shown, never applied. The person filing knows things the system does not
+  // — a truck that loaded late, a payment nobody has matched yet — so this
+  // says what the book holds and leaves the figure alone.
+  const off = variance(value, systemValue)
   return (
     <div className={cn('space-y-1.5', field.full && 'sm:col-span-2')}>
       <Label htmlFor={field.key}>{field.label}</Label>
@@ -110,6 +117,15 @@ function Field({
         </div>
       ) : (
         <Input id={field.key} type="text" value={value} onChange={(e) => onChange(e.target.value)} />
+      )}
+      {off && (
+        <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-amber-600 dark:text-amber-500">
+          <AlertTriangle className="mt-px size-3 shrink-0" />
+          <span>
+            The system has {formatValue(field, String(off.system), unit)} here — yours is{' '}
+            {formatValue(field, String(Math.abs(off.diff)), unit)} {off.diff > 0 ? 'higher' : 'lower'}.
+          </span>
+        </p>
       )}
       {overridden && onRestore ? (
         <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground/70">
@@ -360,6 +376,32 @@ export function ReportPanel({
   // out, and it filed customer and order counts by hand as a result — all
   // eight of them blank on live data.
   const { data: dayOrders } = useDayOrders(form.reportDate, isNew)
+
+  /**
+   * What the system holds for this batch on this date, from the server.
+   *
+   * Distinct from the suggestions above, which fill blank fields and then step
+   * aside: this stays visible after a field is filled and says whether what
+   * was typed agrees. Computed server-side so the form, the snapshot stored at
+   * submit and the master report all check against the same arithmetic —
+   * three places deriving "litres sold" three ways is how a variance report
+   * ends up arguing with itself.
+   *
+   * Only while filing. An already-filed report is checked against the snapshot
+   * taken on the day, not against a book that has moved since.
+   */
+  const actualsReady = isNew && (
+    // Company-wide sheets are checked against the whole day's book, which is
+    // the honest comparison for what they claim.
+    def.requireLocation === false
+      ? true
+      // A PFI sheet needs its batch resolved. A closed PFI is not in the
+      // active list, so there is no id to scope by — and comparing a batch
+      // report against the company's whole day would invent a variance out of
+      // other people's orders. Better to say nothing.
+      : !!pfi?.id
+  )
+  const { data: actuals } = useReportActuals(form.reportDate, pfi?.id, actualsReady)
   /**
    * The orders this report is about.
    *
@@ -962,6 +1004,7 @@ export function ReportPanel({
                       value={form[f.key] ?? ''}
                       onChange={(v) => setField(f, v)}
                       unit={formUnit}
+                      systemValue={actuals?.fields[f.key]}
                       overridden={!!overrides[f.key] && suggestion !== '' && suggestion !== (form[f.key] ?? '')}
                       suggestion={suggestion}
                       onRestore={() => restoreField(f.key)}

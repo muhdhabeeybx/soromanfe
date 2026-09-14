@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { FileSpreadsheet, Loader2, Mail, MessageCircle, RefreshCw, Send, X } from 'lucide-react'
+import { AlertTriangle, FileSpreadsheet, Loader2, Mail, MessageCircle, RefreshCw, Send, X } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -25,7 +25,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { routeGuard } from '#/lib/route-guard'
 import { naira } from '#/routes/pfi/-pfi-utils'
 import { ALL_TYPES, REPORTS, STATUS_TONE, allFields, reportValue, type ReportType } from '#/routes/my-report/-report-config'
-import { fetchDailyReportsForDate, type DailyReportRow } from './-hub-data'
+import { fetchDailyReportsForDate, actualsOf, varianceOf, variancesOn, type DailyReportRow } from './-hub-data'
 import { exportReportsHub, emailReportsHub, whatsappReportsHub, type WhatsappReportResult } from './-export'
 
 export const Route = createFileRoute('/admin-reports/')({
@@ -449,23 +449,53 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => (
+            {rows.map((r) => {
+              // Every figure on this sheet that disagrees with what the system
+              // held when it was filed. Summarised beside the status so a
+              // reviewer scanning the day sees which sheets need reading,
+              // rather than having to compare column by column.
+              const off = variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k))
+              return (
               <TableRow key={r.id}>
                 <TableCell className="whitespace-nowrap">{r.pfiNumber || '—'}</TableCell>
                 <TableCell className="whitespace-nowrap">{r.submittedByName || '—'}</TableCell>
                 <TableCell>
-                  <StatusChip
-                    tone={STATUS_TONE[r.status] ?? 'inert'}
-                    title={r.status === 'rejected' ? r.reviewComment || undefined : undefined}
-                  >
-                    {r.status}
-                  </StatusChip>
+                  <div className="flex items-center gap-1.5">
+                    <StatusChip
+                      tone={STATUS_TONE[r.status] ?? 'inert'}
+                      title={r.status === 'rejected' ? r.reviewComment || undefined : undefined}
+                    >
+                      {r.status}
+                    </StatusChip>
+                    {off.length > 0 && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-amber-600 dark:text-amber-500"
+                        title={off
+                          .map((x) => {
+                            const label = fields.find((f) => f.key === x.key)?.label ?? x.key
+                            return `${label}: filed ${x.off.typed.toLocaleString()}, system ${x.off.system.toLocaleString()}`
+                          })
+                          .join('\n')}
+                      >
+                        <AlertTriangle className="size-2.5" />
+                        {off.length} off
+                      </span>
+                    )}
+                    {!actualsOf(r) && (
+                      // Filed before the system started keeping its own copy.
+                      // Not the same as agreeing, and must not read as clean.
+                      <span className="text-[10px] whitespace-nowrap text-muted-foreground/60" title="This report predates the system check — no comparison was taken on the day.">
+                        unchecked
+                      </span>
+                    )}
+                  </div>
                 </TableCell>
                 {fields.map((f) => {
                   // reportValue, not r[f.key]: the commission report's two
                   // outstanding figures postdate the rows that still have to
                   // state them, and those work out from what the row carries.
                   const v = reportValue(r, f.key)
+                  const cellOff = varianceOf(r, f.key, v)
                   const isStructured = f.type === 'priceBands' || f.type === 'topCustomers'
                   const display = f.type === 'priceBands' ? formatPriceBands(v)
                     : f.type === 'topCustomers' ? formatTopCustomers(v)
@@ -485,11 +515,17 @@ function RoleTable({ type, rows }: { type: ReportType; rows: DailyReportRow[] })
                         : display != null
                           ? display
                           : f.type === 'money' ? money(v) : f.type === 'number' ? num(v) : String(v)}
+                      {cellOff && (
+                        <span className="block text-[10px] whitespace-nowrap text-amber-600 dark:text-amber-500">
+                          system {f.type === 'money' ? money(cellOff.system) : num(cellOff.system)}
+                        </span>
+                      )}
                     </TableCell>
                   )
                 })}
               </TableRow>
-            ))}
+              )
+            })}
           </TableBody>
         </Table>
       </div>

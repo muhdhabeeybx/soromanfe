@@ -151,3 +151,62 @@ export function usePfiDeposits(pfiId: string | number | null | undefined, enable
     enabled: enabled && !!pfiId,
   })
 }
+
+/**
+ * What the system holds for this PFI on this date.
+ *
+ * The counterpart to the suggestions above, and deliberately a different
+ * thing: a suggestion fills a blank field, this one stays visible after the
+ * field is filled and says whether what was typed agrees. Computed on the
+ * server so the form, the stored snapshot and the master report all check
+ * against the same arithmetic — three places deriving "litres sold" three
+ * ways is how a variance report ends up arguing with itself.
+ */
+export interface ReportActuals {
+  date: string
+  pfiId: number | null
+  /** Keyed by the form's own field names. */
+  fields: Record<string, number>
+  context: {
+    litresOrdered: number
+    paidOrderCount: number
+    pendingCommissions: number
+    pricesSeen: number[]
+  }
+}
+
+export function useReportActuals(date: string, pfiId: string | number | null | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['daily-report-actuals', date, pfiId ?? 'all'],
+    queryFn: async (): Promise<ReportActuals> => {
+      const res = await api.get('/daily-reports/actuals', {
+        params: { date, ...(pfiId ? { pfiId } : {}) },
+      })
+      return res.data.data.actuals
+    },
+    enabled: enabled && !!date,
+  })
+}
+
+/**
+ * Whether a typed figure disagrees with the system, and by how much.
+ *
+ * A tolerance rather than an equality test: money carries two decimals and
+ * litres are typed rounded, so an exact comparison would flag a report that
+ * is right to the kobo. Anything inside a whole unit is agreement.
+ *
+ * Returns null when there is nothing to say — no system figure, nothing typed
+ * yet, or the two agree — so a caller can render only the disagreements.
+ */
+export function variance(
+  typed: string | undefined,
+  systemValue: number | undefined,
+): { typed: number; system: number; diff: number } | null {
+  if (systemValue == null) return null
+  if (typed == null || typed === '') return null
+  const t = Number(String(typed).replace(/,/g, ''))
+  if (!Number.isFinite(t)) return null
+  const diff = t - systemValue
+  if (Math.abs(diff) < 1) return null
+  return { typed: t, system: systemValue, diff }
+}

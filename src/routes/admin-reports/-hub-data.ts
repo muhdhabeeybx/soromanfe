@@ -1,5 +1,6 @@
 import api from '#/lib/api/http'
 import type { DailyReportStatus, ReportType } from '#/routes/my-report/-report-config'
+import { variance } from '#/routes/my-report/-report-autofill'
 
 export type { DailyReportStatus }
 
@@ -44,4 +45,44 @@ export async function fetchDailyReportsForDate(date: string): Promise<DailyRepor
     page++
   }
   return all
+}
+
+/**
+ * What the system held for this report's PFI and date, captured at the moment
+ * it was submitted.
+ *
+ * Captured rather than recomputed on read: orders get cancelled, payments
+ * rematched, batches reassigned, so a report opened in November recomputed
+ * against today's book would show a variance that changes every time somebody
+ * looks. The question the Hub answers is whether the sheet agreed with the
+ * system ON THE DAY.
+ *
+ * Null on every report filed before the snapshot existed. That is "nobody
+ * checked", not "it agreed" — the Hub must not render those as clean.
+ */
+export type SystemActuals = {
+  date: string
+  pfiId: number | null
+  fields: Record<string, number>
+}
+
+export function actualsOf(r: DailyReportRow): SystemActuals | null {
+  const a = r.systemActuals as SystemActuals | null | undefined
+  return a && typeof a === 'object' && a.fields ? a : null
+}
+
+/** How far one stated figure sits from the system's own, or null if it agrees
+ *  (or was never checked). */
+export function varianceOf(r: DailyReportRow, key: string, typed: unknown) {
+  const a = actualsOf(r)
+  if (!a) return null
+  return variance(typed == null ? '' : String(typed), a.fields[key])
+}
+
+/** Every figure on one report that disagrees, worst first — the row summary. */
+export function variancesOn(r: DailyReportRow, keys: string[], valueOf: (k: string) => unknown) {
+  return keys
+    .map((k) => ({ key: k, off: varianceOf(r, k, valueOf(k)) }))
+    .filter((x): x is { key: string; off: NonNullable<ReturnType<typeof varianceOf>> } => !!x.off)
+    .sort((a, b) => Math.abs(b.off.diff) - Math.abs(a.off.diff))
 }

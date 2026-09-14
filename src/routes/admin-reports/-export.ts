@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import api from '#/lib/api/http'
 import { ALL_TYPES, REPORTS, allFields, reportValue } from '#/routes/my-report/-report-config'
 import { naira } from '#/routes/pfi/-pfi-utils'
-import type { DailyReportRow } from './-hub-data'
+import { variancesOn, actualsOf, type DailyReportRow } from './-hub-data'
 
 /**
  * Real numbers with a cell format, never pre-formatted strings — a column
@@ -78,7 +78,8 @@ export async function buildReportsHubWorkbook(
 
   for (const loc of locations) {
     const ws = wb.addWorksheet(sheetName(loc, usedNames))
-    const lastCol = 3 + maxFields
+    // +1 for the system check, which every role block carries.
+    const lastCol = 3 + maxFields + 1
 
     ws.mergeCells(1, 1, 1, lastCol)
     const title = ws.getCell(1, 1)
@@ -106,7 +107,7 @@ export async function buildReportsHubWorkbook(
       if (typeRows.length === 0) continue
 
       const fields = allFields(def)
-      const headers = ['PFI', 'Submitted by', 'Status', ...fields.map((f) => f.label)]
+      const headers = ['PFI', 'Submitted by', 'Status', ...fields.map((f) => f.label), 'System check']
 
       ws.mergeCells(cursor, 1, cursor, lastCol)
       const banner = ws.getCell(cursor, 1)
@@ -147,6 +148,10 @@ export async function buildReportsHubWorkbook(
             if (v == null || v === '') return null
             return f.type === 'money' || f.type === 'number' ? Number(v) : String(v)
           }),
+          // What the system held when this was filed, where it disagrees.
+          // Spelt out rather than flagged: the sheet is read away from the
+          // app, often by somebody who cannot go and look the figure up.
+          systemCheck(r, fields),
         ]
         fields.forEach((f, i) => {
           if (f.type !== 'money' && f.type !== 'number') return
@@ -166,10 +171,33 @@ export async function buildReportsHubWorkbook(
       const idx = allFields(REPORTS[type]).findIndex((f) => f.key === 'remarks')
       if (idx >= 0) ws.getColumn(4 + idx).width = 36
     }
+    ws.getColumn(lastCol).width = 52
   }
 
   const buffer = await wb.xlsx.writeBuffer()
   return { buffer, filename: `Soroman_Reports_${opts.date}.xlsx` }
+}
+
+
+/**
+ * The variance sentence for one filed report.
+ *
+ * Three states, and they are not two: figures that disagree, figures that
+ * agree, and a report filed before the system began keeping its own copy.
+ * That last one is not agreement — nobody checked — and a blank cell would
+ * read as clean, so it says so.
+ */
+function systemCheck(r: DailyReportRow, fields: Array<{ key: string; label: string; type?: string }>): string {
+  if (!actualsOf(r)) return 'Not checked — filed before the system comparison'
+  const off = variancesOn(r, fields.map((f) => f.key), (k) => reportValue(r, k))
+  if (!off.length) return 'Agrees with the system'
+  return off
+    .map((x) => {
+      const label = fields.find((f) => f.key === x.key)?.label ?? x.key
+      const dir = x.off.diff > 0 ? 'over' : 'under'
+      return `${label}: filed ${x.off.typed.toLocaleString()} vs system ${x.off.system.toLocaleString()} (${dir} by ${Math.abs(x.off.diff).toLocaleString()})`
+    })
+    .join('; ')
 }
 
 /** Download button: build the workbook, hand it straight to the browser. */
