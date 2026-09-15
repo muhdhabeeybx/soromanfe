@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  Banknote, Calculator, ChevronRight, FileSpreadsheet, FileText, Fuel, Loader2, Plus, Search,
-  Trash2, Truck, TrendingUp, X,
+  Banknote, Calculator, ChevronRight, Download, FileSpreadsheet, FileText, Fuel, Loader2,
+  Search, Truck, TrendingUp, X,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -10,18 +10,21 @@ import { PageError } from '#/components/PageError'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Checkbox } from '#/components/ui/checkbox'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '#/components/ui/dialog'
 import { NativeSelect } from '#/components/ui/native-select'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '#/components/ui/table'
 import { PANEL, PANEL_RAIL, PANEL_BODY, MICRO } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import { naira } from '#/routes/pfi/-pfi-utils'
-import { useDeliveryInventoryList, useDeleteDeliveryBatch } from '#/lib/hooks/useDeliveryInventory'
-import { NewBatchDialog } from '#/components/delivery-operations/NewBatchDialog'
+import { useDeliveryInventoryList } from '#/lib/hooks/useDeliveryInventory'
 import { TripCostDialog, type CostableTruck } from '#/components/delivery-operations/TripCostDialog'
 import { routeGuard } from '#/lib/route-guard'
-import { exportCostingWorkbook, exportCostingPdf } from './-costing-export'
-import { ConfirmDialog } from '#/components/ConfirmDialog'
+import {
+  exportCostingWorkbook, exportCostingPdf, type CostingBatch,
+} from './-costing-export'
 import { useToast } from '#/lib/hooks/useToast'
 
 export const Route = createFileRoute('/delivery-costing/')({
@@ -58,7 +61,6 @@ const qty = (v: unknown) => (v == null ? '—' : Number(v).toLocaleString('en-NG
 
 interface Row extends CostableTruck {
   allocationCode?: string | null
-  pfiId?: number | null
   pfiNumber?: string | null
   depot?: string | null
   agoValue?: number | null
@@ -80,16 +82,21 @@ function DeliveryCostingPage() {
   const [costedFilter, setCostedFilter] = useState<'all' | 'costed' | 'uncosted'>('all')
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState<Row[] | null>(null)
-  const [newBatch, setNewBatch] = useState(false)
   /**
    * Which batch is open, by code. One at a time, deliberately — the point of
    * the summary rows is that batches can be compared down a column, and every
    * batch expanded at once is the flat table this replaced.
    */
   const [openBatch, setOpenBatch] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null)
-  const deleteBatch = useDeleteDeliveryBatch()
+  /**
+   * What a download was asked for, waiting on a format.
+   *
+   * One button that then asks, rather than two side by side: the choice is
+   * Excel-or-PDF, and putting both in the header made the same decision twice
+   * — once in the toolbar of every page, once again on every batch row.
+   */
+  const [exportFor, setExportFor] = useState<{ batches: CostingBatch[]; label: string } | null>(null)
 
   const rows: Row[] = useMemo(
     () => (Array.isArray(inventory) ? inventory : []).map((r: any) => ({
@@ -250,18 +257,41 @@ function DeliveryCostingPage() {
   ].filter(Boolean).join('   ·   ')
 
   const download = async (kind: 'xlsx' | 'pdf') => {
-    if (!groups.length) return
+    const target = exportFor
+    if (!target || !target.batches.length) return
     setExporting(kind)
     try {
+      /**
+       * Totalled over what is being exported, not over the page.
+       *
+       * A single batch's file must foot to that batch. Handing it the page's
+       * totals would print the company's margin under one batch's trucks,
+       * which is the kind of figure that gets read out of context and
+       * believed.
+       */
+      const t = target.batches.reduce(
+        (acc, b) => {
+          acc.trucks += b.rows.length
+          acc.expenses += b.expenses
+          acc.marginValue += b.marginValue
+          for (const r of b.rows) {
+            if (r.margin != null) acc.marginLitres += Number(r.quantityAllocated || 0)
+          }
+          return acc
+        },
+        { trucks: 0, expenses: 0, marginValue: 0, marginLitres: 0 },
+      )
+
       const meta = {
-        scope,
-        trucks: summary.trucks,
-        expenses: summary.expenses,
-        marginValue: summary.marginValue,
-        avgMargin: summary.avgMargin,
+        scope: target.label,
+        trucks: t.trucks,
+        expenses: t.expenses,
+        marginValue: t.marginValue,
+        avgMargin: t.marginLitres > 0 ? t.marginValue / t.marginLitres : null,
       }
-      if (kind === 'xlsx') await exportCostingWorkbook(groups, meta)
-      else await exportCostingPdf(groups, meta)
+      if (kind === 'xlsx') await exportCostingWorkbook(target.batches, meta)
+      else await exportCostingPdf(target.batches, meta)
+      setExportFor(null)
     } catch (e) {
       toast.error(getErrorMessage(e))
     } finally {
@@ -281,39 +311,12 @@ function DeliveryCostingPage() {
           <div className="flex gap-2">
             <Button
               variant="outline" size="sm"
-              disabled={exporting !== null || groups.length === 0}
-              onClick={() => download('xlsx')}
+              disabled={groups.length === 0}
+              onClick={() => setExportFor({ batches: groups, label: scope })}
             >
-              {exporting === 'xlsx'
-                ? <Loader2 className="animate-spin" />
-                : <FileSpreadsheet data-icon="inline-start" />}
-              Excel
+              <Download data-icon="inline-start" />
+              Export
             </Button>
-            <Button
-              variant="outline" size="sm"
-              disabled={exporting !== null || groups.length === 0}
-              onClick={() => download('pdf')}
-            >
-              {exporting === 'pdf'
-                ? <Loader2 className="animate-spin" />
-                : <FileText data-icon="inline-start" />}
-              PDF
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setNewBatch(true)}>
-              <Plus data-icon="inline-start" />
-              New batch
-            </Button>
-            {/* Only offered when a single batch is in view. "Delete what is
-                on screen" is far too easy to fire at a filtered list that
-                happens to span three batches. Renaming a code stays on
-                Delivery Inventory — two places to rename one code is how the
-                same batch ends up under two names. */}
-            {batch !== 'all' && (
-              <Button variant="outline" size="sm" onClick={() => setDeleting(true)}>
-                <Trash2 data-icon="inline-start" />
-                Delete batch
-              </Button>
-            )}
             <Button
               size="sm"
               disabled={pickedRows.length === 0}
@@ -478,20 +481,36 @@ function DeliveryCostingPage() {
                           {money(g.marginValue)}
                         </TableCell>
                         <TableCell className="text-right">
-                          {/* Cost the whole batch in one go — the normal case,
-                              since trucks on a batch usually take the same
-                              diesel at the same price on the same day. */}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setEditing(groupPicked.length > 0 ? groupPicked : g.rows)
-                            }}
-                          >
-                            <Calculator className="size-3.5" />
-                            {groupPicked.length > 0 ? `Cost ${groupPicked.length}` : 'Cost batch'}
-                          </Button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* This batch on its own — the file most often
+                                wanted, since a batch is what gets discussed. */}
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              title={`Download ${g.code}`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setExportFor({ batches: [g], label: `Batch: ${g.code}` })
+                              }}
+                            >
+                              <Download className="size-3.5" />
+                              <span className="sr-only">Download {g.code}</span>
+                            </Button>
+                            {/* Cost the whole batch in one go — the normal
+                                case, since trucks on a batch usually take the
+                                same diesel at the same price on the same day. */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditing(groupPicked.length > 0 ? groupPicked : g.rows)
+                              }}
+                            >
+                              <Calculator className="size-3.5" />
+                              {groupPicked.length > 0 ? `Cost ${groupPicked.length}` : 'Cost batch'}
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
 
@@ -594,11 +613,48 @@ function DeliveryCostingPage() {
         )}
       </section>
 
-      <NewBatchDialog
-        open={newBatch}
-        onOpenChange={setNewBatch}
-        existingCodes={options.batches}
-      />
+      {/* Asked after the download, not before it.
+          The decision is only ever Excel-or-PDF, and putting both in the
+          toolbar made the same choice twice — once in the header, then again
+          on every batch row. One control, then the question. */}
+      <Dialog open={exportFor !== null} onOpenChange={(o) => { if (!o) setExportFor(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Download</DialogTitle>
+            <DialogDescription>{exportFor?.label}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-1.5 py-4"
+              disabled={exporting !== null}
+              onClick={() => download('xlsx')}
+            >
+              {exporting === 'xlsx'
+                ? <Loader2 className="size-5 animate-spin" />
+                : <FileSpreadsheet className="size-5" />}
+              <span>Excel</span>
+              <span className="text-[10px] font-normal text-muted-foreground">
+                Figures you can total
+              </span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-1.5 py-4"
+              disabled={exporting !== null}
+              onClick={() => download('pdf')}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 className="size-5 animate-spin" />
+                : <FileText className="size-5" />}
+              <span>PDF</span>
+              <span className="text-[10px] font-normal text-muted-foreground">
+                To print or send on
+              </span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <TripCostDialog
         open={editing !== null}
@@ -606,31 +662,6 @@ function DeliveryCostingPage() {
         trucks={editing ?? []}
       />
 
-      <ConfirmDialog
-        open={deleting}
-        onOpenChange={setDeleting}
-        title={`Delete ${batch}?`}
-        description={
-          `Every truck recorded under this code goes, along with the trip costs entered against `
-          + `them. This cannot be undone.`
-        }
-        confirmLabel="Delete the batch"
-        loading={deleteBatch.isPending}
-        onConfirm={async () => {
-          const inBatch = rows.filter((r) => r.allocationCode === batch)
-          await deleteBatch.mutateAsync({
-            // The PFI the loads hang off, if any. useDeleteDeliveryBatch takes
-            // it first: DELETE /pfis refuses a batch an order references, and
-            // that is the likely refusal — better it happens while nothing has
-            // been touched than after the truck rows are gone.
-            pfiId: inBatch.find((x) => x.pfiId)?.pfiId ?? null,
-            inventoryIds: inBatch.map((r) => String(r.id)),
-            label: batch,
-          })
-          setBatch('all')
-          setDeleting(false)
-        }}
-      />
     </div>
   )
 }
