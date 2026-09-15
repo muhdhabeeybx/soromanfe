@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { AlertTriangle, Check, Download, FileSpreadsheet, Loader2, Mail, RefreshCw, Send, X } from 'lucide-react'
+import {
+  AlertTriangle, Banknote, Check, ClipboardList, Download, Droplets, FileSpreadsheet, HandCoins,
+  Loader2, Mail, MapPin, RefreshCw, Send, Truck, X,
+} from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { PageEmpty } from '#/components/PageEmpty'
@@ -211,13 +214,14 @@ function AdminReportsPage() {
       />
 
       <StatCardGrid count={7}>
-        <StatCard label="Reports filed" value={num(summary.count)} tone="neutral" />
-        <StatCard label="Locations reporting" value={num(summary.locations)} tone="neutral" />
-        <StatCard label="Total litres" value={num(summary.litres)} tone="blue" />
-        <StatCard label="Total sales" value={money(summary.sales)} tone="green" />
-        <StatCard label="Commission paid" value={money(summary.commission)} tone="amber" />
-        <StatCard label="Trucks exited" value={num(summary.trucksExited)} tone="neutral" />
+        <StatCard icon={<ClipboardList />} label="Reports filed" value={num(summary.count)} tone="neutral" />
+        <StatCard icon={<MapPin />} label="Locations reporting" value={num(summary.locations)} tone="neutral" />
+        <StatCard icon={<Droplets />} label="Total litres" value={num(summary.litres)} tone="blue" />
+        <StatCard icon={<Banknote />} label="Total sales" value={money(summary.sales)} tone="green" />
+        <StatCard icon={<HandCoins />} label="Commission paid" value={money(summary.commission)} tone="amber" />
+        <StatCard icon={<Truck />} label="Trucks exited" value={num(summary.trucksExited)} tone="neutral" />
         <StatCard
+          icon={<AlertTriangle />}
           label="With a discrepancy"
           value={num(summary.withVariance)}
           tone={summary.withVariance > 0 ? 'red' : 'green'}
