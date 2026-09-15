@@ -559,6 +559,22 @@ export function ReportPanel({
       : { totalInflow: String(all), amountPaid: String(today) })
   }, [pfiDeposits, isNew, def.type, form.reportDate])
 
+  /**
+   * Yesterday's remarks, carried onto today's sheet.
+   *
+   * A location manager's open issue — a truck short, a dip that did not agree,
+   * a customer still to lift — was being lost at midnight, because the only
+   * place it existed was a Remarks box on a sheet nobody reopened. Prefilled
+   * rather than shown read-only, so it can be edited down to what is still
+   * true: an issue that was resolved overnight should not be copied forward
+   * forever.
+   */
+  useEffect(() => {
+    if (!isNew || def.type !== 'product_manager') return
+    const carried = String(yesterdayReport?.remarks ?? '').trim()
+    if (carried) suggest({ yesterdayRemarks: carried })
+  }, [isNew, def.type, yesterdayReport])
+
   useEffect(() => {
     if (!isNew || def.type !== 'sales_manager' || yesterdayReport?.differentials == null) return
     // Yesterday's gap is settled on today's sheet: short one way is a deficit

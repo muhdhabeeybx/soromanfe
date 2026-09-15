@@ -330,10 +330,48 @@ export const REPORTS: Record<ReportType, ReportDef> = {
     description: 'Product moved at your location today.',
     roleLabel: 'Location Manager',
     color: '581C87',
+    /**
+     * The sheet as the desk actually fills it, in the order they fill it.
+     *
+     * Several of these used to be written into Remarks as prose — the BL, the
+     * tank's initial dip, the running total sold, how long the batch has been
+     * counting — where they could not be totalled, checked against the system,
+     * or carried into the master report.
+     *
+     * One pair was collapsed. "Differentials" and "Loading left over" were two
+     * fields for one figure, one typed as money and one as litres, so the same
+     * quantity went in twice in two units and disagreed with itself. It is one
+     * field now, in litres, which is what the desk writes.
+     */
     sections: [
       {
-        label: 'Opening',
+        label: 'The batch',
         fields: [
+          {
+            key: 'blFigure', label: 'BL figures', type: 'number', unit: true,
+            hint: 'The Bill of Lading quantity for the cargo this batch came from.',
+          },
+          {
+            key: 'tankInitial', label: 'Tank initial figures', type: 'number', unit: true,
+            hint: 'The dip when this batch started — what everything else is measured against.',
+          },
+          {
+            key: 'aggregateSold', label: 'Aggregate sold so far', type: 'number', unit: true,
+            hint: 'Everything sold on this batch to date, not just today.',
+          },
+          {
+            key: 'pfiDaysCounting', label: 'PFI days counting', type: 'number',
+            hint: 'How many days this batch has been running.',
+          },
+        ],
+      },
+      {
+        label: 'Yesterday',
+        fields: [
+          {
+            key: 'yesterdayRemarks', label: 'Any remarks from yesterday', type: 'textarea', full: true,
+            hint: 'Carried from your last sheet — so an open issue is not lost overnight.',
+          },
           {
             key: 'openingStock', label: 'Product brought forward (opening) litres', type: 'number', unit: true,
             hint: 'Suggested from this PFI’s remaining balance.',
@@ -358,26 +396,44 @@ export const REPORTS: Record<ReportType, ReportDef> = {
             // both made the pair meaningless.
             hint: 'Suggested from today’s orders that reached loading.',
           },
+          {
+            key: 'soldUnloaded', label: 'Sold but unloaded', type: 'number', derived: true, unit: true,
+            hint: 'Ordered less loaded — type over it if the yard says otherwise.',
+          },
         ],
       },
       {
         label: 'Balances',
         fields: [
-          { key: 'differentials', label: 'Differentials', type: 'money' },
-          // Product standing in trucks, not ordered-minus-loaded — the filed
-          // figures show the two are unrelated, so this one is only ever typed.
-          { key: 'loadingLeftOver', label: 'Loading left over', type: 'number', unit: true },
+          {
+            key: 'loadingLeftOver', label: 'Differentials / loading left over', type: 'number', unit: true,
+            hint: 'One figure, in litres. This was two fields — one money, one litres — for the same thing.',
+          },
           {
             key: 'tankBalance', label: 'Tank balance', type: 'number', derived: true, unit: true,
             hint: 'Opening + ordered − loaded — type over it if the dip says otherwise.',
+          },
+          {
+            key: 'tankBalanceInclusive', label: 'Tank balance inclusive of sold unloaded',
+            type: 'number', derived: true, unit: true,
+            hint: 'Tank balance plus what is sold but still in the tank.',
+          },
+          {
+            key: 'netTankBalance', label: 'Net of Soroman tank balance',
+            type: 'number', derived: true, unit: true,
+            hint: 'Tank balance less what is owed to customers — Soroman’s own.',
           },
         ],
       },
       { label: 'Notes', fields: [REMARKS] },
     ],
     columns: [
+      { key: 'openingStock', label: 'Opening', align: 'right', unit: true },
+      { key: 'receivedStock', label: 'Ordered', align: 'right', unit: true },
       { key: 'litresSold', label: 'Litres loaded', align: 'right', unit: true },
+      { key: 'soldUnloaded', label: 'Sold unloaded', align: 'right', unit: true },
       { key: 'tankBalance', label: 'Tank balance', align: 'right', unit: true },
+      { key: 'netTankBalance', label: 'Net Soroman', align: 'right', unit: true },
     ],
     pdfTitle: "Daily product manager's report",
     filePrefix: 'ProductManagerReport',
@@ -468,10 +524,39 @@ export function derivedFor(type: ReportType, src: Record<string, unknown>): Reco
       : ''
   }
   if (type === 'product_manager') {
-    out.tankBalance =
-      filled(src.openingStock) || filled(src.receivedStock) || filled(src.litresSold)
-        ? String(n(src.openingStock) + n(src.receivedStock) - n(src.litresSold))
-        : ''
+    const opening = n(src.openingStock)
+    const ordered = n(src.receivedStock)
+    const loaded = n(src.litresSold)
+
+    /**
+     * What was sold today and has not left the tank.
+     *
+     * Floored at zero: loading more than was ordered today is ordinary —
+     * yesterday's order lifting this morning — and a negative here would read
+     * as a debt to the customer rather than as work catching up.
+     */
+    const unlifted = Math.max(0, ordered - loaded)
+    out.soldUnloaded = filled(src.receivedStock) || filled(src.litresSold) ? String(unlifted) : ''
+
+    const tank = opening + ordered - loaded
+    const tankFilled = filled(src.openingStock) || filled(src.receivedStock) || filled(src.litresSold)
+    out.tankBalance = tankFilled ? String(tank) : ''
+
+    /**
+     * The two balances the sheet ends on, and what separates them.
+     *
+     * The tank physically holds product that is already sold and merely not
+     * yet lifted. Counting it is the right answer for "what is in the tank"
+     * and the wrong one for "what is ours to sell", so the sheet carries both:
+     * inclusive adds it, net takes it out. Between them sits the plain tank
+     * balance, which is the dip.
+     *
+     * Both follow the figure actually in Sold but unloaded rather than
+     * recomputing it, so typing over that one carries through to these.
+     */
+    const sold = filled(src.soldUnloaded) ? n(src.soldUnloaded) : unlifted
+    out.tankBalanceInclusive = tankFilled ? String(tank + sold) : ''
+    out.netTankBalance = tankFilled ? String(tank - sold) : ''
   }
   if (type === 'commissions') {
     // Blank until the figure they are measured against is entered — an
