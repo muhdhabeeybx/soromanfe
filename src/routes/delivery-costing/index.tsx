@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  Banknote, Calculator, ChevronRight, Fuel, Loader2, Plus, Search, Trash2, Truck, TrendingUp, X,
+  Banknote, Calculator, ChevronRight, FileSpreadsheet, FileText, Fuel, Loader2, Plus, Search,
+  Trash2, Truck, TrendingUp, X,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -19,7 +20,9 @@ import { useDeliveryInventoryList, useDeleteDeliveryBatch } from '#/lib/hooks/us
 import { NewBatchDialog } from '#/components/delivery-operations/NewBatchDialog'
 import { TripCostDialog, type CostableTruck } from '#/components/delivery-operations/TripCostDialog'
 import { routeGuard } from '#/lib/route-guard'
+import { exportCostingWorkbook, exportCostingPdf } from './-costing-export'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
+import { useToast } from '#/lib/hooks/useToast'
 
 export const Route = createFileRoute('/delivery-costing/')({
   beforeLoad: () => routeGuard('/delivery-costing'),
@@ -68,6 +71,7 @@ interface Row extends CostableTruck {
 }
 
 function DeliveryCostingPage() {
+  const toast = useToast()
   const { data: inventory = [], isLoading, isError, error, refetch } = useDeliveryInventoryList()
 
   const [search, setSearch] = useState('')
@@ -84,6 +88,7 @@ function DeliveryCostingPage() {
    */
   const [openBatch, setOpenBatch] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null)
   const deleteBatch = useDeleteDeliveryBatch()
 
   const rows: Row[] = useMemo(
@@ -230,6 +235,40 @@ function DeliveryCostingPage() {
 
   const dirty = search !== '' || batch !== 'all' || depot !== 'all' || costedFilter !== 'all'
 
+  /**
+   * What the file is a view of, printed on it.
+   *
+   * A costing sheet filtered to one depot and mailed on is indistinguishable
+   * from the whole company's unless it says so, and that is the kind of
+   * mistake that gets a margin quoted at the wrong meeting.
+   */
+  const scope = [
+    batch !== 'all' ? `Batch: ${batch}` : 'All batches',
+    depot !== 'all' ? `Location: ${depot}` : null,
+    costedFilter !== 'all' ? (costedFilter === 'costed' ? 'Costed only' : 'Not costed only') : null,
+    search.trim() ? `Search: ${search.trim()}` : null,
+  ].filter(Boolean).join('   ·   ')
+
+  const download = async (kind: 'xlsx' | 'pdf') => {
+    if (!groups.length) return
+    setExporting(kind)
+    try {
+      const meta = {
+        scope,
+        trucks: summary.trucks,
+        expenses: summary.expenses,
+        marginValue: summary.marginValue,
+        avgMargin: summary.avgMargin,
+      }
+      if (kind === 'xlsx') await exportCostingWorkbook(groups, meta)
+      else await exportCostingPdf(groups, meta)
+    } catch (e) {
+      toast.error(getErrorMessage(e))
+    } finally {
+      setExporting(null)
+    }
+  }
+
   if (isError) return <PageError message={getErrorMessage(error)} onRetry={() => refetch()} />
 
   return (
@@ -240,6 +279,26 @@ function DeliveryCostingPage() {
         description="What each truck cost to run, and what it made."
         actions={(
           <div className="flex gap-2">
+            <Button
+              variant="outline" size="sm"
+              disabled={exporting !== null || groups.length === 0}
+              onClick={() => download('xlsx')}
+            >
+              {exporting === 'xlsx'
+                ? <Loader2 className="animate-spin" />
+                : <FileSpreadsheet data-icon="inline-start" />}
+              Excel
+            </Button>
+            <Button
+              variant="outline" size="sm"
+              disabled={exporting !== null || groups.length === 0}
+              onClick={() => download('pdf')}
+            >
+              {exporting === 'pdf'
+                ? <Loader2 className="animate-spin" />
+                : <FileText data-icon="inline-start" />}
+              PDF
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setNewBatch(true)}>
               <Plus data-icon="inline-start" />
               New batch
