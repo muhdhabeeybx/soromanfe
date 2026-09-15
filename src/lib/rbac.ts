@@ -526,11 +526,52 @@ export function getRoutePermissions(routePath: string): RoutePermissions | null 
  * blanket role rule — it is the supported way to close a single page to a
  * single user.
  */
-export function canAccessRoute(userRoles: number[], routePath: string, overrides?: Record<string, boolean>): boolean {
-  if (isSuperAdmin(userRoles)) return true
+/**
+ * Pages that are CLOSED unless somebody is explicitly given them.
+ *
+ * The inverse of every other route, and the exception has to be earned. Role
+ * gating is off dashboard-wide on purpose (see above): a signed-in staff
+ * member may open any page, because hiding a page whose API would have
+ * answered anyway is how people end up unable to see their own expense claim.
+ *
+ * That reasoning does not hold for a page whose whole content is what product
+ * costs the company and what each trip earns. There is no version of that a
+ * driver or a gate officer needs, and "they could have asked" is not the test
+ * for a margin sheet. So this one page inverts the default, and access is a
+ * per-person decision made in the admin form — the same override mechanism
+ * that closes a page to one user, used to open one instead.
+ *
+ * Prefix-matched, so child routes inherit: /delivery-costing/anything is shut
+ * to the same people /delivery-costing is.
+ */
+export const CLOSED_BY_DEFAULT = ['/delivery-costing'] as const
 
+export function isClosedByDefault(routePath: string): boolean {
+  return CLOSED_BY_DEFAULT.some(
+    (base) => routePath === base || routePath.startsWith(base + '/'),
+  )
+}
+
+export function canAccessRoute(userRoles: number[], routePath: string, overrides?: Record<string, boolean>): boolean {
   const override = resolveOverride(overrides, routePath)
+  const closed = isClosedByDefault(routePath)
+
+  /**
+   * On a closed page, an explicit denial beats being a super admin.
+   *
+   * Everywhere else super admin short-circuits, and it still does. The narrow
+   * exception is here because "only these seven people" has to mean seven — a
+   * margin sheet that four super admins can also open is not restricted, it is
+   * decorated. A super admin can still grant themselves back in the admin form
+   * in ten seconds, so nobody is locked out of anything; they just have to
+   * decide to be in.
+   */
+  if (closed && override === false) return false
+  if (isSuperAdmin(userRoles)) return true
   if (override !== undefined) return override
+
+  // Closed unless somebody was given it. Everything else stays open.
+  if (closed) return false
 
   return true
 }
