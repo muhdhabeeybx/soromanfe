@@ -221,27 +221,36 @@ export async function exportAllDeskTasks(desks: DeskAssignments[]) {
     )
   }
 
-  /**
-   * Orders and trucks with no batch, on their own sheet and never on a
-   * person's.
-   *
-   * They cannot be worked at all — a loading ticket draws against stock and
-   * there is no batch to draw from — so putting them on somebody's list would
-   * ask for the impossible and make them look months behind.
-   */
-  const batchless: TaskRow[] = desks.flatMap((d) => (
-    d.failed ? [] : d.noBatch.items.map((item) => ({ deskLabel: d.label, verb: d.verb, item }))
-  )).sort((a, b) => b.item.hoursWaiting - a.item.hoursWaiting)
-
-  if (batchless.length > 0) {
-    writeSheet(
-      wb.addWorksheet(sheetName('No batch', used)),
-      'No batch on the order',
-      'These carry no PFI, so they cannot be ticketed or gated. Nobody is behind on them —'
-        + ' it is a records problem, not a queue.',
-      batchless,
-    )
-  }
+  // The No batch sheet is switched off at the user's request — nobody is to see
+  // that orders exist with no PFI on them, and this workbook is the copy most
+  // likely to be passed around. Commented out together with the panel block in
+  // overview/index.tsx; the server still reports the figures, so both come back
+  // together.
+  //
+  // It stays out of every PERSON's sheet regardless of this: unworkable rows on
+  // somebody's list would ask the impossible and make them look months behind.
+  //
+  // /**
+  // * Orders and trucks with no batch, on their own sheet and never on a
+  // * person's.
+  // *
+  // * They cannot be worked at all — a loading ticket draws against stock and
+  // * there is no batch to draw from — so putting them on somebody's list would
+  // * ask for the impossible and make them look months behind.
+  // */
+  // const batchless: TaskRow[] = desks.flatMap((d) => (
+  // d.failed ? [] : d.noBatch.items.map((item) => ({ deskLabel: d.label, verb: d.verb, item }))
+  // )).sort((a, b) => b.item.hoursWaiting - a.item.hoursWaiting)
+  //
+  // if (batchless.length > 0) {
+  // writeSheet(
+  // wb.addWorksheet(sheetName('No batch', used)),
+  // 'No batch on the order',
+  // 'These carry no PFI, so they cannot be ticketed or gated. Nobody is behind on them —'
+  // + ' it is a records problem, not a queue.',
+  // batchless,
+  // )
+  // }
 
   if (wb.worksheets.length === 0) {
     const ws = wb.addWorksheet('All clear')

@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import {
-  ArrowRight, CheckCircle2, ChevronDown, CircleAlert, Download, FileQuestion, LayoutDashboard,
-  Loader2, UserX,
+  ArrowRight, CheckCircle2, ChevronDown, CircleAlert, Download, LayoutDashboard, Loader2, UserX,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -517,7 +516,7 @@ function DeskResponsibility({
   if (!assignments || assignments.failed) return null
 
   const { assignments: people, unassigned, unit } = assignments
-  if (people.length === 0 && unassigned.count === 0 && assignments.noBatch.count === 0) return null
+  if (people.length === 0 && unassigned.count === 0) return null
 
   const waited = (h: number) => (h >= 48 ? `${Math.floor(h / 24)}d` : `${h}h`)
   const plural = (n: number) => `${n} ${unit}${n === 1 ? '' : 's'}`
@@ -630,45 +629,58 @@ function DeskResponsibility({
         </div>
       )}
 
-      {assignments.noBatch.count > 0 && (
-        <div>
-          <button
-            type="button"
-            onClick={() => setOpen(open === 'nobatch' ? null : 'nobatch')}
-            className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
-          >
-            <FileQuestion className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-              <span className="font-medium">{plural(assignments.noBatch.count)} with no batch</span>
-              {' — not counted above, and not anybody\u2019s task'}
-            </span>
-          </button>
-          {open === 'nobatch' && (
-            <>
-              <ul className="mt-1 ml-5 space-y-0.5 border-l border-foreground/10 pl-3">
-                {assignments.noBatch.items.slice(0, 25).map((i) => (
-                  <li key={i.id} className="text-xs text-muted-foreground">
-                    <span className="text-foreground">{i.label}</span>
-                    {i.depotName ? ` · ${i.depotName}` : ''}
-                    {` · waiting ${waited(i.hoursWaiting)}`}
-                  </li>
-                ))}
-                {assignments.noBatch.items.length > 25 && (
-                  <li className="text-xs text-muted-foreground/60">
-                    and {assignments.noBatch.items.length - 25} more
-                  </li>
-                )}
-              </ul>
-              <p className="mt-1.5 ml-5 text-xs text-muted-foreground/70">
-                These carry no PFI, so they cannot be ticketed or gated — a loading ticket draws
-                against stock and there is no batch to draw from. They are shown because orders
-                that took money and went nowhere are worth knowing about, but they are a records
-                problem rather than a queue, and nobody is behind on them.
-              </p>
-            </>
-          )}
-        </div>
-      )}
+      {/* The no-batch bucket is hidden at the user's request — nobody outside
+          this file is to see that orders exist with no PFI on them. Commented
+          out rather than deleted, and the server still computes it: the count
+          is on the payload as `assignments.noBatch`, so this comes back by
+          uncommenting.
+
+          Worth keeping in mind while it is hidden: those orders are still
+          there, they still cannot be ticketed or gated, and nothing else on
+          the dashboard will surface them. Clearing them needs a batch assigned
+          or the orders cancelled — hiding the panel does not make them go
+          away.
+
+      // {assignments.noBatch.count > 0 && (
+      // <div>
+      // <button
+      // type="button"
+      // onClick={() => setOpen(open === 'nobatch' ? null : 'nobatch')}
+      // className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
+      // >
+      // <FileQuestion className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+      // <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+      // <span className="font-medium">{plural(assignments.noBatch.count)} with no batch</span>
+      // {' — not counted above, and not anybody\u2019s task'}
+      // </span>
+      // </button>
+      // {open === 'nobatch' && (
+      // <>
+      // <ul className="mt-1 ml-5 space-y-0.5 border-l border-foreground/10 pl-3">
+      // {assignments.noBatch.items.slice(0, 25).map((i) => (
+      // <li key={i.id} className="text-xs text-muted-foreground">
+      // <span className="text-foreground">{i.label}</span>
+      // {i.depotName ? ` · ${i.depotName}` : ''}
+      // {` · waiting ${waited(i.hoursWaiting)}`}
+      // </li>
+      // ))}
+      // {assignments.noBatch.items.length > 25 && (
+      // <li className="text-xs text-muted-foreground/60">
+      // and {assignments.noBatch.items.length - 25} more
+      // </li>
+      // )}
+      // </ul>
+      // <p className="mt-1.5 ml-5 text-xs text-muted-foreground/70">
+      // These carry no PFI, so they cannot be ticketed or gated — a loading ticket draws
+      // against stock and there is no batch to draw from. They are shown because orders
+      // that took money and went nowhere are worth knowing about, but they are a records
+      // problem rather than a queue, and nobody is behind on them.
+      // </p>
+      // </>
+      // )}
+      // </div>
+      // )}
+      */}
 
       {assignments.idle.length > 0 && (
         <p className="px-1 text-xs text-muted-foreground/60">
