@@ -10,7 +10,7 @@ import { Input } from '#/components/ui/input'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import { Building2, Package, Search, X, Wallet, CheckCircle2, AlertTriangle, MapPin } from 'lucide-react'
-import { useAllOrders } from '#/lib/hooks/useOrders'
+import { usePayableOrders } from '#/lib/hooks/useOrders'
 import { ConfirmOrderPaymentDialog } from '#/components/ConfirmOrderPaymentDialog'
 import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
@@ -55,11 +55,22 @@ function PendingOrdersPage() {
   const [pageSize, setPageSize] = useState(1000)
   const [confirmingOrder, setConfirmingOrder] = useState<any | null>(null)
 
-  // Every unpaid order awaiting a decision. Wallet balance no longer has any
-  // bearing on which orders appear here or on what can be confirmed — an order
-  // is paid by matching the bank statement line that paid for it.
-  const { data, isLoading, isError, error, refetch } = useAllOrders({ status: 'Pending' })
-  const orders: any[] = (data?.orders || []).filter((o: any) => o.paymentStatus !== 'Paid')
+  /**
+   * Every order awaiting money, from the endpoint built for this desk.
+   *
+   * It used to ask the generic order list for status='Pending', which is not
+   * the same question and quietly hid every PART-PAID order — because a
+   * part-paid order has already been released, so it is never at Pending. That
+   * was 11 orders and ₦1.84bn with product loading against unpaid balances,
+   * while the sidebar badge (which asks correctly) said 22 and this page showed
+   * 11. The page's own "Part paid" card read 0, which was the tell.
+   *
+   * Wallet balance has no bearing on what appears here or on what can be
+   * confirmed — an order is paid by matching the bank statement line that paid
+   * for it.
+   */
+  const { data: payable, isLoading, isError, error, refetch } = usePayableOrders()
+  const orders: any[] = payable || []
 
   // Declared before the filter that uses it — a const arrow function is in
   // the temporal dead zone until its own line, so referencing it above would
