@@ -43,6 +43,7 @@ import { Route as DangotePayableOrdersIndexRouteImport } from './routes/dangote-
 import { Route as DangoteProductsIndexRouteImport } from './routes/dangote-products/index'
 import { Route as DangoteProductsDetailsRouteImport } from './routes/dangote-products/details'
 import { Route as DangoteProductsFormRouteImport } from './routes/dangote-products/form'
+import { Route as DeliveryCostingIndexRouteImport } from './routes/delivery-costing/index'
 import { Route as DeliveryCustomerIndexRouteImport } from './routes/delivery-customer/index'
 import { Route as DeliveryCustomerDetailsRouteImport } from './routes/delivery-customer/details'
 import { Route as DeliveryCustomerFormRouteImport } from './routes/delivery-customer/form'
@@ -296,6 +297,11 @@ const DangoteProductsDetailsRoute = DangoteProductsDetailsRouteImport.update({
 const DangoteProductsFormRoute = DangoteProductsFormRouteImport.update({
   id: '/dangote-products/form',
   path: '/dangote-products/form',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeliveryCostingIndexRoute = DeliveryCostingIndexRouteImport.update({
+  id: '/delivery-costing/',
+  path: '/delivery-costing/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeliveryCustomerIndexRoute = DeliveryCustomerIndexRouteImport.update({
@@ -769,6 +775,7 @@ export interface FileRoutesByFullPath {
   '/dangote-orders/': typeof DangoteOrdersIndexRoute
   '/dangote-payable-orders/': typeof DangotePayableOrdersIndexRoute
   '/dangote-products/': typeof DangoteProductsIndexRoute
+  '/delivery-costing/': typeof DeliveryCostingIndexRoute
   '/delivery-customer/': typeof DeliveryCustomerIndexRoute
   '/delivery-inventory/': typeof DeliveryInventoryIndexRoute
   '/delivery-operations/': typeof DeliveryOperationsIndexRoute
@@ -884,6 +891,7 @@ export interface FileRoutesByTo {
   '/dangote-orders': typeof DangoteOrdersIndexRoute
   '/dangote-payable-orders': typeof DangotePayableOrdersIndexRoute
   '/dangote-products': typeof DangoteProductsIndexRoute
+  '/delivery-costing': typeof DeliveryCostingIndexRoute
   '/delivery-customer': typeof DeliveryCustomerIndexRoute
   '/delivery-inventory': typeof DeliveryInventoryIndexRoute
   '/delivery-operations': typeof DeliveryOperationsIndexRoute
@@ -1000,6 +1008,7 @@ export interface FileRoutesById {
   '/dangote-orders/': typeof DangoteOrdersIndexRoute
   '/dangote-payable-orders/': typeof DangotePayableOrdersIndexRoute
   '/dangote-products/': typeof DangoteProductsIndexRoute
+  '/delivery-costing/': typeof DeliveryCostingIndexRoute
   '/delivery-customer/': typeof DeliveryCustomerIndexRoute
   '/delivery-inventory/': typeof DeliveryInventoryIndexRoute
   '/delivery-operations/': typeof DeliveryOperationsIndexRoute
@@ -1117,6 +1126,7 @@ export interface FileRouteTypes {
     | '/dangote-orders/'
     | '/dangote-payable-orders/'
     | '/dangote-products/'
+    | '/delivery-costing/'
     | '/delivery-customer/'
     | '/delivery-inventory/'
     | '/delivery-operations/'
@@ -1232,6 +1242,7 @@ export interface FileRouteTypes {
     | '/dangote-orders'
     | '/dangote-payable-orders'
     | '/dangote-products'
+    | '/delivery-costing'
     | '/delivery-customer'
     | '/delivery-inventory'
     | '/delivery-operations'
@@ -1347,6 +1358,7 @@ export interface FileRouteTypes {
     | '/dangote-orders/'
     | '/dangote-payable-orders/'
     | '/dangote-products/'
+    | '/delivery-costing/'
     | '/delivery-customer/'
     | '/delivery-inventory/'
     | '/delivery-operations/'
@@ -1463,6 +1475,7 @@ export interface RootRouteChildren {
   DangoteOrdersIndexRoute: typeof DangoteOrdersIndexRoute
   DangotePayableOrdersIndexRoute: typeof DangotePayableOrdersIndexRoute
   DangoteProductsIndexRoute: typeof DangoteProductsIndexRoute
+  DeliveryCostingIndexRoute: typeof DeliveryCostingIndexRoute
   DeliveryCustomerIndexRoute: typeof DeliveryCustomerIndexRoute
   DeliveryInventoryIndexRoute: typeof DeliveryInventoryIndexRoute
   DeliveryOperationsIndexRoute: typeof DeliveryOperationsIndexRoute
@@ -1749,6 +1762,13 @@ declare module '@tanstack/react-router' {
       path: '/dangote-products/form'
       fullPath: '/dangote-products/form'
       preLoaderRoute: typeof DangoteProductsFormRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/delivery-costing/': {
+      id: '/delivery-costing/'
+      path: '/delivery-costing'
+      fullPath: '/delivery-costing/'
+      preLoaderRoute: typeof DeliveryCostingIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/delivery-customer/': {
@@ -2376,6 +2396,7 @@ const rootRouteChildren: RootRouteChildren = {
   DangoteOrdersIndexRoute: DangoteOrdersIndexRoute,
   DangotePayableOrdersIndexRoute: DangotePayableOrdersIndexRoute,
   DangoteProductsIndexRoute: DangoteProductsIndexRoute,
+  DeliveryCostingIndexRoute: DeliveryCostingIndexRoute,
   DeliveryCustomerIndexRoute: DeliveryCustomerIndexRoute,
   DeliveryInventoryIndexRoute: DeliveryInventoryIndexRoute,
   DeliveryOperationsIndexRoute: DeliveryOperationsIndexRoute,
