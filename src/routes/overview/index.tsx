@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { ArrowRight, CheckCircle2, CircleAlert, LayoutDashboard } from 'lucide-react'
+import { ArrowRight, CheckCircle2, ChevronDown, CircleAlert, LayoutDashboard, UserX } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Skeleton } from '#/components/ui/skeleton'
 import { PageError } from '#/components/PageError'
 import {
-  useWorkQueues, useDeskBacklogs, useSendDeskNudges, useSmsDesk,
+  useWorkQueues, useDeskBacklogs, useSendDeskNudges, useSmsDesk, useDeskAssignments,
+  type DeskAssignments,
   type WorkQueue, type DeskBacklog,
 } from '#/lib/hooks/useDashboard'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
@@ -305,6 +306,13 @@ function MyDashboard() {
  */
 function DeskBacklogPanel() {
   const { data: desks = [], isLoading } = useDeskBacklogs()
+  // Who owes what. Separate request because it is admin-only and much heavier
+  // than the counts — the panel still renders without it.
+  const { data: assignments = [] } = useDeskAssignments()
+  const byDesk = useMemo(
+    () => new Map(assignments.map((a) => [a.desk, a])),
+    [assignments],
+  )
   const sendNudges = useSendDeskNudges()
   const smsDesk = useSmsDesk()
 
@@ -397,14 +405,9 @@ function DeskBacklogPanel() {
                 )}
               </div>
 
-              {/* A few of the actual rows. A count says how bad it is; the
-                  examples say whether it is one stuck order or a real pile. */}
-              {d.examples?.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-                  {d.examples.slice(0, 3).map((e, i) => <li key={i}>{e}</li>)}
-                  {d.count > 3 && <li className="text-muted-foreground/70">and {d.count - 3} more</li>}
-                </ul>
-              )}
+              {/* Whose it is. A count belongs to nobody, which is how a queue
+                  sitting for months becomes everybody's and therefore no-one's. */}
+              {d.count > 0 && <DeskResponsibility assignments={byDesk.get(d.desk)} />}
             </div>
           )
         })}
@@ -436,5 +439,127 @@ function DeskBacklogPanel() {
         )}
       </ConfirmDialog>
     </section>
+  )
+}
+
+/**
+ * Who is responsible, and for exactly what.
+ *
+ * The panel above says a desk has ten orders waiting. This says Usman Ibrahim
+ * has five of them at Liquid Bulk and Sadeeq Umar has thirty-nine at Calabar,
+ * and names the orders. An admin chasing a backlog needs a person and a
+ * reference, not a total.
+ *
+ * Work with nobody scoped to it is called out separately and last. It is not a
+ * rounding error: it is a staffing gap, and no amount of chasing will clear it
+ * — somebody has to be assigned to that depot.
+ */
+function DeskResponsibility({ assignments }: { assignments?: DeskAssignments }) {
+  const [open, setOpen] = useState<number | 'unassigned' | null>(null)
+
+  // Absent for a non-admin (the endpoint 403s) or still loading. The counts
+  // above stand on their own, so this simply does not render.
+  if (!assignments || assignments.failed) return null
+
+  const { assignments: people, unassigned, unit } = assignments
+  if (people.length === 0 && unassigned.count === 0) return null
+
+  const waited = (h: number) => (h >= 48 ? `${Math.floor(h / 24)}d` : `${h}h`)
+  const plural = (n: number) => `${n} ${unit}${n === 1 ? '' : 's'}`
+
+  return (
+    <div className="mt-2.5 space-y-1.5 border-t border-foreground/10 pt-2.5">
+      {people.map((a) => {
+        const isOpen = open === a.staffId
+        return (
+          <div key={a.staffId}>
+            <button
+              type="button"
+              onClick={() => setOpen(isOpen ? null : a.staffId)}
+              className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
+            >
+              <ChevronDown
+                className={cn(
+                  'mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform',
+                  !isOpen && '-rotate-90',
+                )}
+              />
+              <span className="min-w-0 flex-1 text-xs">
+                {/* The sentence comes composed from the server so the wording
+                    cannot drift between the panel and the SMS. */}
+                <span className="font-medium">{a.sentence}</span>{' '}
+                <span className="font-semibold">{plural(a.count)}</span>
+                <span className="text-muted-foreground">
+                  {' · '}{a.locations.map((l) => `${l.location} (${l.count})`).join(', ')}
+                  {' · oldest '}{waited(a.oldestHours)}
+                </span>
+              </span>
+            </button>
+
+            {isOpen && (
+              <ul className="mt-1 mb-1.5 ml-5 space-y-0.5 border-l border-foreground/10 pl-3">
+                {a.items.slice(0, 25).map((i) => (
+                  <li key={i.id} className="text-xs text-muted-foreground">
+                    <span className="text-foreground">{i.label}</span>
+                    {i.customerName ? ` · ${i.customerName}` : ''}
+                    {i.quantity ? ` · ${i.quantity.toLocaleString()} litres` : ''}
+                    {i.pfiNumber ? ` · ${i.pfiNumber}` : ''}
+                    {` · waiting ${waited(i.hoursWaiting)}`}
+                  </li>
+                ))}
+                {a.items.length > 25 && (
+                  <li className="text-xs text-muted-foreground/60">
+                    and {a.items.length - 25} more
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
+        )
+      })}
+
+      {unassigned.count > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen(open === 'unassigned' ? null : 'unassigned')}
+            className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
+          >
+            <UserX className="mt-0.5 size-3 shrink-0 text-destructive" />
+            <span className="min-w-0 flex-1 text-xs">
+              <span className="font-medium text-destructive">
+                Nobody is assigned to {plural(unassigned.count)}
+              </span>
+              <span className="text-muted-foreground">
+                {' · '}{unassigned.locations.map((l) => `${l.location} (${l.count})`).join(', ')}
+              </span>
+            </span>
+          </button>
+          {open === 'unassigned' && (
+            <>
+              <ul className="mt-1 ml-5 space-y-0.5 border-l border-destructive/20 pl-3">
+                {unassigned.items.slice(0, 25).map((i) => (
+                  <li key={i.id} className="text-xs text-muted-foreground">
+                    <span className="text-foreground">{i.label}</span>
+                    {i.depotName ? ` · ${i.depotName}` : ''}
+                    {` · waiting ${waited(i.hoursWaiting)}`}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 ml-5 text-xs text-muted-foreground/70">
+                Nobody holding this desk's role is scoped to these locations. Chasing will not
+                clear it — assign somebody to the depot under Manage Users.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {assignments.idle.length > 0 && (
+        <p className="px-1 text-xs text-muted-foreground/60">
+          Clear on this desk: {assignments.idle.map((i) => i.name).join(', ')}
+        </p>
+      )}
+    </div>
   )
 }

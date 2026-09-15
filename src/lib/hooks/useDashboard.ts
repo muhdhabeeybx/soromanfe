@@ -147,6 +147,76 @@ export interface DeskBacklog {
   }>
 }
 
+/**
+ * Who owes what, by name.
+ *
+ * useDeskBacklogs answers "how deep is each desk"; this answers "whose is it".
+ * A count belongs to nobody, which is how a queue sitting for months became
+ * everybody's and therefore no-one's.
+ *
+ * `unassigned` is not a rounding error — it is work no one on the desk is
+ * scoped to, which is a staffing gap rather than a queue and cannot be cleared
+ * by chasing anybody.
+ */
+export interface DeskWorkItem {
+  id: number
+  ref: string | null
+  truckRef: string | null
+  /** Pre-composed: "KZR 584 XA on NR10845", or an order number. */
+  label: string
+  depotName: string | null
+  pfiNumber: string | null
+  customerName: string | null
+  quantity: number | null
+  hoursWaiting: number
+}
+
+export interface DeskAssignment {
+  staffId: number
+  name: string
+  phone: string | null
+  roles: string[]
+  count: number
+  /** "Usman Ibrahim needs to generate tickets for" — printed verbatim. */
+  sentence: string
+  locations: Array<{ location: string; count: number }>
+  oldestHours: number
+  items: DeskWorkItem[]
+}
+
+export interface DeskAssignments {
+  desk: 'tickets' | 'entry' | 'exit'
+  label: string
+  verb: string
+  unit: string
+  roles: string[]
+  total: number
+  assigned: number
+  assignments: DeskAssignment[]
+  unassigned: {
+    count: number
+    locations: Array<{ location: string; count: number }>
+    items: DeskWorkItem[]
+  }
+  idle: Array<{ staffId: number; name: string }>
+  failed?: boolean
+}
+
+export function useDeskAssignments(enabled = true) {
+  return useQuery({
+    queryKey: ['dashboard', 'desk-assignments'],
+    staleTime: 60_000,
+    enabled,
+    // 403 for anybody but admin and super admin: it names individuals and what
+    // they are holding up. Not retried, so a non-admin does not hammer it.
+    retry: false,
+    queryFn: async () => {
+      const res = await api.get('/dashboard/desk-assignments')
+      return (res.data?.data?.desks || []) as DeskAssignments[]
+    },
+  })
+}
+
 export function useDeskBacklogs() {
   return useQuery({
     queryKey: ['dashboard', 'desk-nudges'],
