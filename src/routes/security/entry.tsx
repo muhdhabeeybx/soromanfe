@@ -12,6 +12,7 @@ import {
   useOrderLookup, OrderSearch, TruckCard, GateDialog, useGateAction, localNow, gateTime,
 } from './-security-shared'
 import { routeGuard } from '#/lib/route-guard'
+import { GateQueue, type GateTruck } from './-gate-queue'
 
 export const Route = createFileRoute('/security/entry')({
   beforeLoad: () => routeGuard('/security/entry'),
@@ -61,6 +62,17 @@ function SecurityEntryPage() {
       {/* OrderSearch renders its own panel — wrapping it again double-borders. */}
       <OrderSearch {...lookup} placeholder="Search by order reference, truck, or customer…" />
 
+      {/* The queue, when nothing is picked. Searching is right when the
+          paperwork is in hand; this is right when a truck has just pulled up
+          and the officer has a plate and nothing else. Hidden once an order is
+          open so the page is about that order. */}
+      {!picked && (
+        <GateQueue
+          stage="entry"
+          onPick={(t: GateTruck) => lookup.setPicked({ id: t.orderId, orderNumber: t.orderNumber })}
+        />
+      )}
+
       {picked &&
         (loads.length === 0 ? (
           <PageEmpty
@@ -94,11 +106,6 @@ function SecurityEntryPage() {
           </section>
         ))}
 
-      {!picked && (
-        <p className="pt-2 text-center text-sm text-muted-foreground">
-          Search for an order to begin.
-        </p>
-      )}
 
       <GateDialog
         title={target ? `Confirm entry — Truck ${target.truckIndex}` : 'Confirm entry'}
