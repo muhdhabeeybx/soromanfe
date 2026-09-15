@@ -198,6 +198,16 @@ export interface DeskAssignments {
     locations: Array<{ location: string; count: number }>
     items: DeskWorkItem[]
   }
+  /**
+   * Orders and trucks never attached to a batch — outside every count above and
+   * outside everybody's task list. They cannot be worked, so they are reported
+   * as a records problem rather than queued to a desk.
+   */
+  noBatch: {
+    count: number
+    locations: Array<{ location: string; count: number }>
+    items: DeskWorkItem[]
+  }
   idle: Array<{ staffId: number; name: string }>
   failed?: boolean
 }

@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { ArrowRight, CheckCircle2, ChevronDown, CircleAlert, LayoutDashboard, UserX } from 'lucide-react'
+import {
+  ArrowRight, CheckCircle2, ChevronDown, CircleAlert, Download, FileQuestion, LayoutDashboard,
+  Loader2, UserX,
+} from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { Skeleton } from '#/components/ui/skeleton'
@@ -14,13 +17,15 @@ import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { Button } from '#/components/ui/button'
 import { BellRing, MessageSquare } from 'lucide-react'
 import { useRoles } from '#/lib/hooks/useRoles'
+import { useToast } from '#/lib/hooks/useToast'
 import { useAuthStore } from '#/modules/auth'
 import { canAccessRoute, isSuperAdmin, ROLE_STRING_TO_ID } from '#/lib/rbac'
 import { navCategories } from '#/components/layout/nav-config'
 import { formatNumber } from '#/lib/format'
-import { cn } from '#/lib/utils'
+import { cn, getErrorMessage } from '#/lib/utils'
 import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
 import { routeGuard } from '#/lib/route-guard'
+import { exportAllDeskTasks, exportPersonTasks } from './-desk-tasks-export'
 
 /**
  * My Dashboard — what is waiting on you, the landing page every role gets.
@@ -313,6 +318,23 @@ function DeskBacklogPanel() {
     () => new Map(assignments.map((a) => [a.desk, a])),
     [assignments],
   )
+
+  /**
+   * Which download is running, by key, so one spinner shows on the button that
+   * was actually pressed rather than on all of them.
+   */
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const toast = useToast()
+  const download = async (key: string, run: () => Promise<void>) => {
+    setDownloading(key)
+    try {
+      await run()
+    } catch (e) {
+      toast.error(getErrorMessage(e))
+    } finally {
+      setDownloading(null)
+    }
+  }
   const sendNudges = useSendDeskNudges()
   const smsDesk = useSmsDesk()
 
@@ -339,16 +361,34 @@ function DeskBacklogPanel() {
       <div className={PANEL_RAIL}>
         <span className={MICRO}>Desk backlogs</span>
         {withWork.length > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-auto gap-1.5"
-            disabled={sendNudges.isPending}
-            onClick={() => sendNudges.mutate()}
-          >
-            <BellRing className="size-3.5" />
-            Notify all desks
-          </Button>
+          <div className="ml-auto flex gap-2">
+            {/* One book, a sheet per person — what an admin walks into a
+                meeting with. */}
+            {assignments.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={downloading !== null}
+                onClick={() => download('all', () => exportAllDeskTasks(assignments))}
+              >
+                {downloading === 'all'
+                  ? <Loader2 className="size-3.5 animate-spin" />
+                  : <Download className="size-3.5" />}
+                Download all tasks
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={sendNudges.isPending}
+              onClick={() => sendNudges.mutate()}
+            >
+              <BellRing className="size-3.5" />
+              Notify all desks
+            </Button>
+          </div>
         )}
       </div>
 
@@ -407,7 +447,14 @@ function DeskBacklogPanel() {
 
               {/* Whose it is. A count belongs to nobody, which is how a queue
                   sitting for months becomes everybody's and therefore no-one's. */}
-              {d.count > 0 && <DeskResponsibility assignments={byDesk.get(d.desk)} />}
+              {d.count > 0 && (
+                <DeskResponsibility
+                  assignments={byDesk.get(d.desk)}
+                  allDesks={assignments}
+                  downloading={downloading}
+                  onDownload={download}
+                />
+              )}
             </div>
           )
         })}
@@ -454,15 +501,23 @@ function DeskBacklogPanel() {
  * rounding error: it is a staffing gap, and no amount of chasing will clear it
  * — somebody has to be assigned to that depot.
  */
-function DeskResponsibility({ assignments }: { assignments?: DeskAssignments }) {
-  const [open, setOpen] = useState<number | 'unassigned' | null>(null)
+function DeskResponsibility({
+  assignments, allDesks, downloading, onDownload,
+}: {
+  assignments?: DeskAssignments
+  /** Every desk, so a person's file covers all of theirs — not just this one. */
+  allDesks: DeskAssignments[]
+  downloading: string | null
+  onDownload: (key: string, run: () => Promise<void>) => void
+}) {
+  const [open, setOpen] = useState<number | 'unassigned' | 'nobatch' | null>(null)
 
   // Absent for a non-admin (the endpoint 403s) or still loading. The counts
   // above stand on their own, so this simply does not render.
   if (!assignments || assignments.failed) return null
 
   const { assignments: people, unassigned, unit } = assignments
-  if (people.length === 0 && unassigned.count === 0) return null
+  if (people.length === 0 && unassigned.count === 0 && assignments.noBatch.count === 0) return null
 
   const waited = (h: number) => (h >= 48 ? `${Math.floor(h / 24)}d` : `${h}h`)
   const plural = (n: number) => `${n} ${unit}${n === 1 ? '' : 's'}`
@@ -473,10 +528,11 @@ function DeskResponsibility({ assignments }: { assignments?: DeskAssignments }) 
         const isOpen = open === a.staffId
         return (
           <div key={a.staffId}>
+            <div className="flex items-start gap-1">
             <button
               type="button"
               onClick={() => setOpen(isOpen ? null : a.staffId)}
-              className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
+              className="flex min-w-0 flex-1 items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
             >
               <ChevronDown
                 className={cn(
@@ -495,6 +551,25 @@ function DeskResponsibility({ assignments }: { assignments?: DeskAssignments }) 
                 </span>
               </span>
             </button>
+            {/* Their whole list, every desk they are on — a file to hand over
+                rather than a screen to read out. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 gap-1 px-1.5 text-muted-foreground"
+              title={`Download ${a.name}'s pending tasks`}
+              disabled={downloading !== null}
+              onClick={() => onDownload(
+                `person:${a.staffId}`,
+                () => exportPersonTasks(a.staffId, a.name, allDesks),
+              )}
+            >
+              {downloading === `person:${a.staffId}`
+                ? <Loader2 className="size-3 animate-spin" />
+                : <Download className="size-3" />}
+              <span className="sr-only">Download {a.name}'s tasks</span>
+            </Button>
+            </div>
 
             {isOpen && (
               <ul className="mt-1 mb-1.5 ml-5 space-y-0.5 border-l border-foreground/10 pl-3">
@@ -549,6 +624,46 @@ function DeskResponsibility({ assignments }: { assignments?: DeskAssignments }) 
               <p className="mt-1.5 ml-5 text-xs text-muted-foreground/70">
                 Nobody holding this desk's role is scoped to these locations. Chasing will not
                 clear it — assign somebody to the depot under Manage Users.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {assignments.noBatch.count > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen(open === 'nobatch' ? null : 'nobatch')}
+            className="flex w-full items-start gap-2 rounded-md px-1 py-1 text-left hover:bg-foreground/5"
+          >
+            <FileQuestion className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+              <span className="font-medium">{plural(assignments.noBatch.count)} with no batch</span>
+              {' — not counted above, and not anybody\u2019s task'}
+            </span>
+          </button>
+          {open === 'nobatch' && (
+            <>
+              <ul className="mt-1 ml-5 space-y-0.5 border-l border-foreground/10 pl-3">
+                {assignments.noBatch.items.slice(0, 25).map((i) => (
+                  <li key={i.id} className="text-xs text-muted-foreground">
+                    <span className="text-foreground">{i.label}</span>
+                    {i.depotName ? ` · ${i.depotName}` : ''}
+                    {` · waiting ${waited(i.hoursWaiting)}`}
+                  </li>
+                ))}
+                {assignments.noBatch.items.length > 25 && (
+                  <li className="text-xs text-muted-foreground/60">
+                    and {assignments.noBatch.items.length - 25} more
+                  </li>
+                )}
+              </ul>
+              <p className="mt-1.5 ml-5 text-xs text-muted-foreground/70">
+                These carry no PFI, so they cannot be ticketed or gated — a loading ticket draws
+                against stock and there is no batch to draw from. They are shown because orders
+                that took money and went nowhere are worth knowing about, but they are a records
+                problem rather than a queue, and nobody is behind on them.
               </p>
             </>
           )}
