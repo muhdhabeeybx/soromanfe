@@ -77,8 +77,8 @@ function rowsForPerson(staffId: number, desks: DeskAssignments[]): TaskRow[] {
 }
 
 const HEADERS = [
-  'Desk', 'To do', 'Reference', 'Truck', 'Customer', 'Litres', 'Batch (PFI)', 'Location',
-  'Waiting (hours)', 'Waiting',
+  'Desk', 'To do', 'Reference', 'Truck', 'Trucks needed', 'Customer', 'Litres', 'Batch (PFI)',
+  'Location', 'Waiting (hours)', 'Waiting',
 ]
 
 /** "3 days" reads better than "72 hours" on a queue this old. */
@@ -115,6 +115,9 @@ function writeSheet(
       verb,
       item.ref || '',
       item.truckRef || '',
+      // Marked when it was worked out from litres rather than declared, so a
+      // planner reading the sheet knows which figures to check.
+      item.trucksEstimated ? `~${item.trucksNeeded}` : item.trucksNeeded,
       item.customerName || '',
       item.quantity ?? null,
       item.pfiNumber || '',
@@ -122,8 +125,8 @@ function writeSheet(
       item.hoursWaiting,
       waited(item.hoursWaiting),
     ]
-    row.getCell(6).numFmt = QTY
-    row.getCell(9).numFmt = HRS
+    row.getCell(7).numFmt = QTY
+    row.getCell(10).numFmt = HRS
     cursor++
   }
 
@@ -135,12 +138,13 @@ function writeSheet(
   ws.getColumn(2).width = 22
   ws.getColumn(3).width = 26
   ws.getColumn(4).width = 16
-  ws.getColumn(5).width = 26
-  ws.getColumn(6).width = 14
-  ws.getColumn(7).width = 34
-  ws.getColumn(8).width = 28
-  ws.getColumn(9).width = 15
-  ws.getColumn(10).width = 14
+  ws.getColumn(5).width = 15
+  ws.getColumn(6).width = 26
+  ws.getColumn(7).width = 14
+  ws.getColumn(8).width = 34
+  ws.getColumn(9).width = 28
+  ws.getColumn(10).width = 15
+  ws.getColumn(11).width = 14
   ws.views = [{ state: 'frozen', ySplit: 4 }]
 }
 

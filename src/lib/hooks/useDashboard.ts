@@ -168,6 +168,10 @@ export interface DeskWorkItem {
   pfiNumber: string | null
   customerName: string | null
   quantity: number | null
+  /** Trucks this row represents — 1 for a truck, n for an order awaiting tickets. */
+  trucksNeeded: number
+  /** Whether that figure was declared at order entry or worked out from litres. */
+  trucksEstimated: boolean
   hoursWaiting: number
 }
 
@@ -177,6 +181,10 @@ export interface DeskAssignment {
   phone: string | null
   roles: string[]
   count: number
+  /** The same pile in trucks — the unit the desk actually works. */
+  trucks: number
+  /** How many of those trucks were estimated rather than declared. */
+  trucksEstimated: number
   /** "Usman Ibrahim needs to generate tickets for" — printed verbatim. */
   sentence: string
   locations: Array<{ location: string; count: number }>
@@ -192,6 +200,8 @@ export interface DeskAssignments {
   roles: string[]
   total: number
   assigned: number
+  trucks: number
+  trucksEstimated: number
   assignments: DeskAssignment[]
   unassigned: {
     count: number

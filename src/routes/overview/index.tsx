@@ -407,6 +407,19 @@ function DeskBacklogPanel() {
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">
                     {d.count > 0 ? `${d.count} ${meta.label.toLowerCase()}` : `${meta.label} — clear`}
+                    {/* The ticket desk counts orders because that is what the
+                        page it links to lists, and a heading that disagrees
+                        with its page is worse than no heading. The trucks ride
+                        beside it, since that is the work. */}
+                    {(() => {
+                      const a = byDesk.get(d.desk)
+                      if (!a || a.failed || a.unit !== 'order' || !a.trucks) return null
+                      return (
+                        <span className="ml-1.5 font-normal text-muted-foreground">
+                          · {a.trucksEstimated > 0 ? '≈' : ''}{a.trucks} truck{a.trucks === 1 ? '' : 's'} to lift
+                        </span>
+                      )
+                    })()}
                   </p>
                   {d.count > 0 && (
                     <p className={cn(MICRO, 'mt-0.5 text-muted-foreground')}>
@@ -544,6 +557,16 @@ function DeskResponsibility({
                     cannot drift between the panel and the SMS. */}
                 <span className="font-medium">{a.sentence}</span>{' '}
                 <span className="font-semibold">{plural(a.count)}</span>
+                {/* Orders are what the page links to; trucks are what the desk
+                    lifts. Both, because one order can be six trucks — and the
+                    "≈" is not decoration: with no declared count it is litres
+                    over that depot's median truck, right to within one truck
+                    98% of the time but still a derivation, not a fact. */}
+                {assignments.unit === 'order' && a.trucks > 0 && (
+                  <span className="font-semibold">
+                    {' ('}{a.trucksEstimated > 0 ? '≈' : ''}{a.trucks} truck{a.trucks === 1 ? '' : 's'}{')'}
+                  </span>
+                )}
                 <span className="text-muted-foreground">
                   {' · '}{a.locations.map((l) => `${l.location} (${l.count})`).join(', ')}
                   {' · oldest '}{waited(a.oldestHours)}
