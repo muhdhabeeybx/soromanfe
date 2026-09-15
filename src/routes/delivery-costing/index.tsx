@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  Banknote, Calculator, Droplets, Fuel, Loader2, Plus, Search, Trash2, Truck, TrendingUp, X,
+  Banknote, Calculator, ChevronRight, Fuel, Loader2, Plus, Search, Trash2, Truck, TrendingUp, X,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -55,6 +55,7 @@ const qty = (v: unknown) => (v == null ? '—' : Number(v).toLocaleString('en-NG
 
 interface Row extends CostableTruck {
   allocationCode?: string | null
+  pfiId?: number | null
   pfiNumber?: string | null
   depot?: string | null
   agoValue?: number | null
@@ -76,6 +77,12 @@ function DeliveryCostingPage() {
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState<Row[] | null>(null)
   const [newBatch, setNewBatch] = useState(false)
+  /**
+   * Which batch is open, by code. One at a time, deliberately — the point of
+   * the summary rows is that batches can be compared down a column, and every
+   * batch expanded at once is the flat table this replaced.
+   */
+  const [openBatch, setOpenBatch] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const deleteBatch = useDeleteDeliveryBatch()
 
@@ -142,7 +149,59 @@ function DeliveryCostingPage() {
     }
   }, [filtered])
 
-  const allPicked = filtered.length > 0 && filtered.every((r) => picked.has(r.id))
+  /**
+   * The rows grouped by batch, each with its own totals.
+   *
+   * The flat table was fourteen columns of per-truck detail with no way to
+   * compare one batch against another — and comparing batches is the question
+   * this page exists to answer. Each batch now reads as one line that can be
+   * scanned down a column, and opens into its trucks.
+   *
+   * Batch totals are computed here rather than summed from what is rendered,
+   * so a collapsed batch shows the same figures as an open one.
+   */
+  const groups = useMemo(() => {
+    const byCode = new Map<string, Row[]>()
+    for (const r of filtered) {
+      const code = r.allocationCode || 'No batch code'
+      if (!byCode.has(code)) byCode.set(code, [])
+      byCode.get(code)!.push(r)
+    }
+
+    return [...byCode.entries()]
+      .map(([code, list]) => {
+        let litres = 0
+        let expenses = 0
+        let marginValue = 0
+        let marginLitres = 0
+        let uncosted = 0
+        for (const r of list) {
+          litres += Number(r.quantityAllocated || 0)
+          expenses += Number(r.totalExpenses || 0)
+          if (r.margin != null) {
+            marginValue += Number(r.marginValue || 0)
+            marginLitres += Number(r.quantityAllocated || 0)
+          }
+          if (!r.costed) uncosted++
+        }
+        return {
+          code,
+          rows: list,
+          litres,
+          expenses,
+          marginValue,
+          // Weighted by the litres it applies to, and blind to uncosted
+          // trucks: averaging them in as zero would drag a good batch down
+          // for no reason but that nobody has typed the diesel in yet.
+          avgMargin: marginLitres > 0 ? marginValue / marginLitres : null,
+          uncosted,
+          pfiNumber: list.find((r) => r.pfiNumber)?.pfiNumber || null,
+          depot: list.find((r) => r.depot)?.depot || null,
+        }
+      })
+      .sort((a, b) => b.rows.length - a.rows.length || a.code.localeCompare(b.code))
+  }, [filtered])
+
   const pickedRows = filtered.filter((r) => picked.has(r.id))
 
   const toggle = (id: number) => setPicked((prev) => {
@@ -152,7 +211,22 @@ function DeliveryCostingPage() {
     return next
   })
 
-  const toggleAll = () => setPicked(allPicked ? new Set() : new Set(filtered.map((r) => r.id)))
+  /**
+   * Tick or clear a whole batch.
+   *
+   * Clears only when every truck on it is already ticked — a half-ticked batch
+   * means somebody chose those trucks, and wiping their selection to "tidy" it
+   * would throw that away.
+   */
+  const toggleGroup = (list: Row[]) => setPicked((prev) => {
+    const next = new Set(prev)
+    const all = list.every((r) => next.has(r.id))
+    for (const r of list) {
+      if (all) next.delete(r.id)
+      else next.add(r.id)
+    }
+    return next
+  })
 
   const dirty = search !== '' || batch !== 'all' || depot !== 'all' || costedFilter !== 'all'
 
@@ -193,23 +267,24 @@ function DeliveryCostingPage() {
         )}
       />
 
-      <StatCardGrid count={5}>
+      {/* Litres was the fifth card and the one nothing is decided on here —
+          every row carries its own, and this page is about money. The two
+          margin figures stay: one says how the rate is doing, the other how
+          much it actually earned, and they are not the same question. */}
+      <StatCardGrid count={4}>
         <StatCard icon={<Truck />} label="Trucks" value={qty(summary.trucks)} tone="neutral" />
-        <StatCard icon={<Droplets />} label="Litres" value={qty(summary.litres)} tone="blue" />
         <StatCard icon={<Fuel />} label="Trip expenses" value={money(summary.expenses)} tone="amber" />
         <StatCard
           icon={<TrendingUp />}
           label="Margin per litre"
           value={summary.avgMargin == null ? '—' : naira(summary.avgMargin)}
           tone={summary.avgMargin == null ? 'neutral' : summary.avgMargin >= 0 ? 'green' : 'red'}
-          description="Weighted by litres"
         />
         <StatCard
           icon={<Banknote />}
           label="Margin earned"
           value={money(summary.marginValue)}
           tone={summary.marginValue >= 0 ? 'green' : 'red'}
-          description={summary.uncosted > 0 ? `${summary.uncosted} not costed yet` : undefined}
         />
       </StatCardGrid>
 
@@ -256,7 +331,7 @@ function DeliveryCostingPage() {
       <section className={PANEL}>
         <div className={PANEL_RAIL}>
           <span className={cn(MICRO, 'text-muted-foreground')}>
-            {filtered.length} truck{filtered.length === 1 ? '' : 's'}
+            {groups.length} batch{groups.length === 1 ? '' : 'es'} · {filtered.length} truck{filtered.length === 1 ? '' : 's'}
           </span>
           {pickedRows.length > 0 && (
             <span className="ml-auto text-xs text-muted-foreground">
@@ -276,79 +351,184 @@ function DeliveryCostingPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">
-                    <Checkbox checked={allPicked} onCheckedChange={toggleAll} aria-label="Select all" />
-                  </TableHead>
-                  <TableHead>Truck</TableHead>
+                  <TableHead className="w-8" />
                   <TableHead>Batch</TableHead>
-                  <TableHead className="text-right">Loaded</TableHead>
-                  <TableHead className="text-right">AGO (L)</TableHead>
-                  <TableHead className="text-right">AGO price</TableHead>
-                  <TableHead className="text-right">AGO value</TableHead>
-                  <TableHead className="text-right">Feeding</TableHead>
-                  <TableHead className="text-right">Total expenses</TableHead>
-                  <TableHead className="text-right">Cost / litre</TableHead>
-                  <TableHead className="text-right">Product price</TableHead>
-                  <TableHead className="text-right">Landing cost</TableHead>
-                  <TableHead className="text-right">Rate sold</TableHead>
-                  <TableHead className="text-right">Margin</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead className="text-right">Trucks</TableHead>
+                  <TableHead className="text-right">Litres</TableHead>
+                  <TableHead className="text-right">Trip expenses</TableHead>
+                  <TableHead className="text-right">Margin / litre</TableHead>
+                  <TableHead className="text-right">Margin earned</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((r) => (
-                  <TableRow key={r.id} className={picked.has(r.id) ? 'bg-accent/5' : undefined}>
-                    <TableCell>
-                      <Checkbox
-                        checked={picked.has(r.id)}
-                        onCheckedChange={() => toggle(r.id)}
-                        aria-label={`Select ${r.truckNumber}`}
-                      />
-                    </TableCell>
-                    <TableCell className="font-medium whitespace-nowrap">
-                      {r.truckNumber || '—'}
-                    </TableCell>
-                    <TableCell className="max-w-[12rem] truncate" title={r.allocationCode || undefined}>
-                      {r.allocationCode || '—'}
-                    </TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{qty(r.quantityAllocated)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{qty(r.agoLitres)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.agoPrice)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.agoValue)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.feedingAllowance)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.totalExpenses)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.costPerLitre)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.productPrice)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{money(r.landingCost)}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">
-                      {n(r.rate) ? money(r.rate) : '—'}
-                    </TableCell>
-                    {/* A blank margin is a fact, not a gap: it means the product
-                        price or the selling rate is still missing, and the
-                        tooltip says which. Showing 0 there would report the
-                        whole rate as profit on every uncosted trip. */}
-                    <TableCell
-                      className={cn(
-                        'text-right font-medium whitespace-nowrap tabular-nums',
-                        r.margin != null && (r.margin >= 0
-                          ? 'text-emerald-600 dark:text-emerald-500'
-                          : 'text-destructive'),
+                {groups.map((g) => {
+                  const isOpen = openBatch === g.code
+                  const groupPicked = g.rows.filter((r) => picked.has(r.id))
+                  return (
+                    <Fragment key={g.code}>
+                      {/* The summary line. Clicking anywhere on it opens the
+                          batch — there is only one thing to do with a row that
+                          is a heading. */}
+                      <TableRow
+                        className="cursor-pointer bg-card"
+                        onClick={() => setOpenBatch(isOpen ? null : g.code)}
+                      >
+                        <TableCell className="pr-0 text-muted-foreground">
+                          <ChevronRight
+                            className={cn(
+                              'size-4 transition-transform duration-250 ease-luxe',
+                              isOpen && 'rotate-90',
+                            )}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium whitespace-nowrap">
+                          {g.code}
+                          {g.uncosted > 0 && (
+                            <span className="ml-2 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                              {g.uncosted} not costed
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-[16rem] truncate" title={g.depot || undefined}>
+                          {g.depot || '—'}
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{g.rows.length}</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{qty(g.litres)}</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{money(g.expenses)}</TableCell>
+                        <TableCell
+                          className={cn(
+                            'text-right font-medium whitespace-nowrap tabular-nums',
+                            g.avgMargin != null && (g.avgMargin >= 0
+                              ? 'text-emerald-600 dark:text-emerald-500'
+                              : 'text-destructive'),
+                          )}
+                          title={g.avgMargin != null ? 'Weighted by litres, uncosted trucks excluded' : undefined}
+                        >
+                          {g.avgMargin == null ? '—' : naira(g.avgMargin)}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            'text-right font-medium whitespace-nowrap tabular-nums',
+                            g.marginValue >= 0
+                              ? 'text-emerald-600 dark:text-emerald-500'
+                              : 'text-destructive',
+                          )}
+                        >
+                          {money(g.marginValue)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {/* Cost the whole batch in one go — the normal case,
+                              since trucks on a batch usually take the same
+                              diesel at the same price on the same day. */}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditing(groupPicked.length > 0 ? groupPicked : g.rows)
+                            }}
+                          >
+                            <Calculator className="size-3.5" />
+                            {groupPicked.length > 0 ? `Cost ${groupPicked.length}` : 'Cost batch'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+
+                      {isOpen && (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={9} className="bg-muted/20 p-0">
+                            <div className="overflow-x-auto px-3 py-2">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="w-10">
+                                      <Checkbox
+                                        checked={g.rows.every((r) => picked.has(r.id))}
+                                        onCheckedChange={() => toggleGroup(g.rows)}
+                                        aria-label={`Select every truck on ${g.code}`}
+                                      />
+                                    </TableHead>
+                                    <TableHead>Truck</TableHead>
+                                    <TableHead className="text-right">Loaded</TableHead>
+                                    <TableHead className="text-right">AGO (L)</TableHead>
+                                    <TableHead className="text-right">AGO price</TableHead>
+                                    <TableHead className="text-right">AGO value</TableHead>
+                                    <TableHead className="text-right">Feeding</TableHead>
+                                    <TableHead className="text-right">Total expenses</TableHead>
+                                    <TableHead className="text-right">Cost / litre</TableHead>
+                                    <TableHead className="text-right">Product price</TableHead>
+                                    <TableHead className="text-right">Landing cost</TableHead>
+                                    <TableHead className="text-right">Rate sold</TableHead>
+                                    <TableHead className="text-right">Margin</TableHead>
+                                    <TableHead />
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {g.rows.map((r) => (
+                                    <TableRow
+                                      key={r.id}
+                                      className={picked.has(r.id) ? 'bg-accent/5' : undefined}
+                                    >
+                                      <TableCell>
+                                        <Checkbox
+                                          checked={picked.has(r.id)}
+                                          onCheckedChange={() => toggle(r.id)}
+                                          aria-label={`Select ${r.truckNumber}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell className="font-medium whitespace-nowrap">
+                                        {r.truckNumber || '—'}
+                                      </TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{qty(r.quantityAllocated)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{qty(r.agoLitres)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.agoPrice)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.agoValue)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.feedingAllowance)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.totalExpenses)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.costPerLitre)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.productPrice)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">{money(r.landingCost)}</TableCell>
+                                      <TableCell className="text-right whitespace-nowrap">
+                                        {n(r.rate) ? money(r.rate) : '—'}
+                                      </TableCell>
+                                      {/* A blank margin is a fact, not a gap:
+                                          the product price or the selling rate
+                                          is still missing, and the tooltip says
+                                          which. A 0 there would report the whole
+                                          rate as profit. */}
+                                      <TableCell
+                                        className={cn(
+                                          'text-right font-medium whitespace-nowrap tabular-nums',
+                                          r.margin != null && (r.margin >= 0
+                                            ? 'text-emerald-600 dark:text-emerald-500'
+                                            : 'text-destructive'),
+                                        )}
+                                        title={r.margin == null && r.missing?.length
+                                          ? `Needs ${r.missing.join(' and ')}`
+                                          : r.marginValue != null
+                                            ? `${naira(r.marginValue)} on this load`
+                                            : undefined}
+                                      >
+                                        {r.margin == null ? '—' : naira(r.margin)}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Button variant="outline" size="sm" onClick={() => setEditing([r])}>
+                                          {r.costed ? 'Edit' : 'Add'}
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </TableCell>
+                        </TableRow>
                       )}
-                      title={r.margin == null && r.missing?.length
-                        ? `Needs ${r.missing.join(' and ')}`
-                        : r.marginValue != null
-                          ? `${naira(r.marginValue)} on this load`
-                          : undefined}
-                    >
-                      {r.margin == null ? '—' : naira(r.margin)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => setEditing([r])}>
-                        {r.costed ? 'Edit' : 'Add'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                    </Fragment>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
@@ -384,7 +564,7 @@ function DeliveryCostingPage() {
             // it first: DELETE /pfis refuses a batch an order references, and
             // that is the likely refusal — better it happens while nothing has
             // been touched than after the truck rows are gone.
-            pfiId: (inBatch.find((x) => (x as any).pfiId) as any)?.pfiId ?? null,
+            pfiId: inBatch.find((x) => x.pfiId)?.pfiId ?? null,
             inventoryIds: inBatch.map((r) => String(r.id)),
             label: batch,
           })
