@@ -28,6 +28,7 @@ import {
   UserCircle,
   Pencil,
   LayoutDashboard,
+  Calculator,
 } from "lucide-react";
 
 export type NavItem = {
@@ -160,6 +161,10 @@ export const navCategories: NavCategory[] = [
       // register of stock loaded out on trucks, and "operations" described the
       // activity around it rather than the thing itself.
       { title: "Delivery Inventory", icon: Truck, path: "/delivery-operations" },
+      // Same loads, costed. A separate page rather than more columns on the
+      // one above: that table is about where a load went and who bought it,
+      // this one about whether the trip was worth running.
+      { title: "Delivery Costing", icon: Calculator, path: "/delivery-costing" },
       { title: "Delivery Customers", icon: Users, path: "/delivery-customer" },
       { title: "Sales Ledger", icon: BarChart3, path: "/sales-ledger" },
       { title: "Filling Stations", icon: Fuel, path: "/filing-stations" },

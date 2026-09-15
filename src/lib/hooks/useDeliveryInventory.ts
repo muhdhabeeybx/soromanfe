@@ -180,6 +180,45 @@ export function useUpdateDeliveryInventory() {
   })
 }
 
+/**
+ * Apply one set of trip costs to several trucks at once.
+ *
+ * Trucks on a batch usually take the same diesel at the same price on the same
+ * day, and entering it twelve times by hand is how twelve rows end up slightly
+ * different from each other.
+ *
+ * `clearBlank` decides what an empty field means: off, a blank leaves that
+ * column alone, so a pass that sets feeding does not disturb diesel somebody
+ * already entered; on, a blank clears it, which is how a mistaken bulk entry
+ * gets undone.
+ */
+export interface TripCostInput {
+  ids: number[]
+  agoLitres?: number | null
+  agoPrice?: number | null
+  feedingAllowance?: number | null
+  productPrice?: number | null
+  clearBlank?: boolean
+}
+
+export function useSetTripCosts() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (input: TripCostInput) => {
+      const res = await api.post('/delivery-inventory/costs', input)
+      return res.data as { message: string; data: { updated: number } }
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-inventory'] })
+      toast.success(res.message)
+    },
+    onError: (err: any) => toast.error(getErrorMessage(err)),
+  })
+}
+
 export function useDeleteDeliveryInventory() {
   const queryClient = useQueryClient()
   const toast = useToast()

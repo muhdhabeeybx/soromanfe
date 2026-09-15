@@ -331,6 +331,21 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermissions> = {
     edit: [...ADMIN_SUPERADMIN, Roles.SALES_MANAGER_TIER],
     delete: [Roles.SUPERADMIN],
   },
+  /**
+   * Trip costing sits one rung tighter than the inventory it reads.
+   *
+   * The table carries what product costs us and what each trip earns — a
+   * commercial view, not an operational one — so the roles that merely record
+   * loads do not get it by default. Viewing is the whole point of the page, so
+   * view and edit are the same list: somebody trusted with the margins is
+   * trusted to correct a diesel figure.
+   */
+  '/delivery-costing': {
+    view: [...ADMIN_SUPERADMIN, Roles.SALES_MANAGER, Roles.AUDIT, Roles.SALES_MANAGER_TIER],
+    create: [...ADMIN_SUPERADMIN, Roles.SALES_MANAGER_TIER],
+    edit: [...ADMIN_SUPERADMIN, Roles.SALES_MANAGER, Roles.SALES_MANAGER_TIER],
+    delete: [Roles.SUPERADMIN],
+  },
   '/sales-ledger': {
     view: [...ADMIN_SUPERADMIN, Roles.TRUCK_SALES, Roles.SALES_MANAGER, Roles.AUDIT, Roles.SALES_VIEWER, Roles.SALES_OPERATOR, Roles.SALES_MANAGER_TIER],
     create: [...ADMIN_SUPERADMIN, Roles.SALES_OPERATOR, Roles.SALES_MANAGER_TIER],
