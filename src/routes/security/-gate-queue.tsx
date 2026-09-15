@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
-import { Clock, Droplets, FileText, Loader2, LogIn, Search, Users, Warehouse, X } from 'lucide-react'
+import { Clock, Droplets, FileText, Loader2, LogIn, Search, Warehouse, X } from 'lucide-react'
 
 import api from '#/lib/api/http'
 import { Button } from '#/components/ui/button'
@@ -131,7 +131,7 @@ export function GateQueue({
 
   return (
     <div className="space-y-4">
-      <StatCardGrid count={5}>
+      <StatCardGrid count={4}>
         <StatCard
           // The icon says which gate this is at a glance — arriving, or still
           // standing on the yard.
@@ -141,7 +141,10 @@ export function GateQueue({
           tone={s?.trucks ? 'amber' : 'green'}
         />
         <StatCard icon={<FileText />} label="Orders" value={num(s?.orders ?? 0)} tone="neutral" />
-        <StatCard icon={<Users />} label="Customers" value={num(s?.customers ?? 0)} tone="neutral" />
+        {/* Customers was the fifth card and is the one the gate does not act
+            on: an officer needs to know how many trucks, carrying how much,
+            and how long they have stood — not how many accounts they span.
+            The figure is still on the payload if it is ever wanted. */}
         <StatCard icon={<Droplets />} label={unit} value={num(s?.litres ?? 0)} tone="blue" />
         {/* Age is the thing that decides whether a queue is a queue or a
             problem. Twenty trucks that arrived this morning is a normal
