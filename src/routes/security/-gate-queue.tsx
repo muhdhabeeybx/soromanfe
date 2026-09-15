@@ -52,6 +52,8 @@ interface GateQueueResponse {
   trucks: GateTruck[]
   pagination: { page: number; limit: number; total: number; pages: number }
   summary: {
+    /** What the live-batch filter is leaving out, so the toggle can say. */
+    offLiveBatches: number
     trucks: number
     orders: number
     customers: number
@@ -72,9 +74,13 @@ interface Filters {
   depotId: string
   pfiId: string
   search: string
+  /** Show tickets on closed or batch-less orders too. Off by default. */
+  includeClosed: boolean
 }
 
-const EMPTY: Filters = { from: '', to: '', depotId: 'all', pfiId: 'all', search: '' }
+const EMPTY: Filters = {
+  from: '', to: '', depotId: 'all', pfiId: 'all', search: '', includeClosed: false,
+}
 
 function useGateQueue(stage: 'entry' | 'exit', f: Filters, page: number) {
   return useQuery({
@@ -90,6 +96,7 @@ function useGateQueue(stage: 'entry' | 'exit', f: Filters, page: number) {
           ...(f.depotId !== 'all' ? { depotId: f.depotId } : {}),
           ...(f.pfiId !== 'all' ? { pfiId: f.pfiId } : {}),
           ...(f.search.trim() ? { search: f.search.trim() } : {}),
+          ...(f.includeClosed ? { includeClosed: 'true' } : {}),
           page,
           limit: 100,
         },
@@ -219,6 +226,21 @@ export function GateQueue({
                 {p.label}
               </Button>
             ))}
+            {/* A ticket on a closed or batch-less order is not work anybody
+                is behind on, so it stays out of the queue and the counts. But
+                the truck it names can still drive up — and an officer who
+                cannot see it cannot record it either, which is how a movement
+                happens with no record at all. Reachable, with its number, so
+                nobody has to guess there is something here. */}
+            {(s?.offLiveBatches ?? 0) > 0 && (
+              <Button
+                variant={filters.includeClosed ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => set('includeClosed', !filters.includeClosed)}
+              >
+                {filters.includeClosed ? 'Hide' : 'Show'} {num(s?.offLiveBatches ?? 0)} on closed batches
+              </Button>
+            )}
             <span className="ml-auto text-xs text-muted-foreground">
               {isFetching && <Loader2 className="mr-1 inline size-3 animate-spin" />}
               {num(data?.pagination.total ?? 0)} truck{data?.pagination.total === 1 ? '' : 's'}
