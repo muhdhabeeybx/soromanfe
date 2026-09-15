@@ -6,7 +6,16 @@ import { depotPhones, truckSuffix } from '#/lib/depot-contacts'
 /**
  * One waybill — a full physical page per truck.
  *
- * Everything here is sized in absolute px rather than the design system's
+ * ── Sized in millimetres, against A4 ───────────────────────────────────────
+ *
+ * The page box is 210 x 297mm, which is what `@page { size: A4 }` in
+ * styles.css actually prints onto. It used to be min-h-[1056px] — US Letter at
+ * 96dpi — so every sheet came out 67px short of the foot of the paper, the
+ * footer floated above the margin, and the on-screen preview had the wrong
+ * shape from the page it claimed to be previewing. Millimetres remove the dpi
+ * assumption entirely: 210mm is 210mm whatever the browser thinks a pixel is.
+ *
+ * Everything else stays in absolute units rather than the design system's
  * tokens: this sheet is measured against paper, not a viewport, and must come
  * out identical whatever the operator's zoom or theme. It is deliberately the
  * one surface in the app that ignores dark mode.
@@ -62,7 +71,7 @@ export function WaybillSheet({ data }: { data: Record<string, any> }) {
     : ''
 
   return (
-    <article className="waybill-sheet relative flex min-h-[1056px] flex-col bg-white px-8 py-8 text-black">
+    <article className="waybill-sheet relative mx-auto flex h-[297mm] w-[210mm] flex-col overflow-hidden bg-white px-[14mm] py-[12mm] text-black">
       {/* Watermark sits behind everything. */}
       <img
         src="/logo.png"
@@ -72,36 +81,46 @@ export function WaybillSheet({ data }: { data: Record<string, any> }) {
       />
 
       <div className="relative flex flex-1 flex-col">
-        {/* Header */}
-        <header className="flex items-start justify-between gap-6">
-          <div>
-            <div className="flex items-center gap-2.5">
-              <img src="/logo.png" alt="" aria-hidden className="size-12" />
-              <span className="text-base font-semibold tracking-tight text-black">
+        {/*
+          * Header.
+          *
+          * One lockup, not three floating pieces. The logo, the company and
+          * the depot were stacked with the depot drifting below on its own
+          * line and the reference adrift at the other margin — three things
+          * that belong together reading as three separate ones. Now the mark
+          * sits against a rule with the name and depot beside it, and the
+          * reference is a bordered field rather than loose text, because that
+          * is what it is: the number somebody quotes back.
+          */}
+        <header className="flex items-stretch justify-between gap-6 border-b-2 border-[#00563c] pb-3">
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="" aria-hidden className="size-11 shrink-0" />
+            <div className="border-l border-neutral-300 pl-3">
+              <p className="text-[17px] leading-tight font-semibold tracking-tight text-black">
                 Soroman Energy
-              </span>
+              </p>
+              <p className="mt-0.5 text-[13px] leading-tight font-semibold text-[#007a55]">
+                {data.location || '—'}
+              </p>
             </div>
-            <p className="mt-1.5 text-sm font-semibold text-[#007a55]">
-              {data.location || '—'}
-            </p>
           </div>
-          <div className="text-right">
+          <div className="flex flex-col items-end justify-center">
             <p className={LABEL}>Order Reference</p>
-            <p className="mt-0.5 font-mono text-base font-semibold text-black">
+            <p className="mt-1 rounded border border-neutral-400 px-2.5 py-1 font-mono text-[15px] leading-none font-bold text-black">
               {reference}
             </p>
           </div>
         </header>
 
         {/* Banner */}
-        <div className="mt-5 bg-[#00563c] px-4 py-2.5 text-center">
+        <div className="mt-3.5 bg-[#00563c] px-4 py-2 text-center">
           <p className="text-sm font-semibold text-white uppercase">
             Waybill &amp; Payment Receipt
           </p>
         </div>
 
         {/* Details */}
-        <div className="mt-5 border-t border-l border-neutral-300">
+        <div className="mt-3.5 border-t border-l border-neutral-300">
           <div className="grid grid-cols-2">
             <Cell label="Company's Name" value={data.company} />
             {/* Printed blank — filled in by hand at the depot. */}

@@ -74,13 +74,9 @@ interface Filters {
   depotId: string
   pfiId: string
   search: string
-  /** Show tickets on closed or batch-less orders too. Off by default. */
-  includeClosed: boolean
 }
 
-const EMPTY: Filters = {
-  from: '', to: '', depotId: 'all', pfiId: 'all', search: '', includeClosed: false,
-}
+const EMPTY: Filters = { from: '', to: '', depotId: 'all', pfiId: 'all', search: '' }
 
 function useGateQueue(stage: 'entry' | 'exit', f: Filters, page: number) {
   return useQuery({
@@ -96,7 +92,6 @@ function useGateQueue(stage: 'entry' | 'exit', f: Filters, page: number) {
           ...(f.depotId !== 'all' ? { depotId: f.depotId } : {}),
           ...(f.pfiId !== 'all' ? { pfiId: f.pfiId } : {}),
           ...(f.search.trim() ? { search: f.search.trim() } : {}),
-          ...(f.includeClosed ? { includeClosed: 'true' } : {}),
           page,
           limit: 100,
         },
@@ -226,27 +221,44 @@ export function GateQueue({
                 {p.label}
               </Button>
             ))}
-            {/* A ticket on a closed or batch-less order is not work anybody
-                is behind on, so it stays out of the queue and the counts. But
-                the truck it names can still drive up — and an officer who
-                cannot see it cannot record it either, which is how a movement
-                happens with no record at all. Reachable, with its number, so
-                nobody has to guess there is something here. */}
-            {(s?.offLiveBatches ?? 0) > 0 && (
-              <Button
-                variant={filters.includeClosed ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => set('includeClosed', !filters.includeClosed)}
-              >
-                {filters.includeClosed ? 'Hide' : 'Show'} {num(s?.offLiveBatches ?? 0)} on closed batches
-              </Button>
-            )}
             <span className="ml-auto text-xs text-muted-foreground">
               {isFetching && <Loader2 className="mr-1 inline size-3 animate-spin" />}
               {num(data?.pagination.total ?? 0)} truck{data?.pagination.total === 1 ? '' : 's'}
-              {s?.byDepot?.length ? ` · ${s.byDepot.map((d) => `${d.depotName} (${d.trucks})`).join(', ')}` : ''}
             </span>
           </div>
+
+          {/* Where the queue actually is. Chips rather than a run-on sentence,
+              and each one filters — the depot breakdown was the thing a
+              supervisor read first and then had to go and set the dropdown to
+              act on, so it may as well be the control. */}
+          {(s?.byDepot?.length ?? 0) > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {s?.byDepot.map((d) => {
+                const id = data?.options.depots.find((x) => x.name === d.depotName)?.id
+                const active = id != null && String(id) === filters.depotId
+                return (
+                  <button
+                    key={d.depotName}
+                    type="button"
+                    disabled={id == null}
+                    onClick={() => set('depotId', active ? 'all' : String(id))}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
+                      active
+                        ? 'border-transparent bg-foreground text-background'
+                        : 'border-foreground/15 text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+                      id == null && 'cursor-default opacity-60',
+                    )}
+                  >
+                    {d.depotName}
+                    <span className={cn('font-semibold', !active && 'text-foreground')}>
+                      {d.trucks}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       </section>
 

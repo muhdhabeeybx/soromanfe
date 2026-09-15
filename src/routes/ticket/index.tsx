@@ -518,7 +518,16 @@ function OrderRow({
       <TableCell className="text-muted-foreground">{sn}</TableCell>
       <TableCell className="font-semibold text-accent">{order.orderNumber}</TableCell>
       <TableCell className="text-muted-foreground">
-        {order.loadingStartedAt ? format(new Date(order.loadingStartedAt), 'd MMM yyyy') : '—'}
+        {order.loadingStartedAt ? (
+          <>
+            <span className="block">{format(new Date(order.loadingStartedAt), 'd MMM yyyy')}</span>
+            {/* The time matters on a loading desk: two orders on one day are
+                ordinary, and which came first decides who loads first. */}
+            <span className="block text-xs text-muted-foreground/70">
+              {format(new Date(order.loadingStartedAt), 'HH:mm')}
+            </span>
+          </>
+        ) : '—'}
       </TableCell>
       <TableCell className="max-w-[14rem] truncate font-medium">{order.customerName || '—'}</TableCell>
       <TableCell className="max-w-[12rem] truncate text-muted-foreground">{order.companyName || order.customerCompanyName || '—'}</TableCell>
@@ -550,7 +559,35 @@ function OrderRow({
             ? <>{ticketed} <span className="font-normal text-muted-foreground">of</span> {expectedTrucks}</>
             : <>{ticketed} <span className="font-normal text-muted-foreground">ticketed</span></>}
         </div>
-        <div className="mt-0.5 flex flex-wrap gap-1">
+
+        {/*
+          * The same counts as a bar, weighted by trucks.
+          *
+          * The chips below say what each state holds; this says the SHAPE of
+          * the order in one glance — mostly gone, half stuck at the gate,
+          * barely started. Scanning forty rows of chips to find the one order
+          * that has not moved is work a two-millimetre bar does for free.
+          *
+          * Only drawn where a truck count was declared. Without a denominator
+          * a bar has nothing to be a fraction of, and a full-width block on an
+          * order nobody has counted would read as complete.
+          */}
+        {expectedTrucks > 0 && (
+          <div
+            className="mt-1 flex h-1 w-full max-w-[120px] overflow-hidden rounded-full bg-muted"
+            title={`${order.trucksOut || 0} loaded · ${order.trucksOnYard || 0} on yard · ${order.trucksAwaitingIn || 0} due in · ${toTicket} to ticket`}
+          >
+            {[
+              { n: Number(order.trucksOut) || 0, cls: 'bg-accent' },
+              { n: Number(order.trucksOnYard) || 0, cls: 'bg-info' },
+              { n: Number(order.trucksAwaitingIn) || 0, cls: 'bg-warning' },
+            ].map((seg, i) => seg.n > 0 && (
+              <div key={i} className={seg.cls} style={{ width: `${(seg.n / expectedTrucks) * 100}%` }} />
+            ))}
+          </div>
+        )}
+
+        <div className="mt-1 flex flex-wrap gap-1">
           {toTicket > 0 && (
             <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
               {toTicket} to ticket

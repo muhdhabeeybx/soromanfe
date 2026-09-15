@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Printer, Loader2, Layers, ArrowLeft, Pencil, Truck, Check, LogIn, LogOut, Ticket,
@@ -111,6 +111,57 @@ function OrderProgress({ loads }: { loads: TruckLoad[] }) {
             <span className="font-semibold">{s.trucks}</span>
           </span>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The sheet at its true A4 shape, scaled to whatever room the dialog has.
+ *
+ * The preview used to be scale-[0.62] with the overflow clipped — a constant
+ * that suited one window width, so the sheet was cut off at the foot on a
+ * narrow screen and left a band of dead space on a wide one. Measuring the
+ * container and dividing by the sheet's real width means the preview is the
+ * page: same proportions, same margins, just smaller.
+ *
+ * 210mm is 793.7px at 96dpi, which is what a browser lays a mm out as.
+ */
+const A4_WIDTH_PX = 793.7
+const A4_HEIGHT_PX = 1122.5
+
+function WaybillPreview({ data }: { data: React.ComponentProps<typeof WaybillSheet>['data'] }) {
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [scale, setScale] = useState(0.86)
+
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    const measure = () => {
+      const width = el.clientWidth
+      if (width > 0) setScale(Math.min(1, width / A4_WIDTH_PX))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div
+      ref={boxRef}
+      className="overflow-hidden rounded-lg border border-foreground/15 bg-neutral-200 p-2 dark:bg-neutral-800"
+    >
+      {/* The outer box is given the scaled height so the container shrinks
+          with the sheet — a transform alone leaves the original height behind
+          as empty space. */}
+      <div style={{ height: A4_HEIGHT_PX * scale }}>
+        <div
+          className="origin-top-left shadow-sm"
+          style={{ transform: `scale(${scale})`, width: A4_WIDTH_PX }}
+        >
+          <WaybillSheet data={data} />
+        </div>
       </div>
     </div>
   )
@@ -288,12 +339,7 @@ export function TicketPrintDialog({
               <Loader2 className="size-5 animate-spin text-accent" />
             </div>
           ) : (
-            // Scaled down so a full sheet is legible inside the dialog.
-            <div className="overflow-hidden rounded-lg border border-foreground/15">
-              <div className="origin-top scale-[0.62] [transform-box:fill-box]">
-                <WaybillSheet data={data} />
-              </div>
-            </div>
+            <WaybillPreview data={data} />
           )}
 
           <DialogFooter>
