@@ -20,7 +20,7 @@ import {
 } from '#/lib/hooks/useBankStatements'
 import { StatementUploads } from './-statement-uploads'
 import {
-  readGrid, parseRows, type Grid, type ColumnMapping,
+  readGrid, parseRows, formatPlainDay, type Grid, type ColumnMapping,
 } from '#/lib/bank-statement-parser'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -325,7 +325,7 @@ function BankStatementsPage() {
                 <TableBody>
                 {preview.rows.slice(0, 5).map((r, i) => (
                 <TableRow key={i}>
-                <TableCell>{format(new Date(r.txnDate), 'd MMM yyyy')}</TableCell>
+                <TableCell>{formatPlainDay(r.txnDate)}</TableCell>
                 <TableCell>{r.depositor || '—'}</TableCell>
                 <TableCell className="text-muted-foreground">{r.bankRef || '—'}</TableCell>
                 <TableCell className="text-right font-semibold">

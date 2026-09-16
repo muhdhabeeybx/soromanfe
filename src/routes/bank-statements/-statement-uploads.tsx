@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatPlainDay } from '#/lib/bank-statement-parser'
 import { format } from 'date-fns'
 import { Trash2, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 
@@ -89,9 +90,9 @@ export function StatementUploads({
                         {s.bank_name} · {s.account_name} · {s.account_number}
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {s.period_start ? format(new Date(s.period_start), 'd MMM') : '—'}
+                        {formatPlainDay(s.period_start, 'd MMM')}
                         {' – '}
-                        {s.period_end ? format(new Date(s.period_end), 'd MMM yyyy') : '—'}
+                        {formatPlainDay(s.period_end)}
                       </TableCell>
                       <TableCell className="text-right">{s.row_count}</TableCell>
                       <TableCell className="text-right">
@@ -239,7 +240,7 @@ function StatementLineDetail({ statement }: { statement: BankStatement }) {
                   return (
                     <TableRow key={l.id} className={cn(!matched && 'bg-muted/20')}>
                       <TableCell className="whitespace-nowrap text-muted-foreground">
-                        {format(new Date(l.txn_date), 'd MMM yyyy')}
+                        {formatPlainDay(l.txn_date)}
                       </TableCell>
                       <TableCell>
                         <span className="block max-w-[16rem] truncate" title={l.narration || l.depositor}>

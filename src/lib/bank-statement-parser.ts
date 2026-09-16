@@ -1,3 +1,4 @@
+import { format } from 'date-fns'
 /**
  * Client-side statement parsing.
  *
@@ -146,6 +147,33 @@ const utcDate = (year: number, month1: number, day: number): Date | null => {
   return d
 }
 
+/**
+ * YYYY-MM-DD off a Date's UTC parts.
+ *
+ * `toISOString().slice(0,10)` would do the same only because coerceDate builds
+ * at UTC midnight; taking the parts explicitly means this keeps working if
+ * that ever changes.
+ */
+/**
+ * Render a plain YYYY-MM-DD exactly as stored.
+ *
+ * `new Date('2026-07-09')` is parsed as UTC midnight, so anywhere west of
+ * Greenwich it formats as 8 July — the same class of error that put these
+ * dates a day out to begin with. Splitting the string and building a LOCAL
+ * date keeps the day the bank printed, whoever is reading.
+ */
+export function formatPlainDay(v?: string | null, pattern = 'd MMM yyyy'): string {
+  if (!v) return '—'
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return format(new Date(v), pattern)
+  return format(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), pattern)
+}
+
+export function toPlainDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
+}
+
 /** Excel serial dates, ISO strings and common Nigerian d/m/y formats. */
 export function coerceDate(raw: string, order: DateOrder = 'day-first'): Date | null {
   const s = String(raw ?? '').trim()
@@ -225,7 +253,15 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
     if (amount === null || amount <= 0) { skipped++; continue }
 
     rows.push({
-      txnDate: date.toISOString(),
+      /**
+       * The day, exactly as it was read — no hour, no zone.
+       *
+       * A full ISO instant is what put rows a day out: it was built at local
+       * midnight, stored as the previous day in UTC, and read back through the
+       * same timezone so the error never showed on screen. The column is a
+       * `date` now and this sends a date.
+       */
+      txnDate: toPlainDay(date),
       amount,
       depositor: String(at(row, mapping.depositorColumn)).trim(),
       bankRef: String(at(row, mapping.referenceColumn)).trim(),
