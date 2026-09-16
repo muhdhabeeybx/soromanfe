@@ -20,7 +20,8 @@ import {
 } from '#/lib/hooks/useBankStatements'
 import { StatementUploads } from './-statement-uploads'
 import {
-  readGrid, parseRows, formatPlainDay, type Grid, type ColumnMapping,
+  readGrid, parseRows, formatPlainDay,
+  type Grid, type ColumnMapping, type DateOrder,
 } from '#/lib/bank-statement-parser'
 import { routeGuard } from '#/lib/route-guard'
 
@@ -86,7 +87,15 @@ function BankStatementsPage() {
   const headers = liveHeaders.length > 0 ? liveHeaders : savedHeaders
   const showFormatPanel = (grid && !mapping) || editingFormat
   const effectiveMapping = editingFormat ? draft : (mapping ?? draft)
-  const preview = grid ? parseRows(grid, effectiveMapping) : null
+  /**
+   * An override for a file the evidence cannot settle. Per upload, not saved:
+   * the next statement is a different file and may be exported differently,
+   * and a sticky setting would silently apply this decision to it.
+   */
+  const [dateOrder, setDateOrder] = useState<DateOrder | undefined>(undefined)
+  const preview = grid
+    ? parseRows(grid, { ...effectiveMapping, dateOrder })
+    : null
 
   const handleFile = async (file: File) => {
     setReading(true)
@@ -307,10 +316,50 @@ function BankStatementsPage() {
                 {preview.rows.length} credit row{preview.rows.length === 1 ? '' : 's'}
                 </StatusChip>
                 <StatusChip tone="inert">{preview.skipped} skipped</StatusChip>
+                {/*
+                  Which way round the dates were read, always said out loud.
+
+                  09/01/2026 is 1 September to one bank and 9 January to
+                  another, and nothing in the row decides it. Reading it the
+                  wrong way is invisible — the date still looks like a date —
+                  so the only safe version of this is to state the reading and
+                  let somebody disagree with it.
+                */}
+                <StatusChip tone={preview.dateOrderDetected ? 'accent' : 'warning'}>
+                {preview.dateOrder === 'month-first' ? 'Month/day' : 'Day/month'}
+                {preview.dateOrderDetected ? ' — from the file' : ' — assumed'}
+                </StatusChip>
                 <span className="text-xs text-muted-foreground">
                 Debits, blanks, totals and repeated headers are skipped, not errors.
                 </span>
                 </div>
+
+                {/*
+                  An assumption gets a way to be corrected; a proven reading
+                  does not need one and offering it would invite somebody to
+                  override the evidence.
+                */}
+                {!preview.dateOrderDetected && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
+                <AlertCircle className="size-3.5 shrink-0 text-warning" />
+                <span className="text-xs text-muted-foreground">
+                No date in this file is past the 12th, so it cannot say which half is the
+                day. Reading it as{' '}
+                <strong className="text-foreground">
+                {preview.dateOrder === 'month-first' ? 'month/day' : 'day/month'}
+                </strong>
+                {' — '}the first row is {preview.rows[0] ? formatPlainDay(preview.rows[0].txnDate) : '—'}.
+                </span>
+                <Button
+                variant="outline" size="sm"
+                onClick={() => setDateOrder(
+                preview.dateOrder === 'month-first' ? 'day-first' : 'month-first',
+                )}
+                >
+                Read as {preview.dateOrder === 'month-first' ? 'day/month' : 'month/day'}
+                </Button>
+                </div>
+                )}
                 {preview.rows.length > 0 && (
                 <div className="overflow-hidden rounded-lg border border-foreground/15">
                 <Table>

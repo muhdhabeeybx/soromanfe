@@ -174,6 +174,58 @@ export function toPlainDay(d: Date): string {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
 }
 
+/**
+ * Work out which way round a file writes its dates, from the file itself.
+ *
+ * A single row cannot say: 09/01/2026 is 1 September to one bank and 9 January
+ * to another. A COLUMN usually can. Any row whose first half is over 12 must
+ * be day-first, because there is no thirteenth month; any row whose second
+ * half is over 12 must be month-first. One statement almost always contains a
+ * date past the 12th, and that one row settles every other row in the file.
+ *
+ * This is what the Fidelity statement needed: every visible row was 09/0x —
+ * both halves under 12, and unreadable on its own — while further down the
+ * same column sat 09/25, which is only a date if the month comes first.
+ *
+ * Returns null when the file genuinely cannot say, which is rare and honest:
+ * a short statement where every transaction fell before the 13th. The caller
+ * falls back to the account's setting, and the upload screen says so rather
+ * than quietly choosing.
+ */
+export function detectDateOrder(grid: Grid, dateColumn: number, startRow = 0): {
+  order: DateOrder | null
+  dayFirstEvidence: number
+  monthFirstEvidence: number
+} {
+  let dayFirst = 0
+  let monthFirst = 0
+
+  for (let i = startRow; i < grid.length; i++) {
+    const cell = String(grid[i]?.[dateColumn] ?? '').trim()
+    const m = cell.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})/)
+    if (!m) continue
+    const first = Number(m[1])
+    const second = Number(m[2])
+    if (first > 12 && second <= 12) dayFirst++
+    else if (second > 12 && first <= 12) monthFirst++
+  }
+
+  /**
+   * Evidence both ways means the file is not consistent, and guessing a winner
+   * would silently mangle whichever rows lose. Reported as undecided so a
+   * person looks.
+   */
+  const order = dayFirst > 0 && monthFirst > 0
+    ? null
+    : dayFirst > 0
+      ? 'day-first'
+      : monthFirst > 0
+        ? 'month-first'
+        : null
+
+  return { order, dayFirstEvidence: dayFirst, monthFirstEvidence: monthFirst }
+}
+
 /** Excel serial dates, ISO strings and common Nigerian d/m/y formats. */
 export function coerceDate(raw: string, order: DateOrder = 'day-first'): Date | null {
   const s = String(raw ?? '').trim()
@@ -240,11 +292,20 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
   const at = (row: string[], col: number | null) =>
     col === null || col === undefined ? '' : (row[col] ?? '')
 
+  /**
+   * What the file says about itself beats what the account was configured to
+   * expect. A bank that changes its export format, or a file exported through
+   * different software, is a real thing — and the evidence in the column is
+   * the only source that cannot be stale.
+   */
+  const detected = detectDateOrder(grid, mapping.dateColumn, mapping.headerRow + 1)
+  const order = detected.order ?? mapping.dateOrder ?? 'day-first'
+
   for (let i = mapping.headerRow + 1; i < grid.length; i++) {
     const row = grid[i]
     if (!row || row.every((c) => !String(c ?? '').trim())) { skipped++; continue }
 
-    const date = coerceDate(at(row, mapping.dateColumn), mapping.dateOrder)
+    const date = coerceDate(at(row, mapping.dateColumn), order)
     if (!date) { skipped++; continue }
 
     // A credit column means debits live elsewhere and are simply not read.
@@ -270,5 +331,11 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
     })
   }
 
-  return { rows, skipped }
+  return {
+    rows,
+    skipped,
+    /** How dates were read, and whether the file proved it or it was assumed. */
+    dateOrder: order,
+    dateOrderDetected: detected.order !== null,
+  }
 }
