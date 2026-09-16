@@ -14,6 +14,8 @@ export type Grid = string[][]
 export type ColumnMapping = {
   headerRow: number
   dateColumn: number
+  /** How a bare numeric date is read. Day-first unless the account says otherwise. */
+  dateOrder?: DateOrder
   /** A single signed amount column… */
   amountColumn: number | null
   /** …or a dedicated credit column. When set, debits are skipped entirely. */
@@ -32,7 +34,27 @@ export type ParsedRow = {
   rawRow: string[]
 }
 
-const MAX_PREVIEW_ROWS = 400
+/**
+ * A safety ceiling, not a working limit.
+ *
+ * This was 400, named MAX_PREVIEW_ROWS — but the grid it capped is the one
+ * that gets UPLOADED, not just the one shown. Anything past row 400 of a
+ * statement was silently dropped: no warning, no skipped count, the import
+ * simply reported the rows it had kept and looked successful. On a bank
+ * statement that is the worst possible failure, because the missing lines are
+ * indistinguishable from lines the bank never sent.
+ *
+ * The ceiling now exists only to stop a browser dying on a pathological file,
+ * and crossing it THROWS rather than truncates. A statement that will not fit
+ * is a problem somebody has to know about.
+ */
+const MAX_ROWS = 50000
+
+const tooManyRows = () =>
+  new Error(
+    `This file has more than ${MAX_ROWS.toLocaleString()} rows. Split it and upload the parts `
+    + 'separately — importing part of a statement without saying so would be worse.',
+  )
 
 /** Reads the first worksheet into a plain 2D array of display strings. */
 export async function readGrid(file: File): Promise<Grid> {
@@ -41,11 +63,9 @@ export async function readGrid(file: File): Promise<Grid> {
   const buffer = await file.arrayBuffer()
 
   if (file.name.toLowerCase().endsWith('.csv')) {
-    const text = new TextDecoder().decode(buffer)
-    return text
-      .split(/\r?\n/)
-      .slice(0, MAX_PREVIEW_ROWS)
-      .map((line) => splitCsvLine(line))
+    const lines = new TextDecoder().decode(buffer).split(/\r?\n/)
+    if (lines.length > MAX_ROWS) throw tooManyRows()
+    return lines.map((line) => splitCsvLine(line))
   }
 
   await wb.xlsx.load(buffer)
@@ -53,12 +73,14 @@ export async function readGrid(file: File): Promise<Grid> {
   if (!ws) return []
 
   const grid: Grid = []
+  let overflow = false
   ws.eachRow({ includeEmpty: true }, (row, i) => {
-    if (i > MAX_PREVIEW_ROWS) return
+    if (i > MAX_ROWS) { overflow = true; return }
     const values = row.values as any[]
     // exceljs is 1-indexed and puts a hole at position 0.
     grid.push(values.slice(1).map((v) => cellToString(v)))
   })
+  if (overflow) throw tooManyRows()
   return grid
 }
 
@@ -91,28 +113,79 @@ function cellToString(v: any): string {
   return String(v)
 }
 
+/**
+ * Which way round a bare numeric date is read.
+ *
+ * 07/09/2026 is 7 September to a Nigerian bank and 9 July to an American one,
+ * and nothing in the string says which. Software cannot settle this; the
+ * person who has the statement open can. Day-first stays the default because
+ * it is the local convention, but the upload preview shows the result and the
+ * choice is saved per bank account, so a bank that exports the other way is
+ * fixed once rather than misread every month.
+ */
+export type DateOrder = 'day-first' | 'month-first'
+
+/**
+ * A statement date is a CALENDAR DATE, not an instant.
+ *
+ * Built at UTC midnight, never local midnight. `new Date(2026, 6, 9)` in Lagos
+ * is 2026-07-08T23:00Z — the day BEFORE — so the row was stored one day early
+ * and only looked right because the dashboard rendered it back in the same
+ * timezone. Anything reading the database directly, exporting, or opening the
+ * page from another timezone saw the previous day. 1,066 rows carry that shift.
+ */
+const utcDate = (year: number, month1: number, day: number): Date | null => {
+  const d = new Date(Date.UTC(year, month1 - 1, day))
+  if (Number.isNaN(d.getTime())) return null
+  // Reject what Date silently rolls over: 31/02 becoming 3 March is a parse
+  // failure wearing a valid date's clothes, and on a statement that is worse
+  // than a skipped row.
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month1 - 1 || d.getUTCDate() !== day) {
+    return null
+  }
+  return d
+}
+
 /** Excel serial dates, ISO strings and common Nigerian d/m/y formats. */
-export function coerceDate(raw: string): Date | null {
+export function coerceDate(raw: string, order: DateOrder = 'day-first'): Date | null {
   const s = String(raw ?? '').trim()
   if (!s) return null
 
-  // Excel serial (days since 1899-12-30).
+  // Excel serial (days since 1899-12-30). Already UTC-based.
   if (/^\d{5}(\.\d+)?$/.test(s)) {
     const d = new Date(Math.round((Number(s) - 25569) * 86400 * 1000))
     return Number.isNaN(d.getTime()) ? null : d
   }
 
-  const dmy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})/)
-  if (dmy) {
-    const [, a, b, c] = dmy
+  const numeric = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})/)
+  if (numeric) {
+    const [, a, b, c] = numeric
     const year = c.length === 2 ? 2000 + Number(c) : Number(c)
-    // Day-first: the convention on Nigerian bank exports.
-    const d = new Date(year, Number(b) - 1, Number(a))
-    return Number.isNaN(d.getTime()) ? null : d
+    const first = Number(a)
+    const second = Number(b)
+
+    /**
+     * One half over 12 settles it whatever the setting says.
+     *
+     * 25/09 cannot be month-first and 09/25 cannot be day-first, so an
+     * unambiguous row is read correctly even if the account is configured the
+     * other way. Only genuinely ambiguous rows — both halves 12 or under —
+     * fall back to the choice, which is exactly where a choice is needed.
+     */
+    if (first > 12 && second <= 12) return utcDate(year, second, first)
+    if (second > 12 && first <= 12) return utcDate(year, first, second)
+
+    return order === 'month-first'
+      ? utcDate(year, first, second)
+      : utcDate(year, second, first)
   }
 
+  // An ISO or named-month string. Normalised to UTC midnight for the same
+  // reason as above — Date parses "9 Jul 2026" as local midnight.
   const parsed = new Date(s)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
+  if (Number.isNaN(parsed.getTime())) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return parsed
+  return utcDate(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate())
 }
 
 /** Strips currency symbols, thousands separators and bracketed negatives. */
@@ -143,7 +216,7 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
     const row = grid[i]
     if (!row || row.every((c) => !String(c ?? '').trim())) { skipped++; continue }
 
-    const date = coerceDate(at(row, mapping.dateColumn))
+    const date = coerceDate(at(row, mapping.dateColumn), mapping.dateOrder)
     if (!date) { skipped++; continue }
 
     // A credit column means debits live elsewhere and are simply not read.
