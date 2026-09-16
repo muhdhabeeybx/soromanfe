@@ -255,9 +255,24 @@ export function coerceDate(raw: string, order: DateOrder = 'day-first'): Date | 
     if (first > 12 && second <= 12) return utcDate(year, second, first)
     if (second > 12 && first <= 12) return utcDate(year, first, second)
 
-    return order === 'month-first'
+    /**
+     * The preferred reading, then the other one.
+     *
+     * Rejecting an impossible date is right, but dropping the ROW because of
+     * it is not: a line the bank sent that never arrives is worse than a line
+     * with a debatable date, because a missing line is indistinguishable from
+     * one that was never paid. So if the file is being read day-first and
+     * "09/25" cannot be a 25th month, it is read the other way instead — the
+     * row has just proved which way it goes.
+     */
+    const preferred = order === 'month-first'
       ? utcDate(year, first, second)
       : utcDate(year, second, first)
+    if (preferred) return preferred
+
+    return order === 'month-first'
+      ? utcDate(year, second, first)
+      : utcDate(year, first, second)
   }
 
   // An ISO or named-month string. Normalised to UTC midnight for the same
@@ -301,17 +316,48 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
   const detected = detectDateOrder(grid, mapping.dateColumn, mapping.headerRow + 1)
   const order = detected.order ?? mapping.dateOrder ?? 'day-first'
 
+  /**
+   * Why each row was left out.
+   *
+   * "365 skipped" is a black box, and the one question anybody asks of an
+   * import is why a line they can see in the file is not in the system. Most
+   * of these are debits and blanks and entirely correct — but the reason has
+   * to be inspectable, or a genuinely mis-parsed row hides among them.
+   *
+   * Capped, because a wrongly-mapped column can skip every row in a 50,000
+   * line file and the list is a diagnostic, not a second copy of the statement.
+   */
+  const skipNotes: Array<{ row: number; reason: string; value: string }> = []
+  const note = (i: number, reason: string, value: unknown) => {
+    if (skipNotes.length >= 200) return
+    skipNotes.push({ row: i + 1, reason, value: String(value ?? '').slice(0, 60) })
+  }
+
   for (let i = mapping.headerRow + 1; i < grid.length; i++) {
     const row = grid[i]
     if (!row || row.every((c) => !String(c ?? '').trim())) { skipped++; continue }
 
     const date = coerceDate(at(row, mapping.dateColumn), order)
-    if (!date) { skipped++; continue }
+    if (!date) {
+      skipped++
+      note(i, 'no readable date', at(row, mapping.dateColumn))
+      continue
+    }
 
     // A credit column means debits live elsewhere and are simply not read.
     const amountSource = mapping.creditColumn ?? mapping.amountColumn
-    const amount = coerceAmount(at(row, amountSource))
-    if (amount === null || amount <= 0) { skipped++; continue }
+    const rawAmount = at(row, amountSource)
+    const amount = coerceAmount(rawAmount)
+    if (amount === null) {
+      skipped++
+      note(i, 'no readable amount', rawAmount)
+      continue
+    }
+    if (amount <= 0) {
+      skipped++
+      note(i, amount === 0 ? 'amount is zero' : 'debit, not a credit', rawAmount)
+      continue
+    }
 
     rows.push({
       /**
@@ -337,5 +383,11 @@ export function parseRows(grid: Grid, mapping: ColumnMapping) {
     /** How dates were read, and whether the file proved it or it was assumed. */
     dateOrder: order,
     dateOrderDetected: detected.order !== null,
+    /** Why rows were left out — blank rows excluded, they need no explaining. */
+    skipNotes,
+    skipSummary: skipNotes.reduce<Record<string, number>>((acc, n) => {
+      acc[n.reason] = (acc[n.reason] ?? 0) + 1
+      return acc
+    }, {}),
   }
 }

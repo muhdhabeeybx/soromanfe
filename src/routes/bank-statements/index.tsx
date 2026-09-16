@@ -316,6 +316,20 @@ function BankStatementsPage() {
                 </StatusChip>
                 <StatusChip tone="inert">{preview.skipped} skipped</StatusChip>
                 {/*
+                  Why they were skipped, not just how many.
+                  "365 skipped" is a black box, and the one question anybody
+                  asks of an import is why a line they can see in the file is
+                  not in the system.
+                */}
+                {Object.entries(preview.skipSummary).map(([reason, n]) => (
+                <StatusChip
+                key={reason}
+                tone={reason === 'debit, not a credit' ? 'inert' : 'warning'}
+                >
+                {n} {reason}
+                </StatusChip>
+                ))}
+                {/*
                   Which way round the dates were read, always said out loud.
 
                   09/01/2026 is 1 September to one bank and 9 January to
@@ -359,6 +373,32 @@ function BankStatementsPage() {
                 </Button>
                 </div>
                 )}
+                {/*
+                  The rows that were left out for a reason other than being a
+                  debit — those are the ones worth a person's eye, because a
+                  mis-mapped column and a genuinely blank cell look the same
+                  from a count.
+                */}
+                {preview.skipNotes.some((n) => n.reason !== 'debit, not a credit') && (
+                <details className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium">
+                Show the rows that were left out for another reason
+                </summary>
+                <ul className="mt-2 space-y-0.5">
+                {preview.skipNotes
+                .filter((n) => n.reason !== 'debit, not a credit')
+                .slice(0, 40)
+                .map((n, i) => (
+                <li key={i} className="text-xs text-muted-foreground">
+                <span className="text-foreground">Row {n.row}</span>
+                {' — '}{n.reason}
+                {n.value ? <span className="text-muted-foreground/70">{' · saw "'}{n.value}{'"'}</span> : null}
+                </li>
+                ))}
+                </ul>
+                </details>
+                )}
+
                 {preview.rows.length > 0 && (
                 <div className="overflow-hidden rounded-lg border border-foreground/15">
                 <Table>
