@@ -7,7 +7,7 @@ import {
   type FinanceReportOrder, type OrderPayment,
 } from '#/lib/hooks/useFinanceReport'
 import {
-  XL, PDF, NGN, QTY, DATE_FMT, DATE_PATTERN,
+  XL, PDF, NGN, QTY, DATE_FMT, DATE_PATTERN, DATETIME_FMT, DATETIME_PATTERN,
   ALL_BORDERS, TOTAL_BORDERS, HEADER_FILL, SUBROW_FILL, SUMMARY_FILL,
   TOTAL_FILL, GRAND_TOTAL_FILL, HEADER_FONT, TOTAL_FONT, ROW_HEIGHT,
   writeTitleBlock, writeSectionHeading,
@@ -216,7 +216,24 @@ const COLUMNS: Array<{
   signed?: boolean
 }> = [
   { header: 'S/N', key: 'sn', width: 6, scope: 'order' },
-  { header: 'Date', key: 'date', width: 13, scope: 'order' },
+  /**
+   * The day AND the hour the order was placed — the column this report is
+   * filtered, dated and sorted by.
+   *
+   * The time was always held on the row and never printed. On a desk that
+   * takes several orders from one customer in a morning, the date alone
+   * cannot say which of them a payment belongs to.
+   */
+  { header: 'Order Date', key: 'date', width: 18, scope: 'order' },
+  /**
+   * When finance confirmed the payment — a different question from when the
+   * money reached the bank (that is Deposit Date, on each funding row below)
+   * and from when the order was placed.
+   *
+   * Empty on an unpaid order, which is the honest answer rather than a date
+   * borrowed from somewhere else.
+   */
+  { header: 'Confirmed', key: 'confirmed', width: 18, scope: 'order' },
   { header: 'Order Reference', key: 'ref', width: 18, scope: 'order' },
   { header: 'PFI', key: 'pfi', width: 14, scope: 'order' },
   { header: 'Customer', key: 'customer', width: 24, scope: 'order' },
@@ -302,6 +319,7 @@ function rowValues(o: FinanceReportOrder, i: number) {
   return {
     sn: i + 1,
     date: o.createdAt ? new Date(o.createdAt) : null,
+    confirmed: o.paymentConfirmedAt ? new Date(o.paymentConfirmedAt) : null,
     ref: up(o.reference),
     pfi: up(o.pfiNumber || '—'),
     customer: up(o.customerName || 'Unknown'),
@@ -421,7 +439,11 @@ function paymentRowValues(p: OrderPayment) {
  */
 const PDF_COLUMNS: Array<{ header: string; key: string; scope: ColumnScope; width?: number; signed?: boolean }> = [
   { header: 'S/N', key: 'sn', scope: 'order', width: 7 },
-  { header: 'Date', key: 'date', scope: 'order', width: 14 },
+  // Both dates carry their clock time, so they are wider here than a bare day
+  // needs. Widths are scaled to the page (see widthScale), so the two extra
+  // columns cost every other column a little room rather than overflowing.
+  { header: 'Order Date', key: 'date', scope: 'order', width: 20 },
+  { header: 'Confirmed', key: 'confirmed', scope: 'order', width: 20 },
   { header: 'Order Reference', key: 'ref', scope: 'order', width: 22 },
   { header: 'Customer', key: 'customerBlock', scope: 'order', width: 34 },
   { header: 'Qty / Product', key: 'qtyBlock', scope: 'order', width: 21 },
@@ -601,7 +623,8 @@ export function writeFinanceTable(
       }
     }
     row.getCell('ref').font = { bold: true }
-    if (row.getCell('date').value) row.getCell('date').numFmt = DATE_FMT
+    if (row.getCell('date').value) row.getCell('date').numFmt = DATETIME_FMT
+    if (row.getCell('confirmed').value) row.getCell('confirmed').numFmt = DATETIME_FMT
     cursor++
 
     // One sub-row per payment. There is no second branch and no balancing row:
@@ -1171,7 +1194,8 @@ export async function exportFinanceReportPdf(
     const v = rowValues(o, i)
     const orderRow = cellsFor('order', {
       sn: v.sn,
-      date: v.date ? format(v.date, DATE_PATTERN) : '—',
+      date: v.date ? format(v.date, DATETIME_PATTERN) : '—',
+      confirmed: v.confirmed ? format(v.confirmed, DATETIME_PATTERN) : '—',
       ref: v.ref,
       // Blank placeholders: the real content is drawn in didDrawCell, and the
       // height is reserved by the two lines set on the cell in didParseCell.

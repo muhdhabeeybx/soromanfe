@@ -1138,9 +1138,42 @@ function FinanceReportPage() {
                   // know the other's positions.
                   const orderCells: Record<string, React.ReactNode> = {
                     sn: <span className="text-muted-foreground">{i + 1}</span>,
+                    /**
+                     * The day the order was placed, with the hour beneath it.
+                     *
+                     * This is the column the report is filtered, dated and
+                     * sorted by, and the time was always on the row but never
+                     * shown — so several orders from one customer in a morning
+                     * were indistinguishable here.
+                     */
                     date: (
-                      <span className="whitespace-nowrap text-muted-foreground">
-                        {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
+                      <span className="block whitespace-nowrap">
+                        <span className="block text-muted-foreground">
+                          {o.createdAt ? format(new Date(o.createdAt), 'd MMM yyyy') : '—'}
+                        </span>
+                        {o.createdAt && (
+                          <span className="block text-xs text-muted-foreground/70">
+                            {format(new Date(o.createdAt), 'HH:mm')}
+                          </span>
+                        )}
+                      </span>
+                    ),
+                    /**
+                     * When finance confirmed the payment — not when the money
+                     * reached the bank, which each funding row states for
+                     * itself, and not when the order was placed. An unpaid
+                     * order shows a dash rather than borrowing either.
+                     */
+                    confirmed: (
+                      <span className="block whitespace-nowrap">
+                        <span className="block text-muted-foreground">
+                          {o.paymentConfirmedAt ? format(new Date(o.paymentConfirmedAt), 'd MMM yyyy') : '—'}
+                        </span>
+                        {o.paymentConfirmedAt && (
+                          <span className="block text-xs text-muted-foreground/70">
+                            {format(new Date(o.paymentConfirmedAt), 'HH:mm')}
+                          </span>
+                        )}
                       </span>
                     ),
                     ref: <span className="font-mono text-xs font-semibold whitespace-nowrap">{o.reference}</span>,

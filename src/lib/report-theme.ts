@@ -120,6 +120,14 @@ export const PCT = '0.0%'
 export const DATE_FMT = 'dd-mm-yyyy'
 /** The date-fns equivalent, for the PDF and anywhere text is written directly. */
 export const DATE_PATTERN = 'dd-MM-yyyy'
+/**
+ * The same day with its clock time, for columns where the hour is part of the
+ * fact — when an order was placed, when its payment was confirmed. Two orders
+ * on one day is ordinary, and which came first is what someone is checking.
+ */
+export const DATETIME_FMT = 'dd-mm-yyyy hh:mm'
+/** The date-fns equivalent. 24-hour, so 16:05 cannot be read as 4am. */
+export const DATETIME_PATTERN = 'dd-MM-yyyy HH:mm'
 
 // ── ExcelJS building blocks ───────────────────────────────────────────────
 
