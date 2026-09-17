@@ -83,9 +83,24 @@ function LoadingTicketsPage() {
   const [exporting, setExporting] = useState(false)
 
   const { data, isLoading, isError, error, refetch } = useAllOrders()
+  /**
+   * Newest ORDER first — the day the customer placed it, not the day a truck
+   * happened to load against it.
+   *
+   * The desk works an order's age: an order raised on Monday that is still
+   * waiting outranks one raised this morning, whatever their loading dates
+   * say. Sorting on loadingStartedAt cannot express that, because the orders
+   * that most need ticketing have not loaded at all and carry no such date.
+   *
+   * An order with no date sorts last rather than being read as 1970, which is
+   * what `new Date(undefined).getTime()` would have made of it.
+   */
   const orders: any[] = useMemo(() => {
-    const list = data?.orders || []
-    return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    const placed = (o: any) => {
+      const t = o?.createdAt ? new Date(o.createdAt).getTime() : NaN
+      return Number.isNaN(t) ? -Infinity : t
+    }
+    return [...(data?.orders || [])].sort((a, b) => placed(b) - placed(a))
   }, [data?.orders])
 
   // Loads for whichever order currently has a dialog open.
@@ -170,6 +185,7 @@ function LoadingTicketsPage() {
       ws.columns = [
         { header: 'S/N', key: 'sn', width: 6 },
         { header: 'Reference', key: 'ref', width: 20 },
+        { header: 'Order Date', key: 'orderDate', width: 18 },
         { header: 'Date Loaded', key: 'date', width: 18 },
         { header: 'Customer', key: 'customer', width: 26 },
         { header: 'Company', key: 'company', width: 24 },
@@ -184,6 +200,7 @@ function LoadingTicketsPage() {
         ws.addRow({
           sn: i + 1,
           ref: o.orderNumber,
+          orderDate: o.createdAt ? format(new Date(o.createdAt), 'yyyy-MM-dd') : '',
           date: o.loadingStartedAt ? format(new Date(o.loadingStartedAt), 'yyyy-MM-dd HH:mm') : '',
           customer: o.customerName ?? '',
           company: o.companyName ?? o.customerCompanyName ?? '',
@@ -352,6 +369,7 @@ function LoadingTicketsPage() {
                     <TableRow>
                       <TableHead className="w-12">S/N</TableHead>
                       <TableHead>Reference</TableHead>
+                      <TableHead>Order Date</TableHead>
                       <TableHead>Date Loaded</TableHead>
                       <TableHead>Customer</TableHead>
                       <TableHead>Company</TableHead>
@@ -517,6 +535,10 @@ function OrderRow({
     <TableRow>
       <TableCell className="text-muted-foreground">{sn}</TableCell>
       <TableCell className="font-semibold text-accent">{order.orderNumber}</TableCell>
+      {/* The day the order was placed — what this table is ordered by. */}
+      <TableCell className="whitespace-nowrap">
+        {order.createdAt ? format(new Date(order.createdAt), 'd MMM yyyy') : '—'}
+      </TableCell>
       <TableCell className="text-muted-foreground">
         {order.loadingStartedAt ? (
           <>
