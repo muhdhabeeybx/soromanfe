@@ -21,8 +21,22 @@ import { OrderStatusBadge, PaymentBadge } from './-order-status'
 // A live payment hold sits on this order's customer, and once trucks are
 // allocated at release the stock reservation is a real gate action — see
 // order.service.js's updateOrder for the full reasoning these mirror.
-const LOCKED_STATUSES = new Set(['Completed', 'Cancelled', 'Expired'])
+//
+// A cancelled or expired order gave its litres back when it died, so there is
+// nothing left to move and nothing left to correct.
+const LOCKED_STATUSES = new Set(['Cancelled', 'Expired'])
+// Quantity backs a reservation that live tickets are cut against.
 const STOCK_EDITABLE_STATUSES = new Set(['Pending', 'Paid'])
+/**
+ * A completed order accepts one correction and no other: which cargo it was
+ * lifted from.
+ *
+ * That is a fact about where the product came from, not a plan that expires
+ * when the trucks roll, and it is routinely discovered to be wrong only after
+ * the order has finished — at which point both cargoes' sold litres are wrong
+ * and nobody could fix either.
+ */
+const PFI_ONLY_STATUSES = new Set(['Completed'])
 
 /** Search box + result list, picking one customer to reassign the order to. */
 function CustomerPicker({
@@ -246,6 +260,7 @@ export function OrderEditDialog({
   if (!order) return null
 
   const locked = LOCKED_STATUSES.has(order.status)
+  const pfiOnly = PFI_ONLY_STATUSES.has(order.status)
   const stockEditable = STOCK_EDITABLE_STATUSES.has(order.status)
 
   const original = {
@@ -303,9 +318,18 @@ export function OrderEditDialog({
         {locked ? (
           <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
             This order is {String(order.status).toLowerCase()} and can no longer be edited.
+            It gave its litres back to its PFI when it {String(order.status) === 'Expired' ? 'lapsed' : 'was cancelled'}.
           </p>
         ) : (
           <div className="space-y-5">
+            {/* Completed: the cargo is still correctable, nothing else is. */}
+            {pfiOnly && (
+              <p className="rounded-lg border border-foreground/15 bg-muted/40 p-3 text-sm text-muted-foreground">
+                This order is completed. Its PFI can still be corrected — the litres and
+                their stock movements move with it — but nothing else can change.
+              </p>
+            )}
+            {!pfiOnly && (
             <div className="space-y-2">
               <Label>Customer</Label>
               {pickingCustomer ? (
@@ -338,14 +362,11 @@ export function OrderEditDialog({
                 </p>
               )}
             </div>
+            )}
 
             <div className="space-y-2">
               <Label>PFI</Label>
-              {!stockEditable ? (
-                <p className="rounded-lg border border-foreground/15 bg-muted/30 p-3 text-sm text-muted-foreground">
-                  {currentPfiLabel} — locked once an order is released for loading.
-                </p>
-              ) : pickingPfi ? (
+              {pickingPfi ? (
                 <div className="space-y-2">
                   <ul className="max-h-48 divide-y divide-foreground/10 overflow-y-auto rounded-lg border border-foreground/15">
                     {loadingPfis ? (
@@ -397,12 +418,14 @@ export function OrderEditDialog({
               )}
               {form.pfiId !== original.pfiId && (
                 <p className="text-xs leading-tight text-muted-foreground/70">
-                  Releases the reserved stock on the current PFI and reserves it on the new
-                  one — refused if the new PFI doesn't have enough remaining.
+                  Moves the litres and every stock movement behind them onto the new PFI —
+                  the old one gets them back. Refused if the new PFI doesn't have enough
+                  remaining, or is finished.
                 </p>
               )}
             </div>
 
+            {!pfiOnly && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="order-date">Order date</Label>
@@ -434,10 +457,12 @@ export function OrderEditDialog({
                 />
               </div>
             </div>
-            {!stockEditable && (
+            )}
+            {!pfiOnly && !stockEditable && (
               <p className="text-xs leading-tight text-muted-foreground/70">
                 Quantity is locked once an order is released for loading — the reserved
-                stock is already committed to a truck by then.
+                stock is already committed to a truck by then. The PFI above is not:
+                which cargo supplied the order stays correctable.
               </p>
             )}
           </div>

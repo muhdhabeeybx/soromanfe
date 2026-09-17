@@ -53,10 +53,18 @@ const ALL = 'all'
  * checked here so a bulk action can say up front how much of a selection it
  * will actually touch, rather than firing twenty requests to find out.
  */
-const LOCKED_STATUSES = ['Completed', 'Cancelled', 'Expired']
+const LOCKED_STATUSES = ['Cancelled', 'Expired']
 const CANCELLABLE_STATUSES = ['Pending', 'Paid', 'Released']
+/**
+ * Completed sits between the two: the order is finished, but which cargo it
+ * was lifted from is still correctable — and has to be, because that is the
+ * error nobody finds until the cargo's sold litres are reconciled. The edit
+ * dialog opens on the PFI alone for these.
+ */
+const PFI_ONLY_STATUSES = ['Completed']
 
 const isLocked = (o: { status?: unknown }) => LOCKED_STATUSES.includes(String(o.status))
+const isPfiOnly = (o: { status?: unknown }) => PFI_ONLY_STATUSES.includes(String(o.status))
 const isCancellable = (o: { status?: unknown }) => CANCELLABLE_STATUSES.includes(String(o.status))
 const orderId = (o: { id?: string | number; _id?: string }) => String(o.id ?? o._id ?? '')
 
@@ -151,7 +159,7 @@ function OrderManagementPage() {
   // how much of the book is still open to change. Mirrors the rules the edit
   // dialog enforces (see order.service.js's updateOrder).
   const totals = useMemo(() => {
-    const locked = filtered.filter((o) => ['Completed', 'Cancelled', 'Expired'].includes(String(o.status)))
+    const locked = filtered.filter((o) => LOCKED_STATUSES.includes(String(o.status)))
     const stockEditable = filtered.filter((o) => ['Pending', 'Paid'].includes(String(o.status)))
     return {
       count: filtered.length,
@@ -248,8 +256,10 @@ function OrderManagementPage() {
 
       <StatCardGrid count={4}>
         <StatCard icon={<Package />} label="Orders in view" value={formatQty(totals.count)} />
-        <StatCard icon={<Pencil />} label="Still editable" value={formatQty(totals.editable)} description="Not completed, cancelled or expired" />
-        <StatCard icon={<Fuel />} label="Quantity / PFI editable" value={formatQty(totals.stockEditable)} description="Not yet released for loading" />
+        <StatCard icon={<Pencil />} label="Still editable" value={formatQty(totals.editable)} description="Not cancelled or expired — a completed order still takes a PFI correction" />
+        {/* The PFI is no longer part of this count — it stays editable at every
+            stage short of cancelled. Quantity is what closes at release. */}
+        <StatCard icon={<Fuel />} label="Quantity editable" value={formatQty(totals.stockEditable)} description="Not yet released for loading" />
         <StatCard icon={<Wallet />} label="Value in view" value={formatNaira(totals.value)} />
       </StatCardGrid>
 
@@ -491,7 +501,13 @@ function OrderManagementPage() {
                               variant={locked ? 'ghost' : 'outline'}
                               size="sm"
                               disabled={locked}
-                              title={locked ? `A ${String(o.status).toLowerCase()} order can no longer be edited` : 'Edit this order'}
+                              title={
+                                locked
+                                  ? `A ${String(o.status).toLowerCase()} order can no longer be edited`
+                                  : isPfiOnly(o)
+                                    ? 'Completed — its PFI can still be corrected'
+                                    : 'Edit this order'
+                              }
                               onClick={() => setEditing(o)}
                             >
                               <Pencil data-icon="inline-start" />
