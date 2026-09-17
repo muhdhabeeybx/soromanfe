@@ -526,17 +526,6 @@ function OrderRow({
   const { data } = useOrderForTicketing(order.id)
   const loads: TruckLoad[] = data?.trucks || []
   const allocated = loads.reduce((s, l) => s + toNumber(l.quantity), 0)
-  /**
-   * What has left the gate, as opposed to what has been ticketed.
-   *
-   * A ticket is a promise; a gated-out truck is product that is gone. The
-   * Loaded column shows this figure, with the ticketed one beneath it when
-   * the two differ, so a row waiting on trucks reads differently from a row
-   * waiting on this desk.
-   */
-  const goneQty = loads
-    .filter((l) => l.status === 'gated_out')
-    .reduce((s, l) => s + toNumber(l.quantity), 0)
   const releasable = toNumber(order.quantity)
   const company = order.companyName || order.customerCompanyName || ''
 
@@ -589,27 +578,14 @@ function OrderRow({
         )}
       </TableCell>
       {/*
-        How much has actually gone, against how much has been written on
-        tickets — two different facts that were previously squeezed into the
-        Quantity column as "(x out)", which said neither clearly.
-
-        Zero gone with litres ticketed is worth seeing as a zero: those trucks
-        are somewhere between the ticket and the gate, and the row is waiting
-        on them rather than on this desk.
+        How much of the order has been written onto tickets. Its own column
+        now — it used to be "(x out)" tucked beside the quantity, where the
+        figure was easy to miss and easy to read as the order's own.
       */}
       <TableCell className="text-right">
-        {allocated === 0 ? (
-          <span className="text-muted-foreground">—</span>
-        ) : (
-          <>
-            <span className="block whitespace-nowrap font-medium tabular-nums">{formatQty(goneQty)}</span>
-            {allocated > goneQty && (
-              <span className="block whitespace-nowrap text-xs text-muted-foreground">
-                {formatQty(allocated)} ticketed
-              </span>
-            )}
-          </>
-        )}
+        {allocated === 0
+          ? <span className="text-muted-foreground">—</span>
+          : <span className="block whitespace-nowrap font-medium tabular-nums">{formatQty(allocated)}</span>}
       </TableCell>
       <TableCell className="text-muted-foreground">{order.pfiNumber || '—'}</TableCell>
 
