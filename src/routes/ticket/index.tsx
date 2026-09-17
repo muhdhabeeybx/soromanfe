@@ -30,6 +30,10 @@ import { useOrderForTicketing, type TruckLoad } from '#/lib/hooks/useTickets'
 import {
   DATE_PRESETS, resolveRange, toNumber, formatQty, type DatePreset,
 } from '#/routes/orders/-orders-utils'
+// A quantity written in the unit its product is actually measured in — litres
+// for petrol, kilograms for gas, tonnes for a cargo. Printing all three as
+// litres states a figure wrong by three orders of magnitude.
+import { qty as qtyWithUnit, unitNames } from '#/routes/pfi/-pfi-utils'
 import { routeGuard } from '#/lib/route-guard'
 
 // QR ticket scanning used to live on this page. It is disabled but kept
@@ -192,6 +196,10 @@ function LoadingTicketsPage() {
         { header: 'Location', key: 'location', width: 22 },
         { header: 'Product', key: 'product', width: 22 },
         { header: 'Quantity', key: 'qty', width: 14 },
+        // The unit as its own column rather than inside the figure: a sheet
+        // gets summed and filtered, and "45,000 L" in a number column cannot
+        // be either.
+        { header: 'Unit', key: 'unit', width: 10 },
         { header: 'PFI', key: 'pfi', width: 16 },
         { header: 'Status', key: 'status', width: 14 },
       ]
@@ -207,6 +215,7 @@ function LoadingTicketsPage() {
           location: o.depotName ?? o.state ?? '',
           product: o.productName ?? '',
           qty: toNumber(o.quantity),
+          unit: unitNames(o.productUnit).short,
           pfi: o.pfiNumber ?? '',
           status: o.status,
         })
@@ -371,11 +380,14 @@ function LoadingTicketsPage() {
                       <TableHead>Reference</TableHead>
                       <TableHead>Order Date</TableHead>
                       <TableHead>Date Loaded</TableHead>
+                      {/* Customer over company, quantity over product: one
+                          column each, because nobody reads either half without
+                          the other and two columns of truncated names cost the
+                          width the truck counts need. */}
                       <TableHead>Customer</TableHead>
-                      <TableHead>Company</TableHead>
                       <TableHead>Location</TableHead>
-                      <TableHead>Product</TableHead>
                       <TableHead className="text-right">Quantity</TableHead>
+                      <TableHead className="text-right">Loaded</TableHead>
                       <TableHead>PFI</TableHead>
                       {/* Trucks, as counts rather than rows.
                           The individual plates belong to the ticket and would
@@ -514,7 +526,19 @@ function OrderRow({
   const { data } = useOrderForTicketing(order.id)
   const loads: TruckLoad[] = data?.trucks || []
   const allocated = loads.reduce((s, l) => s + toNumber(l.quantity), 0)
+  /**
+   * What has left the gate, as opposed to what has been ticketed.
+   *
+   * A ticket is a promise; a gated-out truck is product that is gone. The
+   * Loaded column shows this figure, with the ticketed one beneath it when
+   * the two differ, so a row waiting on trucks reads differently from a row
+   * waiting on this desk.
+   */
+  const goneQty = loads
+    .filter((l) => l.status === 'gated_out')
+    .reduce((s, l) => s + toNumber(l.quantity), 0)
   const releasable = toNumber(order.quantity)
+  const company = order.companyName || order.customerCompanyName || ''
 
   const fullyTicketed = releasable > 0 && allocated >= releasable
   const hasTickets = loads.length > 0
@@ -551,14 +575,40 @@ function OrderRow({
           </>
         ) : '—'}
       </TableCell>
-      <TableCell className="max-w-[14rem] truncate font-medium">{order.customerName || '—'}</TableCell>
-      <TableCell className="max-w-[12rem] truncate text-muted-foreground">{order.companyName || order.customerCompanyName || '—'}</TableCell>
+      <TableCell className="max-w-[15rem]">
+        <span className="block truncate font-medium">{order.customerName || '—'}</span>
+        {company && <span className="block truncate text-xs text-muted-foreground">{company}</span>}
+      </TableCell>
       <TableCell>{order.depotName || order.state || '—'}</TableCell>
-      <TableCell className="max-w-[12rem] truncate">{order.productName || '—'}</TableCell>
       <TableCell className="text-right">
-        {formatQty(releasable)}
-        {allocated > 0 && allocated < releasable && (
-          <span className="ml-1 text-xs text-warning">({formatQty(allocated)} out)</span>
+        <span className="block whitespace-nowrap font-medium tabular-nums">
+          {qtyWithUnit(releasable, order.productUnit)}
+        </span>
+        {order.productName && (
+          <span className="block truncate text-xs text-muted-foreground">{order.productName}</span>
+        )}
+      </TableCell>
+      {/*
+        How much has actually gone, against how much has been written on
+        tickets — two different facts that were previously squeezed into the
+        Quantity column as "(x out)", which said neither clearly.
+
+        Zero gone with litres ticketed is worth seeing as a zero: those trucks
+        are somewhere between the ticket and the gate, and the row is waiting
+        on them rather than on this desk.
+      */}
+      <TableCell className="text-right">
+        {allocated === 0 ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <>
+            <span className="block whitespace-nowrap font-medium tabular-nums">{formatQty(goneQty)}</span>
+            {allocated > goneQty && (
+              <span className="block whitespace-nowrap text-xs text-muted-foreground">
+                {formatQty(allocated)} ticketed
+              </span>
+            )}
+          </>
         )}
       </TableCell>
       <TableCell className="text-muted-foreground">{order.pfiNumber || '—'}</TableCell>
@@ -609,45 +659,51 @@ function OrderRow({
           </div>
         )}
 
-        <div className="mt-1 flex flex-wrap gap-1">
-          {toTicket > 0 && (
-            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
-              {toTicket} to ticket
+        {/*
+          The same states as the bar, named — as one quiet line rather than a
+          pile of filled pills. Four pills wrapping over two lines made every
+          row as tall as its noisiest cell and read as an alert on orders that
+          were simply in progress; a coloured dot ties each count to its band
+          in the bar directly above it.
+
+          Only occupied states appear. A row of zeros teaches the eye to skip
+          the column, and "2 to ticket" on the one order that has any is the
+          thing this desk is looking for.
+        */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] leading-none">
+          {[
+            { n: toTicket, label: 'to ticket', dot: 'bg-destructive', text: 'text-destructive font-semibold' },
+            { n: Number(order.trucksAwaitingIn) || 0, label: 'due in', dot: 'bg-warning', text: 'text-muted-foreground' },
+            { n: Number(order.trucksOnYard) || 0, label: 'on yard', dot: 'bg-info', text: 'text-muted-foreground' },
+            { n: Number(order.trucksOut) || 0, label: 'loaded', dot: 'bg-accent', text: 'text-muted-foreground' },
+          ].map((s) => s.n > 0 && (
+            <span key={s.label} className={cn('inline-flex items-center gap-1 whitespace-nowrap', s.text)}>
+              <span className={cn('size-1.5 shrink-0 rounded-full', s.dot)} />
+              <span className="tabular-nums">{s.n}</span>
+              <span>{s.label}</span>
             </span>
-          )}
-          {order.trucksAwaitingIn > 0 && (
-            <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">
-              {order.trucksAwaitingIn} due in
-            </span>
-          )}
-          {order.trucksOnYard > 0 && (
-            <span className="rounded bg-info/10 px-1.5 py-0.5 text-[10px] font-semibold text-info">
-              {order.trucksOnYard} on yard
-            </span>
-          )}
-          {order.trucksOut > 0 && (
-            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
-              {order.trucksOut} loaded
-            </span>
-          )}
-          {/* Fill it in from here. 55 live orders were raised before the
-              order form asked, and the count is only useful if the desk can
-              add it to the order in front of them rather than going back to
-              edit the order. */}
-          {!expectedTrucks && (
-            <button
-              type="button"
-              className="cursor-pointer rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground hover:text-foreground"
-              onClick={() => onSetTruckCount?.()}
-            >
-              set truck count
-            </button>
-          )}
+          ))}
         </div>
       </TableCell>
 
       <TableCell className="text-right">
         <div className="flex items-center justify-end gap-1.5">
+          {/*
+            Where an order never had a truck count, setting one is an action
+            like any other and belongs with them — it used to sit inside the
+            Trucks column as a text button, which put a control in a column of
+            figures and hid it behind whichever counts happened to be there.
+
+            55 live orders were raised before the order form asked for a
+            count, and the count is only useful if the desk can add it to the
+            order in front of it rather than going back to the order form.
+          */}
+          {!expectedTrucks && (
+            <Button variant="outline" size="sm" onClick={() => onSetTruckCount?.()} title="Set how many trucks this order expects">
+              <Truck data-icon="inline-start" />
+              Set trucks
+            </Button>
+          )}
           {hasTickets && (
             <Button variant="outline" size="icon-sm" onClick={onView} title="View / reprint ticket">
               <Eye />
