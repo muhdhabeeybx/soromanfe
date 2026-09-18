@@ -729,6 +729,17 @@ export interface CommissionRate {
   updatedAt?: string
 }
 
+/**
+ * Where a commission row's rate came from.
+ *
+ *   customer       the customer's own agreed rate, whatever depot they bought
+ *                  at — a ₦2.00 arrangement, or an agreed ₦0.00
+ *   depot_product  the usual rate for that depot and product
+ *   none           no rate was configured anywhere; the row earns nothing and
+ *                  says so rather than sitting at ₦0 in the desk's queue
+ */
+export type CommissionRateSource = 'customer' | 'depot_product' | 'none'
+
 export interface Commission {
   id: number
   orderId: number
@@ -760,6 +771,16 @@ export interface Commission {
   productSku?: string
   quantity: number
   commissionRate: number
+  /** Where that rate came from. See CommissionRateSource. */
+  rateSource?: CommissionRateSource
+  /**
+   * What the customer is on NOW — null when they have no agreement.
+   *
+   * Kept beside the snapshot rather than replacing it: a row raised before
+   * an agreement changed and one raised after it are different facts, and
+   * the desk needs to tell them apart.
+   */
+  customerCommissionRate?: string | number | null
   commissionAmount: number
   /**
    * 'skipped' is settled without paying anybody — an order the desk decided

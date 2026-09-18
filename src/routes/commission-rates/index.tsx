@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { Plus, Pencil, TrendingUp, Loader2, BarChart3, RefreshCw, CheckCircle } from 'lucide-react'
+import { Plus, Pencil, TrendingUp, Loader2, BarChart3, RefreshCw, CheckCircle, UserCog, X } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
 import { StatCard } from '#/components/ui/stat-card'
@@ -19,10 +19,14 @@ import { PageLoader } from '#/components/PageLoader'
 import { PageError } from '#/components/PageError'
 import { PageEmpty } from '#/components/PageEmpty'
 
-import { useCommissionRates, useUpsertCommissionRate } from '#/lib/hooks/useCommissions'
+import {
+  useCommissionRates, useUpsertCommissionRate,
+  useCustomerCommissionRates, useSetCustomerCommissionRate,
+} from '#/lib/hooks/useCommissions'
+import { useCustomerList } from '#/lib/hooks/useCustomers'
 import { useDepots } from '#/lib/hooks/useDepots'
 import { useProductList } from '#/lib/hooks/useProducts'
-import type { CommissionRate } from '#/lib/types'
+import type { CommissionRate, Customer } from '#/lib/types'
 import { routeGuard } from '#/lib/route-guard'
 
 export const Route = createFileRoute('/commission-rates/')({
@@ -83,7 +87,7 @@ function CommissionRatesPage() {
       <PageHeader
         eyebrow="Finance"
         title="Commission rates"
-        description="The rate applied per depot and product. Changing one affects every commission calculated from it onwards."
+        description="The rate applied per depot and product, and the customers who are on a rate of their own. Changing one affects every commission calculated from it onwards."
       />
 
       {/* Rate Summary */}
@@ -193,6 +197,8 @@ function CommissionRatesPage() {
       </Card>
 
       {/* Add/Edit Rate Dialog */}
+      <CustomerRatesPanel />
+
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -280,5 +286,144 @@ function CommissionRatesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/**
+ * Customers who earn something other than the usual rate.
+ *
+ * The agreement is with the customer and applies wherever they buy, so it is
+ * not a row in the depot table above — it overrides it. Before this the
+ * arrangement lived nowhere: the only way to pay one customer ₦2.00 was to
+ * raise the depot's rate, which paid it to everybody buying there.
+ *
+ * Saving reprices that customer's PENDING commissions immediately. Paid ones
+ * are never touched — they settled at the rate in force when they were paid,
+ * and repricing history is a rewrite, not a recalculation.
+ */
+function CustomerRatesPanel() {
+  const { data: rates = [], isLoading } = useCustomerCommissionRates()
+  const { data: customerData } = useCustomerList({ limit: 1000 })
+  const setRate = useSetCustomerCommissionRate()
+
+  const [customerId, setCustomerId] = useState('')
+  const [rate, setRate_] = useState('')
+
+  const customers: Customer[] = customerData?.customers || []
+  const naira = (n: unknown) =>
+    `₦${Number(n || 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  const save = () => {
+    if (!customerId || rate === '') return
+    setRate.mutate(
+      { customerId, commissionRate: Number(rate) },
+      { onSuccess: () => { setCustomerId(''); setRate_('') } },
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader className="border-b border-border p-4 sm:p-6">
+        <div className="flex items-start gap-3">
+          <UserCog className="size-5 mt-0.5 text-muted-foreground" />
+          <div>
+            <CardTitle className="text-lg">Customer rates</CardTitle>
+            <CardDescription>
+              A rate agreed with one customer, applied wherever they buy. It overrides the depot
+              rate above. Clearing it puts them back on the usual rate — which is not the same as
+              setting it to ₦0.00, and that is a real agreement meaning they earn nothing.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-4 sm:p-6 space-y-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1 space-y-1.5">
+            <Label htmlFor="cr-customer">Customer</Label>
+            <Select value={customerId} onValueChange={setCustomerId}>
+              <SelectTrigger id="cr-customer">
+                <SelectValue placeholder="Choose a customer" />
+              </SelectTrigger>
+              <SelectContent>
+                {/* The API normalises the id onto `_id` — see lib/api/http. */}
+                {customers.map((c) => (
+                  <SelectItem key={c._id} value={String(c._id)}>
+                    {c.name}{c.companyName ? ` · ${c.companyName}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-full sm:w-44 space-y-1.5">
+            <Label htmlFor="cr-rate">Rate (₦ per litre)</Label>
+            <CommaInput id="cr-rate" placeholder="2.00" value={rate} onValueChange={setRate_} />
+          </div>
+          <Button onClick={save} disabled={!customerId || rate === '' || setRate.isPending} className="gap-2">
+            {setRate.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            Set rate
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : rates.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nobody is on a rate of their own — every customer earns the depot rate above.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Customer</TableHead>
+                  <TableHead className="text-right">Rate</TableHead>
+                  <TableHead className="text-right">Pending</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rates.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <span className="block font-medium">{r.name}</span>
+                      {r.companyName && (
+                        <span className="block text-xs text-muted-foreground">{r.companyName}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">
+                      {naira(r.commissionRate)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {r.pendingCount > 0 ? (
+                        <>
+                          <span className="block">{naira(r.pendingAmount)}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {r.pendingCount} order{r.pendingCount === 1 ? '' : 's'}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Put this customer back on the depot rate"
+                        onClick={() => setRate.mutate({ customerId: r.id, commissionRate: null })}
+                        disabled={setRate.isPending}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

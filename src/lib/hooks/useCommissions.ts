@@ -70,6 +70,61 @@ export function useConfirmCommissionPayment() {
   })
 }
 
+/** Who earns something other than the usual rate, and what they are owed. */
+export function useCustomerCommissionRates() {
+  return useQuery({
+    queryKey: ['customer-commission-rates'],
+    queryFn: async () => {
+      const res = await api.get('/commissions/customer-rates')
+      return (res.data.data.rates || []) as Array<{
+        id: number
+        name: string
+        companyName: string | null
+        phone: string | null
+        commissionRate: string
+        pendingCount: number
+        pendingAmount: string
+      }>
+    },
+  })
+}
+
+/**
+ * Set — or clear — one customer's own commission rate.
+ *
+ * `null` clears the agreement and hands the customer back to the usual depot
+ * rate. That is a different instruction from 0, which is an agreement that
+ * they earn nothing, so the field is always sent: never omitted to mean
+ * "unchanged".
+ *
+ * The server reprices that customer's PENDING commissions in the same request,
+ * which is why the commissions list and the summary are invalidated too — a
+ * queue still priced under an agreement that no longer holds is the thing this
+ * is meant to prevent.
+ */
+export function useSetCustomerCommissionRate() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (data: { customerId: number | string; commissionRate: number | null }) => {
+      const res = await api.post('/commissions/customer-rate', data)
+      return res.data as { message: string; data: { repriced: { updated: number } } }
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] })
+      queryClient.invalidateQueries({ queryKey: ['commission-summary'] })
+      queryClient.invalidateQueries({ queryKey: ['customers'] })
+      queryClient.invalidateQueries({ queryKey: ['customer-commission-rates'] })
+      toast.success(res?.message || 'Rate saved')
+    },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err))
+    },
+  })
+}
+
 export function useCommissionRates(params?: { depotId?: number | string }) {
   return useQuery({
     queryKey: ['commission-rates', params],
