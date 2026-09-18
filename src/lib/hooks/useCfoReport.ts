@@ -4,7 +4,7 @@ import { useToast } from '#/lib/hooks/useToast'
 import { getErrorMessage } from '#/lib/utils'
 
 /**
- * The CFO report — one block per day, one row per batch.
+ * The CFO report — one block per day, one row per PFI.
  *
  * Every figure is computed on the server by
  * Sman-Backend/services/cfoReport.service.js, which carries the full account
@@ -90,7 +90,7 @@ export interface CfoRow {
   /** Derived. Always bankInflow − salesValue. Negative is money still owed. */
   surplusDeficit: number
 
-  /** Confirmed orders on the batch to this date, and on this date. */
+  /** Confirmed orders on the PFI to this date, and on this date. */
   orders: number
   dayOrders: number
 
@@ -144,7 +144,7 @@ export interface CfoMeta {
   dateTo: string
   /** Africa/Lagos. Every day on this report is a Lagos calendar day. */
   timezone: string
-  batches: Array<{ id: number; pfiNumber: string; locationName: string; status: string }>
+  pfis: Array<{ id: number; pfiNumber: string; locationName: string; status: string }>
   /**
    * Money this report drops and the audited finance report keeps.
    *
@@ -180,7 +180,7 @@ export interface CfoReportParams {
   dateTo: string
   depotId?: string | number
   pfiId?: string | number
-  /** Every batch that had started by the date, not only the ones trading. */
+  /** Every PFI that had started by the date, not only the ones trading. */
   includeAll?: boolean
 }
 
@@ -214,7 +214,7 @@ export interface CfoEntryPayload {
 }
 
 /**
- * Save a correction against one batch on one date.
+ * Save a correction against one PFI on one date.
  *
  * A key sent as null CLEARS that override and hands the cell back to the
  * computed figure; a key left out entirely leaves whatever is saved alone.

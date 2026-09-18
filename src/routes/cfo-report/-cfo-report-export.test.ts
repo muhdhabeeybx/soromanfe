@@ -58,7 +58,7 @@ const report = (): CfoReport => {
     totals,
     meta: {
       dateFrom: '2026-09-16', dateTo: '2026-09-17', timezone: 'Africa/Lagos',
-      batches: [], duplicatesExcluded: 213824000, duplicateRows: 18,
+      pfis: [], duplicatesExcluded: 213824000, duplicateRows: 18,
       partPaidHeld: 2215462424, partPaidOrders: 17,
     },
   }
@@ -94,7 +94,7 @@ describe('CFO report exports', () => {
     // Both days present, including the one with nothing on it.
     expect(all).toContain('WEDNESDAY, 16 SEPTEMBER 2026')
     expect(all).toContain('THURSDAY, 17 SEPTEMBER 2026')
-    expect(all).toContain('No batches trading on this date.')
+    expect(all).toContain('No PFIs trading on this date.')
 
     // The footnotes the report must not go out without.
     expect(all).toContain('part-paid orders')
@@ -110,10 +110,12 @@ describe('CFO report exports', () => {
     expect(litreCells.every((c) => typeof c.value === 'number')).toBe(true)
     expect(kgCells.some((c) => c.value === 159060)).toBe(true)
 
-    // A corrected cell keeps the system's own figure in its note.
-    const noted = cells.filter((c) => c.note)
-    expect(noted.length).toBeGreaterThan(0)
-    expect(JSON.stringify(noted[0].note)).toContain('28,441,100,000')
+    // A corrected cell keeps the system's own figure in its note...
+    const notes = cells.filter((c) => c.note).map((c) => JSON.stringify(c.note))
+    expect(notes.some((n) => n.includes('28,441,100,000'))).toBe(true)
+    // ...and a generated remark says outright that nobody typed it, so it can
+    // never be quoted back as a colleague's judgement.
+    expect(notes.some((n) => n.includes('Nobody typed this'))).toBe(true)
 
     // Money is a number with a naira format, so the column can be summed.
     const { NGN } = await import('#/lib/report-theme')
@@ -149,6 +151,58 @@ describe('CFO report exports', () => {
     } finally {
       if (existsSync(name)) unlinkSync(name)
     }
+  })
+
+  test('money shows kobo only where there is kobo', async () => {
+    const { cfoDisplay, CFO_CORE_COLUMNS } = await import('./-cfo-columns')
+    const money = CFO_CORE_COLUMNS.find((c) => c.key === 'salesValue')!
+    const signed = CFO_CORE_COLUMNS.find((c) => c.key === 'surplusDeficit')!
+
+    // A forced ".00" on three money columns is what pushed the PDF's figures
+    // into wrapping mid-number.
+    expect(cfoDisplay(money, 32784600000, 'Litres')).toBe('₦32,784,600,000')
+    // ...but a real 99 kobo is never rounded away on a reconciliation sheet.
+    expect(cfoDisplay(money, 56900000.99, 'Litres')).toBe('₦56,900,000.99')
+    // Negatives are parenthesised, not signed with a glyph the PDF lacks.
+    expect(cfoDisplay(signed, -112600000, 'Litres')).toBe('(₦112,600,000)')
+  })
+
+  test('a row writes its own remark, and a typed one always wins', async () => {
+    const { rowRemark } = await import('./-cfo-columns')
+    const base = row()
+
+    // Half-sold and square: nothing worth saying beyond the two facts.
+    const quiet = rowRemark({ ...base, dayVolume: 0, cumulativeVolume: 11000000, stockBalance: 12213083, surplusDeficit: 0 })
+    expect(quiet.auto).toBe(true)
+    expect(quiet.text).toBe('No movement. Settled in full.')
+
+    const sold = rowRemark({ ...base, dayVolume: 936000, surplusDeficit: -112600000 })
+    expect(sold.auto).toBe(true)
+    expect(sold.text).toBe('Sold 936,000 L. ₦112.6m still owed.')
+
+    // Nearly-dry is called out, because that is the unusual state.
+    const dry = rowRemark({ ...base, dayVolume: 0, initialQty: 160000, cumulativeVolume: 159060, stockBalance: 940, productUnit: 'kg', surplusDeficit: 20000 })
+    expect(dry.text).toContain('Nearly dry — 940 kg left.')
+
+    // A person's words are never merged with a generated sentence.
+    const typed = rowRemark({ ...base, remarks: 'Awaiting Dangote credit note.' })
+    expect(typed).toEqual({ text: 'Awaiting Dangote credit note.', auto: false })
+  })
+
+  test('the PDF is written only in characters its typefaces carry', async () => {
+    // Satoshi has neither U+20A6 nor U+2212, and jsPDF's Helvetica has
+    // neither either. Both go missing SILENTLY — the naira sign printed as a
+    // broken bar and the minus sign as nothing at all, which turned
+    // "initial qty − cumulative" into "initial qty cumulative".
+    const { nairaCompact, nairaIn, nairaSignedIn } = await import('./-cfo-columns')
+
+    expect(nairaIn('NGN ')(32784600000)).toBe('NGN 32,784,600,000')
+    expect(nairaSignedIn('NGN ')(-112600000)).toBe('(NGN 112,600,000)')
+    expect(nairaCompact(732300000, 'NGN ')).toBe('NGN 732.3m')
+
+    // The compact form's own minus is ASCII, so a negative never loses its sign.
+    expect(nairaCompact(-5000000)).toBe('-₦5.0m')
+    expect(nairaCompact(-5000000)).not.toContain('\u2212')
   })
 
   test('a single-unit day still totals its quantity columns', async () => {

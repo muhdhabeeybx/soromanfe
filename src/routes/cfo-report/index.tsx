@@ -12,6 +12,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
+import { StatusChip } from '#/components/ui/status-chip'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import {
@@ -32,7 +33,8 @@ import {
 } from '#/lib/hooks/useCfoReport'
 import {
   CFO_CORE_COLUMNS, CFO_NUMERIC, cfoRowValues, cfoTotalValues, cfoDisplay,
-  quantityAcrossUnits, unitShort,
+  quantityAcrossUnits, unitShort, drawnDownShare, moneyState, MONEY_STATE_LABEL,
+  rowRemark, nairaCompact,
 } from './-cfo-columns'
 import { exportCfoReportExcel, exportCfoReportPdf, type CfoExportFilters } from './-cfo-report-export'
 
@@ -74,20 +76,21 @@ const RANGES: Array<{ value: string; label: string; resolve: () => { from: strin
 type FilterOption = { id?: string | number; _id?: string; name?: string; pfiNumber?: string; locationId?: string | number | null }
 const idOf = (x: FilterOption) => String(x?.id ?? x?._id ?? '')
 
+/**
+ * Money in full, and money at a glance — both from -cfo-columns, so the page
+ * and the two exports cannot format the same figure two ways.
+ *
+ * Kobo appears only where there is kobo: 5 rows in the whole book carry any,
+ * and a forced ".00" on three money columns is noise at ₦32bn scale.
+ */
 const ngn = (n: number) =>
-  `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const ngnShort = (n: number) => {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '−' : ''
-  if (abs >= 1e9) return `${sign}₦${(abs / 1e9).toFixed(2)}bn`
-  if (abs >= 1e6) return `${sign}₦${(abs / 1e6).toFixed(1)}m`
-  return `${sign}₦${Math.round(abs).toLocaleString('en-NG')}`
-}
+  `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+const ngnShort = (n: number) => nairaCompact(n)
 
 /**
  * The CFO report.
  *
- * Depot sales per batch, one block per day: what the cargo started with, what
+ * Depot sales per PFI, one block per day: what the cargo started with, what
  * has gone off it, what went today, what is left, what that came to, what
  * reached the bank, and the gap between the last two.
  *
@@ -205,8 +208,11 @@ function CfoReportPage() {
         }
       />
 
+      {/* Two across rather than four: at four, each figure is squeezed into a
+          quarter-width tile and "₦82,136,400,000" has to be abbreviated past
+          the point of being checkable. */}
       {!isLoading && !isError && totals && (
-        <StatCardGrid count={4}>
+        <StatCardGrid count={4} className="grid-cols-1 sm:grid-cols-2">
           <StatCard
             icon={<Droplets />}
             label="Volume sold in period"
@@ -216,7 +222,7 @@ function CfoReportPage() {
                 .map(([unit, v]) => `${Math.round(v).toLocaleString('en-NG')} ${unitShort(unit)}`)
                 .join(' · ') || '0'
             }
-            description={`${totals.rows} batch${totals.rows === 1 ? '' : 'es'} on the closing day`}
+            description={`${totals.rows} PFI${totals.rows === 1 ? '' : 's'} on the closing day`}
           />
           <StatCard
             icon={<Scale />}
@@ -311,7 +317,7 @@ function CfoReportPage() {
             checked={includeAll}
             onChange={(e) => setIncludeAll(e.target.checked)}
           />
-          Include batches not trading
+          Include PFIs not trading
         </label>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
@@ -334,11 +340,11 @@ function CfoReportPage() {
       ) : !hasRows ? (
         <PageEmpty
           icon={<Scale />}
-          title="No batches trading in this period"
+          title="No PFIs trading in this period"
           description={
             includeAll
-              ? 'Nothing had started trading by these dates. Try widening the range.'
-              : 'Try widening the date range, clearing a filter, or ticking “Include batches not trading”.'
+              ? 'No PFI had started trading by these dates. Try widening the range.'
+              : 'Try widening the date range, clearing a filter, or ticking “Include PFIs not trading”.'
           }
         />
       ) : (
@@ -377,7 +383,7 @@ function CfoReportPage() {
  * closing it off.
  *
  * Every day in the range gets a block, including the quiet ones. A silent gap
- * reads as a page that failed to load; "No batches trading on this date" is
+ * reads as a page that failed to load; "No PFIs trading on this date" is
  * an answer.
  */
 function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => void }) {
@@ -390,7 +396,7 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
         <div className="flex items-baseline gap-3">
           <span className="text-sm font-medium">{format(parseISO(day.date), 'EEEE, d MMMM yyyy')}</span>
           <span className={cn(MICRO, 'text-muted-foreground')}>
-            {day.rows.length} batch{day.rows.length === 1 ? '' : 'es'}
+            {day.rows.length} PFI{day.rows.length === 1 ? '' : 's'}
           </span>
         </div>
         {day.rows.length > 0 && (
@@ -402,7 +408,7 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
 
       {day.rows.length === 0 ? (
         <div className={cn(PANEL_BODY, 'text-sm text-muted-foreground')}>
-          No batches trading on this date.
+          No PFIs trading on this date.
         </div>
       ) : (
         <div className={cn(PANEL_BODY, 'overflow-x-auto p-0')}>
@@ -437,7 +443,7 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
                   return (
                     <TableCell
                       key={c.key}
-                      className={cn(CFO_NUMERIC.has(c.key) && 'text-right', 'whitespace-nowrap')}
+                      className={cn(CFO_NUMERIC.has(c.key) && 'text-right tabular-nums', 'whitespace-nowrap')}
                     >
                       {value === null ? (
                         // Litres and kilogrammes have no sum. The per-unit
@@ -493,7 +499,7 @@ function Signed({ value }: { value: number }) {
 }
 
 /**
- * One batch on one day.
+ * One PFI on one day.
  *
  * A corrected cell is marked and carries what the system said in its title,
  * so the row can be read as a correction rather than as an unexplained figure.
@@ -501,6 +507,9 @@ function Signed({ value }: { value: number }) {
 function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdit: (row: CfoRow) => void }) {
   const values = cfoRowValues(row, index)
   const share = verifiableShare(row)
+  const drawn = drawnDownShare(row)
+  const state = moneyState(row)
+  const remark = rowRemark(row)
 
   return (
     <TableRow className={cn(row.edited.length > 0 && 'bg-blue-50/40 dark:bg-blue-950/20')}>
@@ -508,12 +517,62 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
         const corrected = !!c.field && row.edited.includes(c.field)
         const content =
           c.kind === 'signed' ? (
-            <Signed value={Number(values[c.key])} />
+            <span className="inline-flex flex-col items-end gap-1">
+              <Signed value={Number(values[c.key])} />
+              {/*
+                The state in a word as well as a colour. Red and green are the
+                palette's reserved pair for signed money, and a reader who
+                cannot tell them apart — or who printed this in mono — gets
+                nothing from the colour alone.
+              */}
+              <StatusChip
+                fill="solid"
+                tone={state === 'deficit' ? 'destructive' : state === 'surplus' ? 'accent' : 'inert'}
+                className="text-[10px]"
+              >
+                {MONEY_STATE_LABEL[state]}
+              </StatusChip>
+            </span>
           ) : c.key === 'pfi' ? (
             <span className="whitespace-nowrap font-mono text-xs">{row.pfiNumber}</span>
+          ) : c.key === 'stockBalance' ? (
+            /*
+              The figure, with how drawn down the PFI is drawn underneath it.
+              One hue on a muted track, never red or green: a cargo that has
+              sold out is a success, and colouring an empty tank like a loss
+              would say the opposite of what happened. The number above is the
+              bar's label, so it carries none of its own.
+            */
+            <span className="block">
+              <span className="whitespace-nowrap">
+                {cfoDisplay(c, values[c.key], row.productUnit)}
+              </span>
+              {drawn !== null && (
+                <span
+                  className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-foreground/10"
+                  role="img"
+                  aria-label={`${Math.round(drawn * 100)}% of this PFI has been sold`}
+                  title={`${Math.round(drawn * 100)}% sold · ${cfoDisplay(c, values[c.key], row.productUnit)} left of ${Math.round(row.initialQty).toLocaleString('en-NG')} ${unitShort(row.productUnit)}`}
+                >
+                  <span
+                    className="block h-full rounded-full bg-accent/70"
+                    style={{ width: `${Math.max(drawn * 100, drawn > 0 ? 2 : 0)}%` }}
+                  />
+                </span>
+              )}
+            </span>
           ) : c.key === 'remarks' ? (
-            <span className="block max-w-[28ch] truncate" title={row.remarks}>
-              {row.remarks || <span className="text-muted-foreground">—</span>}
+            /*
+              A remark the row wrote about itself is muted and italic; one a
+              person typed is neither. On a document people sign off, a
+              generated sentence that looks like a colleague's is worse than
+              an empty cell.
+            */
+            <span
+              className={cn('block max-w-[30ch]', remark.auto && 'italic text-muted-foreground')}
+              title={remark.auto ? `${remark.text}\n\nGenerated from this row's own figures. Nobody typed this.` : remark.text}
+            >
+              {remark.text}
             </span>
           ) : c.key === 'bankInflow' && share !== null && share < 0.999 ? (
             // How much of this money an external auditor could tie to a bank
@@ -532,7 +591,11 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
         return (
           <TableCell
             key={c.key}
-            className={cn(CFO_NUMERIC.has(c.key) && 'text-right', corrected && 'font-medium text-blue-700 dark:text-blue-300')}
+            className={cn(
+              CFO_NUMERIC.has(c.key) && 'text-right tabular-nums',
+              c.key === 'remarks' && 'align-top',
+              corrected && 'font-medium text-blue-700 dark:text-blue-300',
+            )}
             title={
               corrected && c.field
                 ? `Corrected. System figure: ${cfoDisplay(c, row.computed[c.field], row.productUnit)}${row.updatedByName ? ` · by ${row.updatedByName}` : ''}`
@@ -543,7 +606,7 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
           </TableCell>
         )
       })}
-      <TableCell className="text-right">
+      <TableCell className="text-right align-top">
         <Button variant="ghost" size="sm" onClick={() => onEdit(row)} aria-label={`Edit ${row.pfiNumber}`}>
           <Pencil className="size-3.5" />
         </Button>
@@ -576,6 +639,11 @@ function ReportNotes({ meta }: { meta: NonNullable<ReturnType<typeof useCfoRepor
           cumulative sales volume. <span className="font-medium text-foreground">Surplus / (deficit)</span> =
           bank inflow − sales value. Both are derived from the cells beside them and cannot be typed
           over, so a row always adds up.
+        </p>
+        <p>
+          A <span className="italic">remark set in italics</span> was written by the row from its own
+          figures — nobody typed it. Type one and it replaces the generated sentence outright and is
+          shown in plain text. The bar under a stock balance shows how much of that PFI has sold.
         </p>
         {meta.partPaidHeld > 0 && (
           <p>

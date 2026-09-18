@@ -2,14 +2,15 @@ import { format, parseISO } from 'date-fns'
 import type { CfoReport, CfoDay, CfoRow, CfoTotals } from '#/lib/hooks/useCfoReport'
 import {
   CFO_COLUMNS, CFO_CORE_COLUMNS, cfoRowValues, cfoTotalValues, cfoDisplay,
-  quantityAcrossUnits, unitShort,
+  quantityAcrossUnits, unitShort, rowRemark, nairaIn, nairaSignedIn,
+  type CurrencyMark,
 } from './-cfo-columns'
 import {
   XL, PDF, NGN, NGN_SIGNED, COUNT, qtyFormat, ALL_BORDERS, TOTAL_BORDERS,
   HEADER_FILL, SUMMARY_FILL, TOTAL_FILL, GRAND_TOTAL_FILL,
   HEADER_FONT, TOTAL_FONT, SECTION_FONT, ROW_HEIGHT,
   writeTitleBlock, paintSigned, pdfStyles, drawPdfHeader, drawPdfFooters,
-  triggerDownload,
+  applySatoshi, triggerDownload,
 } from '#/lib/report-theme'
 
 /**
@@ -25,7 +26,7 @@ import {
  * as pre-formatted text. A column that reads like litres but is text cannot
  * be summed or pivoted, and that is the first thing anybody does with this
  * sheet. It also means each row carries its OWN unit format: 160,000 on an
- * LPG batch is kilogrammes and must not print "L".
+ * LPG PFI is kilogrammes and must not print "L".
  *
  * ── Shading means one thing ────────────────────────────────────────────────
  *
@@ -42,6 +43,27 @@ export interface CfoExportFilters {
   pfiNumber: string
   includeAll: boolean
 }
+
+/**
+ * Text the PDF's typefaces can actually draw.
+ *
+ * Applied to EVERY string this document renders, generated or typed. Two
+ * characters go missing silently, and silence is the problem:
+ *
+ *   U+2212 MINUS SIGN   absent from Satoshi and from jsPDF's Helvetica. It
+ *                       does not render as a box, it renders as nothing — so
+ *                       "initial qty − cumulative" printed as "initial qty
+ *                       cumulative", and a negative figure would print as a
+ *                       positive one. On a finance document that is not a
+ *                       typographic blemish, it is a wrong number.
+ *   U+20A6 NAIRA SIGN   absent from both, for the same reason the money
+ *                       columns use the ISO form. A remark somebody typed
+ *                       with a ₦ in it would otherwise print a broken bar.
+ *
+ * Mapped rather than stripped, so the meaning survives the substitution.
+ */
+const pdfSafe = (text: string): string =>
+  String(text ?? '').replace(/\u2212/g, '-').replace(/\u20A6/g, 'NGN ')
 
 const day = (iso: string) => format(parseISO(iso), 'EEEE, d MMMM yyyy')
 const dayShort = (iso: string) => format(parseISO(iso), 'd MMM yyyy')
@@ -70,7 +92,7 @@ function subtitle(report: CfoReport, filters: CfoExportFilters): string {
     `Period: ${filters.periodLabel}`,
     `Location: ${filters.locationName}`,
     `PFI: ${filters.pfiNumber}`,
-    filters.includeAll ? 'Showing: all batches' : 'Showing: batches trading',
+    filters.includeAll ? 'Showing: all PFIs' : 'Showing: PFIs trading',
     `Dates are ${report.meta.timezone} calendar days`,
   ].join('   ·   ')
 }
@@ -92,7 +114,7 @@ function summaryPairs(report: CfoReport): Array<[string, string | number, string
     .join(' · ')
 
   return [
-    ['Batches', t.rows, COUNT],
+    ['PFIs', t.rows, COUNT],
     ['Volume Sold In Period', periodVolume || '0'],
     ['Stock Balance', quantityAcrossUnits(t, (u) => u.stockBalance)],
     ['Sales Value To Date', t.salesValue, NGN],
@@ -110,9 +132,12 @@ function summaryPairs(report: CfoReport): Array<[string, string | number, string
  * against the audited finance report will find exactly these differences —
  * so the report states them itself instead of being caught out by them.
  */
-function footnotes(report: CfoReport): string[] {
+function footnotes(
+  report: CfoReport,
+  ngn: (n: number) => string = (n) =>
+    `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
+): string[] {
   const m = report.meta
-  const ngn = (n: number) => `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const notes: string[] = [
     'A sale is an order whose payment is confirmed, counted on the day the order was placed — the same rule the PFI page and the Finance Report use.',
     'Stock balance = initial qty − cumulative sales volume. Surplus / (deficit) = bank inflow − sales value. Both are derived and cannot be typed over.',
@@ -179,7 +204,7 @@ export async function exportCfoReportExcel(report: CfoReport, filters: CfoExport
 
   for (const d of report.days) {
     // A day with nothing on it is still stated. A silent gap reads as a
-    // missing page; "no batches trading" is an answer.
+    // missing page; "no PFIs trading" is an answer.
     cursor = writeDaySection(ws, cursor, d)
     cursor += 1
   }
@@ -234,7 +259,7 @@ function writeDaySection(ws: any, start: number, d: CfoDay): number {
 
   if (!d.rows.length) {
     const empty = ws.getRow(cursor)
-    empty.getCell(1).value = 'No batches trading on this date.'
+    empty.getCell(1).value = 'No PFIs trading on this date.'
     empty.getCell(1).font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
     empty.getCell(1).border = ALL_BORDERS
     ws.mergeCells(cursor, 1, cursor, CFO_COLUMNS.length)
@@ -252,6 +277,7 @@ function writeDaySection(ws: any, start: number, d: CfoDay): number {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
   const values = cfoRowValues(row, position)
+  const remark = rowRemark(row)
   const excelRow = ws.getRow(index)
   excelRow.values = values
   excelRow.height = ROW_HEIGHT.body
@@ -266,6 +292,17 @@ function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
       paintSigned(cell, row.surplusDeficit)
     }
     if (c.kind === 'text' || c.kind === 'index') cell.alignment = { vertical: 'middle', wrapText: c.key === 'remarks' }
+
+    /**
+     * A remark the row wrote about itself is set in the soft ink and says so
+     * in its note. On an audit sheet, a generated sentence that looks
+     * identical to one a person typed is worse than an empty cell — somebody
+     * will quote it back as a colleague's judgement.
+     */
+    if (c.key === 'remarks' && remark.auto) {
+      cell.font = { ...(cell.font || {}), italic: true, color: { argb: XL.inkSoft } }
+      cell.note = 'Generated from this row\u2019s own figures. Nobody typed this.'
+    }
 
     /**
      * A corrected cell is marked, and what the system said is put in the
@@ -333,24 +370,71 @@ function writeTotalRow(ws: any, index: number, totals: CfoTotals, label: string,
 export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFilters) {
   const { jsPDF } = await import('jspdf')
   const autoTable = (await import('jspdf-autotable')).default
-  // Landscape: twelve columns, four of them wide money figures, will not read
+  // Landscape: twelve columns, three of them wide money figures, will not read
   // on a portrait page.
   const doc = new jsPDF({ orientation: 'landscape', format: 'a4' })
 
-  let y = drawPdfHeader(
-    doc,
-    'CFO Report — Depot Sales per PFI',
-    subtitle(report, filters),
-  )
+  /**
+   * Satoshi, the face the rest of the company's documents are set in — and
+   * with it the ISO money form.
+   *
+   * Satoshi has no U+20A6, so a report set in it that printed "₦" would put an
+   * empty box beside every figure. Neither does jsPDF's core Helvetica, which
+   * is what the first version of this export used: it rendered a broken bar in
+   * place of the naira sign on every one of the three money columns. "NGN
+   * 32,784,600,000" is the standard form on a financial document anyway.
+   *
+   * If the face will not load the document still prints, in Helvetica — and
+   * then it keeps the ₦ sign, because only Satoshi lacks the glyph.
+   */
+  const satoshi = await applySatoshi(doc)
+  /**
+   * The currency mark this document can actually draw, threaded through every
+   * figure AND every generated remark.
+   *
+   * report-theme's own pdfNairaIso is not used, deliberately: it forces two
+   * decimal places, and ".00" on all three money columns is what pushed
+   * "NGN 32,784,600,000.00" past its column and split it across two lines.
+   * These writers share the screen's rule instead — kobo shown only where
+   * there is kobo — so the PDF and the page print a figure the same way.
+   */
+  const mark: CurrencyMark = satoshi ? 'NGN ' : '₦'
+  const money = nairaIn(mark)
+  const signedMoney = nairaSignedIn(mark)
+
+  /**
+   * autotable picks its own font and ignores the document's, so the face has
+   * to be handed to every table. Without it the headings come out in Satoshi
+   * and the tables beneath in Helvetica — the tell that makes a generated
+   * document look assembled rather than designed.
+   */
+  const face = satoshi ? { font: 'Satoshi' } : {}
+
+  /**
+   * The page margins, stated rather than inherited.
+   *
+   * autotable's default margin is large enough that the fixed column widths
+   * below would not fit inside it, and it would then shrink them back — which
+   * is how a figure ends up wrapped again after being given a width precisely
+   * so it would not. 14mm matches where drawPdfHeader puts the title, so the
+   * table lines up with the heading above it.
+   *
+   *   A4 landscape 297mm − 28mm of margin = 269mm, and the fixed widths come
+   *   to 242mm, leaving 27mm for Remarks.
+   */
+  const margin = { left: 14, right: 14 }
+
+  let y = drawPdfHeader(doc, 'CFO Report — Depot Sales per PFI', pdfSafe(subtitle(report, filters)))
 
   const pairs = summaryPairs(report)
   autoTable(doc, {
     startY: y,
     head: [pairs.map(([label]) => label)],
-    body: [pairs.map(([, value, fmt]) => pdfSummaryCell(value, fmt))],
+    body: [pairs.map(([, value, fmt]) => pdfSafe(pdfSummaryCell(value, fmt, money)))],
     theme: 'grid',
-    styles: { ...pdfStyles.body, halign: 'center', fontSize: 7 },
-    headStyles: { ...pdfStyles.head, fontSize: 6.8 },
+    margin,
+    styles: { ...pdfStyles.body, ...face, halign: 'center', fontSize: 7 },
+    headStyles: { ...pdfStyles.head, ...face, fontSize: 6.8 },
     // The surplus/deficit cell is the only one on this band that carries a
     // sign, and it is coloured the same way it is everywhere else.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -361,6 +445,27 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   y = (doc as any).lastAutoTable.finalY + 7
+
+  /**
+   * Fixed widths on every numeric column, in millimetres.
+   *
+   * Left to size itself by content, autotable wrapped money figures
+   * mid-number — "₦32,784,600,0" on one line, "00.00" on the next. That is not
+   * a hard-to-read figure, it is a wrong one, and it is the single worst thing
+   * a report like this can print. Remarks carries no width and takes what is
+   * left, which is correct: prose is the one thing on this sheet that should
+   * wrap.
+   */
+  const columnStyles: Record<number, { halign: 'left' | 'right'; cellWidth?: number }> =
+    Object.fromEntries(
+      CFO_CORE_COLUMNS.map((c, i) => [
+        i,
+        {
+          halign: (c.kind === 'text' || c.kind === 'index' ? 'left' : 'right') as 'left' | 'right',
+          ...(c.pdf ? { cellWidth: c.pdf } : {}),
+        },
+      ]),
+    )
 
   for (const d of report.days) {
     const pageHeight = doc.internal.pageSize.getHeight()
@@ -373,13 +478,17 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
 
     doc.setFontSize(9.5)
     doc.setTextColor(...PDF.brandGreen)
-    doc.text(day(d.date).toUpperCase(), 14, y)
+    doc.setFont(satoshi ? 'Satoshi' : 'helvetica', 'bold')
+    doc.text(pdfSafe(day(d.date).toUpperCase()), 14, y)
+    doc.setFont(satoshi ? 'Satoshi' : 'helvetica', 'normal')
     doc.setTextColor(...PDF.ink)
     y += 3
 
     const body = d.rows.map((row, i) => {
-      const values = cfoRowValues(row, i)
-      return CFO_CORE_COLUMNS.map((c) => cfoDisplay(c, values[c.key], row.productUnit))
+      const values = cfoRowValues(row, i, mark)
+      return CFO_CORE_COLUMNS.map((c) =>
+        pdfSafe(cfoDisplay(c, values[c.key], row.productUnit, money, signedMoney)),
+      )
     })
 
     const { values: totalValues, unit } = cfoTotalValues(d.totals, `${dayShort(d.date)} total`)
@@ -388,7 +497,7 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
           CFO_CORE_COLUMNS.map((c) => {
             const v = totalValues[c.key]
             if (v === null) return '—'
-            return cfoDisplay(c, v, unit || 'Litres')
+            return pdfSafe(cfoDisplay(c, v, unit || 'Litres', money, signedMoney))
           }),
         ]
       : undefined
@@ -396,46 +505,79 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
     autoTable(doc, {
       startY: y,
       head: [CFO_CORE_COLUMNS.map((c) => c.header)],
-      body: body.length ? body : [['—', 'No batches trading on this date.', ...Array(CFO_CORE_COLUMNS.length - 2).fill('')]],
+      body: body.length
+        ? body
+        : [['—', 'No PFIs trading on this date.', ...Array(CFO_CORE_COLUMNS.length - 2).fill('')]],
       foot,
       theme: 'grid',
-      styles: { ...pdfStyles.body, fontSize: 6, cellPadding: 1.6 },
-      headStyles: { ...pdfStyles.head, fontSize: 6 },
-      footStyles: { ...pdfStyles.foot, fontSize: 6 },
-      columnStyles: Object.fromEntries(
-        CFO_CORE_COLUMNS.map((c, i) => [
-          i,
-          { halign: c.kind === 'text' || c.kind === 'index' ? 'left' : 'right' },
-        ]),
-      ),
+      styles: { ...pdfStyles.body, ...face, fontSize: 6, cellPadding: 1.6 },
+      headStyles: { ...pdfStyles.head, ...face, fontSize: 6 },
+      footStyles: { ...pdfStyles.foot, ...face, fontSize: 6 },
+      columnStyles,
+      margin,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       didParseCell: (data: any) => {
         const column = CFO_CORE_COLUMNS[data.column.index]
         if (!column) return
-        if (data.section === 'foot' || data.section === 'body') {
-          if (column.kind === 'signed') {
-            const value = data.section === 'body' ? d.rows[data.row.index]?.surplusDeficit : d.totals.surplusDeficit
-            data.cell.styles.textColor = (value ?? 0) < 0 ? PDF.loss : PDF.gain
-          }
+
+        if (column.kind === 'signed' && (data.section === 'foot' || data.section === 'body')) {
+          const value =
+            data.section === 'body' ? d.rows[data.row.index]?.surplusDeficit : d.totals.surplusDeficit
+          data.cell.styles.textColor = (value ?? 0) < 0 ? PDF.loss : PDF.gain
         }
+
+        if (data.section !== 'body') return
+        const row = d.rows[data.row.index]
+        if (!row) return
+
         // Corrected cells, marked as they are in the workbook.
-        if (data.section === 'body' && column.field) {
-          const row = d.rows[data.row.index]
-          if (row?.edited.includes(column.field)) {
-            data.cell.styles.textColor = PDF.internal
-            data.cell.styles.fontStyle = 'bold'
-            data.cell.styles.fillColor = PDF.internalTint
-          }
+        if (column.field && row.edited.includes(column.field)) {
+          data.cell.styles.textColor = PDF.internal
+          data.cell.styles.fontStyle = 'bold'
+          data.cell.styles.fillColor = PDF.internalTint
+        }
+
+        // A remark the row wrote about itself is set in italic soft ink, so it
+        // cannot be read as a colleague's words.
+        if (column.key === 'remarks' && rowRemark(row, mark).auto) {
+          data.cell.styles.textColor = PDF.inkSoft
+          data.cell.styles.fontStyle = 'italic'
         }
       },
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    y = (doc as any).lastAutoTable.finalY + 7
+    y = (doc as any).lastAutoTable.finalY
+
+    /**
+     * Where a day holds more than one unit its quantity totals are blank —
+     * litres and kilogrammes have no sum — so the per-unit figures go
+     * underneath in words. Without this the PDF simply lost them: the screen
+     * states them under the table and the workbook puts them in the totals
+     * row, and only this document had four dashes and no explanation.
+     */
+    const units = Object.values(d.totals.byUnit)
+    if (units.length > 1) {
+      y += 3.5
+      doc.setFontSize(6.5)
+      doc.setTextColor(...PDF.inkSoft)
+      doc.text(
+        pdfSafe(`Quantities are not totalled across units.  ${units
+          .map(
+            (u) =>
+              `${unitShort(u.unit)} — sold today ${Math.round(u.dayVolume).toLocaleString('en-NG')}, balance ${Math.round(u.stockBalance).toLocaleString('en-NG')}`,
+          )
+          .join('   ·   ')}`),
+        14,
+        y,
+      )
+      doc.setTextColor(...PDF.ink)
+    }
+    y += 7
   }
 
   // The notes close the document, on a page of their own if there is no room
   // for them — a footnote split across a page break is a footnote nobody reads.
-  const notes = footnotes(report)
+  const notes = footnotes(report, money)
   const pageHeight = doc.internal.pageSize.getHeight()
   const pageWidth = doc.internal.pageSize.getWidth()
   if (y > pageHeight - (14 + notes.length * 9)) {
@@ -445,7 +587,7 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
   doc.setFontSize(8)
   doc.setTextColor(...PDF.inkSoft)
   for (const note of notes) {
-    const lines = doc.splitTextToSize(`•  ${note}`, pageWidth - 28)
+    const lines = doc.splitTextToSize(pdfSafe(`•  ${note}`), pageWidth - 28)
     doc.text(lines, 14, y)
     y += lines.length * 3.6 + 2.4
   }
@@ -464,14 +606,14 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
  * The naira glyph is in the core jsPDF fonts (this document is not set in
  * Satoshi, which has no U+20A6), so money keeps its symbol here.
  */
-function pdfSummaryCell(value: string | number, fmt?: string): string {
+function pdfSummaryCell(
+  value: string | number,
+  fmt: string | undefined,
+  money: (n: number) => string,
+): string {
   if (typeof value === 'string') return value
   if (fmt === NGN || fmt === NGN_SIGNED) {
-    const abs = Math.abs(value).toLocaleString('en-NG', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-    return value < 0 ? `(₦${abs})` : `₦${abs}`
+    return value < 0 ? `(${money(Math.abs(value))})` : money(value)
   }
   return value.toLocaleString('en-NG')
 }
