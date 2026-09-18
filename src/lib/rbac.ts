@@ -550,6 +550,38 @@ export function getRoutePermissions(routePath: string): RoutePermissions | null 
  */
 export const CLOSED_BY_DEFAULT = ['/delivery-costing'] as const
 
+/**
+ * Pages only an explicit grant opens — for everybody, super admin included.
+ *
+ * Stricter than CLOSED_BY_DEFAULT in the one way that matters: there is no
+ * role that admits you and no fallback if nobody has granted you. Absence of a
+ * grant is a refusal.
+ *
+ * ── Why this is separate from CLOSED_BY_DEFAULT ───────────────────────────
+ *
+ * A closed page still lets a super admin in when nobody has said otherwise,
+ * which is right for /delivery-costing — a wide page with a different
+ * instruction behind it. It is wrong for the CFO report: four people hold
+ * super_admin and only three were named, so a role bypass would admit exactly
+ * the person the request excluded. "Only these three" has to mean three.
+ *
+ * ── It mirrors a server gate, deliberately ────────────────────────────────
+ *
+ * This is the same rule, on the same grant, as maySeeCfoReport in
+ * Sman-Backend/middleware/cfoReportAccess.js — an override row with
+ * allowed = true, and nothing else. The two MUST agree: a page the menu offers
+ * and the API refuses is the confusing state both layers exist to prevent, and
+ * it is the documented reason role gating was switched off across the
+ * dashboard in the first place.
+ */
+export const GRANT_ONLY = ['/cfo-report'] as const
+
+export function isGrantOnly(routePath: string): boolean {
+  return GRANT_ONLY.some(
+    (base) => routePath === base || routePath.startsWith(base + '/'),
+  )
+}
+
 export function isClosedByDefault(routePath: string): boolean {
   return CLOSED_BY_DEFAULT.some(
     (base) => routePath === base || routePath.startsWith(base + '/'),
@@ -559,6 +591,12 @@ export function isClosedByDefault(routePath: string): boolean {
 export function canAccessRoute(userRoles: number[], routePath: string, overrides?: Record<string, boolean>): boolean {
   const override = resolveOverride(overrides, routePath)
   const closed = isClosedByDefault(routePath)
+
+  /**
+   * A grant-only page is opened by the grant and by nothing else — checked
+   * first, so no role reaches past it. See GRANT_ONLY.
+   */
+  if (isGrantOnly(routePath)) return override === true
 
   /**
    * On a closed page, an explicit denial beats being a super admin.
