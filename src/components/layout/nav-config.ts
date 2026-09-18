@@ -109,6 +109,7 @@ export const navCategories: NavCategory[] = [
     items: [
       // { title: "Verify Payments", icon: ShieldCheck, path: "/payment-verify" },
       { title: "Finance Report", icon: FileSpreadsheet, path: "/confirmed-payments" },
+      { title: "CFO Report", icon: Calculator, path: "/cfo-report" },
       { title: "Pending Orders", icon: Wallet, path: "/payable-orders" },
       { title: "Deposits", icon: Receipt, path: "/deposits" },
       // { title: "Overpayment Refunds", icon: DollarSign, path: "/overpayment-refunds" },

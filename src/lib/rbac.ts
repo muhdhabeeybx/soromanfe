@@ -426,6 +426,10 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermissions> = {
   '/my-report': { view: [0, 5, 9, 10, 15, 16, 18], create: [], edit: [], delete: [] },
   '/payment-verify': { view: [0, 1, 2, 8], create: [], edit: [], delete: [] },
   '/confirmed-payments': { view: [0, 1, 2, 8], create: [], edit: [], delete: [] },
+  // Same audience as the Finance Report it sits beside — super admin, admin,
+  // finance and audit. `edit` is the correction form, which is the one
+  // action on this page that changes a document people sign off.
+  '/cfo-report': { view: [0, 1, 2, 8], create: [], edit: [0, 1, 2, 8], delete: [] },
   '/overpayment-refunds': { view: [0], create: [], edit: [], delete: [] },
   '/overpayment-requests': { view: [0], create: [], edit: [], delete: [] },
   '/lpg': { view: [0, 1, 8, 11, 13, 14], create: [], edit: [], delete: [] },

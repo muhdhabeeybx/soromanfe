@@ -26,6 +26,7 @@ import { Route as BankAccountsIndexRouteImport } from './routes/bank-accounts/in
 import { Route as BankAccountsDetailsRouteImport } from './routes/bank-accounts/details'
 import { Route as BankAccountsFormRouteImport } from './routes/bank-accounts/form'
 import { Route as BankStatementsIndexRouteImport } from './routes/bank-statements/index'
+import { Route as CfoReportIndexRouteImport } from './routes/cfo-report/index'
 import { Route as CommissionRatesIndexRouteImport } from './routes/commission-rates/index'
 import { Route as CommissionsIndexRouteImport } from './routes/commissions/index'
 import { Route as CompanyDashboardIndexRouteImport } from './routes/company-dashboard/index'
@@ -209,6 +210,11 @@ const BankAccountsFormRoute = BankAccountsFormRouteImport.update({
 const BankStatementsIndexRoute = BankStatementsIndexRouteImport.update({
   id: '/bank-statements/',
   path: '/bank-statements/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CfoReportIndexRoute = CfoReportIndexRouteImport.update({
+  id: '/cfo-report/',
+  path: '/cfo-report/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CommissionRatesIndexRoute = CommissionRatesIndexRouteImport.update({
@@ -764,6 +770,7 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/bank-accounts/': typeof BankAccountsIndexRoute
   '/bank-statements/': typeof BankStatementsIndexRoute
+  '/cfo-report/': typeof CfoReportIndexRoute
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
   '/company-dashboard/': typeof CompanyDashboardIndexRoute
@@ -880,6 +887,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/bank-accounts': typeof BankAccountsIndexRoute
   '/bank-statements': typeof BankStatementsIndexRoute
+  '/cfo-report': typeof CfoReportIndexRoute
   '/commission-rates': typeof CommissionRatesIndexRoute
   '/commissions': typeof CommissionsIndexRoute
   '/company-dashboard': typeof CompanyDashboardIndexRoute
@@ -997,6 +1005,7 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/bank-accounts/': typeof BankAccountsIndexRoute
   '/bank-statements/': typeof BankStatementsIndexRoute
+  '/cfo-report/': typeof CfoReportIndexRoute
   '/commission-rates/': typeof CommissionRatesIndexRoute
   '/commissions/': typeof CommissionsIndexRoute
   '/company-dashboard/': typeof CompanyDashboardIndexRoute
@@ -1115,6 +1124,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/bank-accounts/'
     | '/bank-statements/'
+    | '/cfo-report/'
     | '/commission-rates/'
     | '/commissions/'
     | '/company-dashboard/'
@@ -1231,6 +1241,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/bank-accounts'
     | '/bank-statements'
+    | '/cfo-report'
     | '/commission-rates'
     | '/commissions'
     | '/company-dashboard'
@@ -1347,6 +1358,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/bank-accounts/'
     | '/bank-statements/'
+    | '/cfo-report/'
     | '/commission-rates/'
     | '/commissions/'
     | '/company-dashboard/'
@@ -1464,6 +1476,7 @@ export interface RootRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
   BankAccountsIndexRoute: typeof BankAccountsIndexRoute
   BankStatementsIndexRoute: typeof BankStatementsIndexRoute
+  CfoReportIndexRoute: typeof CfoReportIndexRoute
   CommissionRatesIndexRoute: typeof CommissionRatesIndexRoute
   CommissionsIndexRoute: typeof CommissionsIndexRoute
   CompanyDashboardIndexRoute: typeof CompanyDashboardIndexRoute
@@ -1643,6 +1656,13 @@ declare module '@tanstack/react-router' {
       path: '/bank-statements'
       fullPath: '/bank-statements/'
       preLoaderRoute: typeof BankStatementsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cfo-report/': {
+      id: '/cfo-report/'
+      path: '/cfo-report'
+      fullPath: '/cfo-report/'
+      preLoaderRoute: typeof CfoReportIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/commission-rates/': {
@@ -2385,6 +2405,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
   BankAccountsIndexRoute: BankAccountsIndexRoute,
   BankStatementsIndexRoute: BankStatementsIndexRoute,
+  CfoReportIndexRoute: CfoReportIndexRoute,
   CommissionRatesIndexRoute: CommissionRatesIndexRoute,
   CommissionsIndexRoute: CommissionsIndexRoute,
   CompanyDashboardIndexRoute: CompanyDashboardIndexRoute,
