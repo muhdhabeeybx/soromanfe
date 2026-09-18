@@ -19,6 +19,8 @@ const row = (over: Partial<CfoRow> = {}): CfoRow => ({
   computed: {
     initialQty: 23213083, cumulativeVolume: 22534950, dayVolume: 936000,
     salesValue: 28425100000, bankInflow: 28441100000, statementInflow: 27000000000,
+    // 1.44bn of wallet-era money with no statement line, and net transfers in.
+    legacyInflow: 1441100000, transferIn: 100000000, transferOut: -100000000,
     stockBalance: 678133, surplusDeficit: 16000000,
   },
   edited: [], remarks: '', updatedBy: null, updatedByName: null, updatedAt: null,
@@ -120,6 +122,84 @@ describe('CFO report exports', () => {
     // Money is a number with a naira format, so the column can be summed.
     const { NGN } = await import('#/lib/report-theme')
     expect(cells.some((c) => c.numFmt === NGN && c.value === 28425100000)).toBe(true)
+
+    // The workbook keeps PFI and Location APART — a spreadsheet gets filtered
+    // and pivoted one field at a time, and joining them only forces somebody
+    // to split the column back out. The screen and the PDF merge them.
+    const { CFO_SHEET_COLUMNS, CFO_CORE_COLUMNS } = await import('./-cfo-columns')
+    const sheetKeys = CFO_SHEET_COLUMNS.map((c) => c.key)
+    expect(sheetKeys).toContain('pfi')
+    expect(sheetKeys).toContain('location')
+    expect(sheetKeys).not.toContain('pfiLocation')
+    const docKeys = CFO_CORE_COLUMNS.map((c) => c.key)
+    expect(docKeys).toContain('pfiLocation')
+    expect(docKeys).not.toContain('location')
+
+    // Traced-to-bank sits immediately beside the inflow it qualifies — on its
+    // own it is a number nobody can act on.
+    expect(docKeys.indexOf('bankBacked')).toBe(docKeys.indexOf('bankInflow') + 1)
+    expect(docKeys.indexOf('inflowMakeup')).toBe(docKeys.indexOf('bankBacked') + 1)
+
+    // A share is written as a percentage, not as a raw fraction.
+    expect(cells.some((c) => c.numFmt === '0%')).toBe(true)
+  })
+
+  test('traced-to-bank is the non-legacy share, and cannot exceed 100%', async () => {
+    const { bankBackedShare } = await import('#/lib/hooks/useCfoReport')
+
+    // The defect this pins: statementInflow ÷ bankInflow went ABOVE 1 on any
+    // PFI that had transferred surplus away — on 18 September PFI 39 held
+    // ₦29,388m against ₦29,524m of statement lines, because ₦202m had moved
+    // to another order. "100.5% bank-backed" is a ratio of two things that do
+    // not divide.
+    const transferred = row({
+      computed: { ...row().computed, bankInflow: 29388300000, statementInflow: 29524100000, legacyInflow: 100000, transferIn: 0, transferOut: -135900000 },
+    })
+    const share = bankBackedShare(transferred)!
+    expect(share).toBeLessThanOrEqual(1)
+    expect(Math.round(share * 100)).toBe(100)
+
+    // Legacy money is the part nothing can evidence, so it is the part that
+    // moves this figure.
+    const legacy = row({
+      computed: { ...row().computed, bankInflow: 33516900000, statementInflow: 30916500000, legacyInflow: 2545900000, transferIn: 54400000, transferOut: 0 },
+    })
+    expect(Math.round(bankBackedShare(legacy)! * 100)).toBe(92)
+
+    // A corrected inflow has no known composition, so nothing is claimed.
+    expect(bankBackedShare(row({ edited: ['bankInflow'] }))).toBeNull()
+  })
+
+  test('the stock bar measures what is LEFT, and reddens as it empties', async () => {
+    const { stockShare, stockState } = await import('./-cfo-columns')
+
+    // The defect this pins: the bar used to grow as the balance fell, because
+    // it was drawn from cumulative sales — sales progress, which is a
+    // different fact in the opposite direction.
+    const full = row({ initialQty: 1000, cumulativeVolume: 0, stockBalance: 1000 })
+    const empty = row({ initialQty: 1000, cumulativeVolume: 1000, stockBalance: 0 })
+    expect(stockShare(full)).toBe(1)
+    expect(stockShare(empty)).toBe(0)
+
+    expect(stockState(row({ initialQty: 1000, stockBalance: 900 }))).toBe('healthy')
+    expect(stockState(row({ initialQty: 1000, stockBalance: 200 }))).toBe('fair')
+    expect(stockState(row({ initialQty: 1000, stockBalance: 50 }))).toBe('low')
+  })
+
+  test('the untraced money says what it actually is', async () => {
+    const { inflowMakeup } = await import('./-cfo-columns')
+
+    expect(
+      inflowMakeup(row({ computed: { ...row().computed, legacyInflow: 2545900000, transferIn: 54400000, transferOut: 0 } })),
+    ).toBe('₦2.55bn legacy — no bank record · ₦54.4m in from other orders')
+
+    expect(
+      inflowMakeup(row({ computed: { ...row().computed, legacyInflow: 0, transferIn: 0, transferOut: -135900000 } })),
+    ).toBe('₦135.9m out to other orders')
+
+    expect(
+      inflowMakeup(row({ computed: { ...row().computed, legacyInflow: 0, transferIn: 0, transferOut: 0 } })),
+    ).toBe('All matched to bank lines')
   })
 
   test('the PDF renders a real document, every day of it', async () => {

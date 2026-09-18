@@ -1,4 +1,4 @@
-import type { CfoRow, CfoTotals, CfoOverrideField } from '#/lib/hooks/useCfoReport'
+import { bankBackedShare, type CfoRow, type CfoTotals, type CfoOverrideField } from '#/lib/hooks/useCfoReport'
 
 /**
  * The CFO report's columns, defined once for the screen, the workbook and the
@@ -10,7 +10,7 @@ import type { CfoRow, CfoTotals, CfoOverrideField } from '#/lib/hooks/useCfoRepo
  * somebody has acted on one of them.
  */
 
-export type CfoColumnKind = 'index' | 'text' | 'qty' | 'money' | 'signed'
+export type CfoColumnKind = 'index' | 'text' | 'qty' | 'money' | 'signed' | 'percent'
 
 export interface CfoColumn {
   key: string
@@ -23,71 +23,102 @@ export interface CfoColumn {
    * PDF column width, in millimetres.
    *
    * Set on every numeric column and left off the prose ones. Without it
-   * autotable sizes columns by content and a money figure at 12 columns wide
-   * wrapped mid-number — "₦32,784,600,0" on one line and "00.00" on the next,
-   * which is not a hard-to-read figure, it is a wrong one.
+   * autotable sizes columns by content and a money figure at this many columns
+   * wrapped mid-number — "NGN 32,784,600,0" on one line and "00.00" on the
+   * next, which is not a hard-to-read figure, it is a wrong one.
    */
   pdf?: number
   /** Which override this cell carries, where it carries one. */
   field?: CfoOverrideField
-  /** Kept off the PDF — it is a portrait-width document and will not take it. */
-  auditOnly?: boolean
+  /**
+   * Which documents the column belongs to.
+   *
+   *   'sheet'  the workbook only
+   *   'doc'    the screen and the PDF only
+   *   absent   all three
+   *
+   * The two are not the same document and should not carry the same columns.
+   * A spreadsheet gets filtered and pivoted one field at a time, so PFI and
+   * Location stay apart there; on screen and on a page they are read as one
+   * thing, so they share a cell and give the width back to Remarks. The same
+   * reasoning the gate register already uses for Customer and Company.
+   */
+  only?: 'sheet' | 'doc'
+  /** Figures a reader's eye should land on first. */
+  bold?: true
 }
 
 /**
- * In reading order: what the PFI is, what it started with, what has gone,
- * what is left, what that came to, what reached the bank, and the gap.
+ * In reading order: what the PFI is, what it started with, what has gone, what
+ * is left, what that came to, what reached the bank, how much of that can be
+ * evidenced, and the gap.
  *
- * A reader takes the quantity block and the money block as two groups, so
- * they are not interleaved even though stock balance and sales value are
- * about the same litres.
+ * A reader takes the quantity block and the money block as two groups, so they
+ * are not interleaved even though stock balance and sales value are about the
+ * same litres.
  */
 export const CFO_COLUMNS: CfoColumn[] = [
-  { key: 'sn', header: 'S/N', kind: 'index', width: 6, pdf: 9 },
-  { key: 'pfi', header: 'PFI', kind: 'text', width: 32, pdf: 28 },
-  { key: 'location', header: 'Location', kind: 'text', width: 26, pdf: 22 },
-  { key: 'product', header: 'Product', kind: 'text', width: 13, pdf: 14 },
-  { key: 'initialQty', header: 'Initial Qty', kind: 'qty', width: 16, pdf: 19, field: 'initialQty' },
+  { key: 'sn', header: 'S/N', kind: 'index', width: 6, pdf: 7 },
+
+  // Screen and PDF: one cell, PFI over location. Workbook: two columns.
+  { key: 'pfiLocation', header: 'PFI', kind: 'text', width: 32, pdf: 30, only: 'doc' },
+  { key: 'pfi', header: 'PFI', kind: 'text', width: 32, only: 'sheet' },
+  { key: 'location', header: 'Location', kind: 'text', width: 26, only: 'sheet' },
+
+  { key: 'product', header: 'Product', kind: 'text', width: 13, pdf: 13 },
+  { key: 'initialQty', header: 'Initial Qty', kind: 'qty', width: 16, pdf: 17, field: 'initialQty' },
   {
     key: 'cumulativeVolume',
     header: 'Cumulative Sales Volume',
     kind: 'qty',
     width: 20,
-    pdf: 21,
+    pdf: 17,
     field: 'cumulativeVolume',
   },
-  { key: 'dayVolume', header: "Sales Volume (Day)", kind: 'qty', width: 17, pdf: 19, field: 'dayVolume' },
+  { key: 'dayVolume', header: 'Sales Volume (Day)', kind: 'qty', width: 17, pdf: 17, field: 'dayVolume' },
   // Derived — no `field`, so nothing renders an input over it. See the header
   // of useCfoReport for why these two cannot be typed.
-  { key: 'stockBalance', header: 'Stock Balance', kind: 'qty', width: 17, pdf: 19 },
-  { key: 'salesValue', header: 'Sales Value To Date', kind: 'money', width: 23, pdf: 31, field: 'salesValue' },
+  { key: 'stockBalance', header: 'Stock Balance', kind: 'qty', width: 17, pdf: 17, bold: true },
+
+  { key: 'salesValue', header: 'Sales Value To Date', kind: 'money', width: 23, pdf: 28, field: 'salesValue', bold: true },
   {
     key: 'bankInflow',
     header: 'Bank Inflow Confirmed',
     kind: 'money',
     width: 23,
-    pdf: 31,
+    pdf: 28,
     field: 'bankInflow',
+    bold: true,
   },
-  { key: 'surplusDeficit', header: 'Surplus / (Deficit)', kind: 'signed', width: 23, pdf: 29 },
-  // No pdf width: Remarks takes whatever the numeric columns leave, and prose
-  // is the one thing on this sheet that SHOULD wrap.
-  { key: 'remarks', header: 'Remarks', kind: 'text', width: 46 },
   /**
-   * Two columns the workbook carries and the screen and the page do not.
+   * How much of that money you could put a bank statement in front of.
    *
-   * A spreadsheet is where this report gets checked line by line, and the two
-   * questions asked there are "how much of this money can I tie to a bank
-   * statement" and "who changed this row". Neither belongs in the twelve
-   * columns the report is read as, and both are wanted the moment somebody
-   * starts reconciling.
+   * Sits immediately beside the inflow it qualifies, because on its own it is
+   * a number nobody can act on — and the column after it says what the
+   * remainder actually is. See bankBackedShare for why this is the non-legacy
+   * share rather than the statement share.
    */
-  { key: 'bankBacked', header: 'Of Which Bank-Backed', kind: 'money', width: 23, auditOnly: true },
-  { key: 'correctedBy', header: 'Corrected By', kind: 'text', width: 22, auditOnly: true },
+  { key: 'bankBacked', header: 'Traced To Bank', kind: 'percent', width: 14, pdf: 13 },
+  { key: 'inflowMakeup', header: 'What Is Not Traced', kind: 'text', width: 30, pdf: 24 },
+
+  { key: 'surplusDeficit', header: 'Surplus / (Deficit)', kind: 'signed', width: 23, pdf: 24, bold: true },
+  // No pdf width: Remarks takes whatever the columns before it leave, and
+  // prose is the one thing on this sheet that SHOULD wrap.
+  { key: 'remarks', header: 'Remarks', kind: 'text', width: 46 },
+
+  /**
+   * The workbook's own audit column. A spreadsheet is where this report gets
+   * checked line by line, and "who changed this row" is asked there and
+   * nowhere else.
+   */
+  { key: 'correctedBy', header: 'Corrected By', kind: 'text', width: 22, only: 'sheet' },
 ]
 
-/** The twelve the screen and the PDF show. */
-export const CFO_CORE_COLUMNS = CFO_COLUMNS.filter((c) => !c.auditOnly)
+/** What the workbook carries. */
+export const CFO_SHEET_COLUMNS = CFO_COLUMNS.filter((c) => c.only !== 'doc')
+
+/** What the screen and the PDF carry. */
+export const CFO_CORE_COLUMNS = CFO_COLUMNS.filter((c) => c.only !== 'sheet')
 
 /** Right-aligned everywhere: the figures. */
 export const CFO_NUMERIC = new Set(
@@ -178,43 +209,75 @@ export function qtyText(n: number, unit: string): string {
 }
 
 /**
- * How drawn down a PFI is: 0 when the tank is untouched, 1 when it is empty.
+ * How much of the PFI is STILL THERE: 1 when the tank is untouched, 0 when it
+ * is empty.
+ *
+ * Deliberately the remaining share, not the sold share. The bar sits directly
+ * under the Stock Balance figure and has to move with it — a bar that GREW as
+ * the balance fell was showing sales progress, which is a different fact in
+ * the opposite direction, and it drew a full bar under a PFI with nothing left
+ * in the tank.
  *
  * Null where there is no initial quantity to measure against — a bar drawn
- * from a denominator of zero is a bar that means nothing, and it must read as
- * "not known" rather than as "full" or "empty". Clamped, because a PFI can be
- * oversold: more confirmed orders than the tank ever held is a real state, and
- * it is reported in the figures rather than by a bar running off its track.
+ * from a denominator of zero means nothing and must read as "not known".
+ * Clamped, because a PFI can be oversold: more confirmed orders than the tank
+ * ever held is a real state, reported in the figures rather than by a bar
+ * running off its track.
  */
-export function drawnDownShare(row: CfoRow): number | null {
+export function stockShare(row: CfoRow): number | null {
   if (!row.initialQty) return null
-  return Math.min(1, Math.max(0, row.cumulativeVolume / row.initialQty))
+  return Math.min(1, Math.max(0, row.stockBalance / row.initialQty))
 }
 
 /**
- * Where a PFI stands on money — the polarity question, as a labelled state.
+ * Whether a PFI is running out, as a state rather than a bare number.
  *
- * A label, not just a colour. The palette already reserves red and green for
- * signed money, and this is what lets that pairing carry a word beside it so
- * the state survives a monochrome print-out and a colour-blind reader, which
- * a coloured figure on its own does not.
- *
- * "Settled" is a strict zero rather than a tolerance. Five payments on the
- * whole book carry kobo, and rounding a ₦0.99 discrepancy away on a
- * reconciliation sheet is precisely the quiet wrong number this report exists
- * to surface.
+ * Presentation thresholds, not business rules — the exact balance sits in the
+ * column the bar is under, and this only decides the colour. Low stock is the
+ * one genuinely actionable state on this sheet: it is the row that means
+ * "order more, now", which is why it is the only one allowed to go red.
  */
-export type MoneyState = 'settled' | 'surplus' | 'deficit'
+export type StockState = 'low' | 'fair' | 'healthy'
 
-export function moneyState(row: CfoRow): MoneyState {
-  if (row.surplusDeficit === 0) return 'settled'
-  return row.surplusDeficit > 0 ? 'surplus' : 'deficit'
+export function stockState(row: CfoRow): StockState {
+  const share = stockShare(row)
+  if (share === null) return 'healthy'
+  if (share <= 0.1) return 'low'
+  if (share <= 0.25) return 'fair'
+  return 'healthy'
 }
 
-export const MONEY_STATE_LABEL: Record<MoneyState, string> = {
-  settled: 'Settled',
-  surplus: 'Surplus',
-  deficit: 'Deficit',
+/**
+ * What the money that is NOT a direct bank line consists of.
+ *
+ * "92% traced to bank" raises a question and answers none of it. The missing
+ * 8% is either wallet-era money with no statement line recorded anywhere, or
+ * surplus moved between orders — two completely different conversations, and
+ * the desk cannot act until it knows which.
+ *
+ * Legacy first, because that is the part for which no evidence can be
+ * produced at all. Transfers are netted into one figure with a direction:
+ * "in from other orders" and "out to other orders" are the same movement seen
+ * from two ends, and a PFI showing both is showing churn, not two facts.
+ */
+export function inflowMakeup(row: CfoRow, symbol: CurrencyMark = '₦'): string {
+  if (row.edited.includes('bankInflow')) return 'Corrected — composition not known'
+
+  const { legacyInflow, transferIn, transferOut } = row.computed
+  const parts: string[] = []
+
+  if (legacyInflow > 0) parts.push(`${nairaCompact(legacyInflow, symbol)} legacy — no bank record`)
+
+  const netTransfer = transferIn + transferOut
+  if (Math.abs(netTransfer) >= 1) {
+    parts.push(
+      netTransfer > 0
+        ? `${nairaCompact(netTransfer, symbol)} in from other orders`
+        : `${nairaCompact(Math.abs(netTransfer), symbol)} out to other orders`,
+    )
+  }
+
+  return parts.length ? parts.join(' · ') : 'All matched to bank lines'
 }
 
 /**
@@ -243,7 +306,7 @@ export const MONEY_STATE_LABEL: Record<MoneyState, string> = {
  * unusual, so it keeps its force.
  */
 /**
- * How drawn down a PFI has to be before the remark says so.
+ * How little has to be left before the remark says the PFI is nearly dry.
  *
  * A presentation threshold, not a business rule — the exact balance is in the
  * column directly above, and this only decides whether the sentence bothers to
@@ -251,7 +314,7 @@ export const MONEY_STATE_LABEL: Record<MoneyState, string> = {
  * phrase and it would stop meaning anything; at 98% it flags the two that are
  * genuinely about to run out.
  */
-const NEARLY_DRY = 0.98
+const NEARLY_DRY = 0.02
 
 export function rowRemark(
   row: CfoRow,
@@ -267,18 +330,23 @@ export function rowRemark(
       : 'No movement.',
   )
 
-  const share = drawnDownShare(row)
+  const share = stockShare(row)
   if (row.stockBalance <= 0) {
     parts.push('Fully drawn down.')
-  } else if (share !== null && share >= NEARLY_DRY) {
+  } else if (share !== null && share <= NEARLY_DRY) {
     parts.push(`Nearly dry — ${qtyText(row.stockBalance, row.productUnit)} left.`)
   }
 
-  // Kept short on purpose. This is the last column on a twelve-column sheet
-  // and every extra clause is another wrapped line in the PDF.
-  const state = moneyState(row)
-  if (state === 'settled') parts.push('Settled in full.')
-  else if (state === 'deficit') parts.push(`${nairaCompact(Math.abs(row.surplusDeficit), symbol)} still owed.`)
+  /*
+   * Kept short on purpose. This is the last column on a thirteen-column sheet
+   * and every extra clause is another wrapped line in the PDF.
+   *
+   * A strict zero rather than a tolerance: five payments on the whole book
+   * carry kobo, and rounding a ₦0.99 discrepancy away on a reconciliation
+   * sheet is precisely the quiet wrong number this report exists to surface.
+   */
+  if (row.surplusDeficit === 0) parts.push('Settled in full.')
+  else if (row.surplusDeficit < 0) parts.push(`${nairaCompact(Math.abs(row.surplusDeficit), symbol)} still owed.`)
   else parts.push(`${nairaCompact(row.surplusDeficit, symbol)} surplus held.`)
 
   return { text: parts.join(' '), auto: true }
@@ -309,13 +377,22 @@ export function cfoRowValues(
     salesValue: row.salesValue,
     bankInflow: row.bankInflow,
     surplusDeficit: row.surplusDeficit,
+    /**
+     * Screen and PDF: the PFI over the place it trades from, one cell.
+     *
+     * "\n" rather than two fields — autotable renders it as a line break and
+     * the screen splits on it, so both documents get the same two lines from
+     * the same string.
+     */
+    pfiLocation: `${row.pfiNumber}\n${row.locationName}`,
+    // Null-ish rather than 0 once the inflow has been corrected: the
+    // composition describes the payment rows the system found and says
+    // nothing about a figure somebody typed. See bankBackedShare.
+    bankBacked: bankBackedShare(row) ?? '',
+    inflowMakeup: inflowMakeup(row, symbol),
     // The typed remark, or the one the row writes about itself. Callers that
     // need to know which it was ask rowRemark directly — see its header.
     remarks: rowRemark(row, symbol).text,
-    // Blank rather than 0 once the inflow has been corrected: the
-    // statement-backed portion describes the payment rows the system found and
-    // says nothing about a figure somebody typed. See verifiableShare.
-    bankBacked: row.edited.includes('bankInflow') ? '' : row.computed.statementInflow,
     correctedBy: row.updatedByName || '',
   }
 }
@@ -343,6 +420,9 @@ export function cfoDisplay(
   if (column.kind === 'money') return value === '' ? '—' : money(Number(value) || 0)
   if (column.kind === 'signed') return signed(Number(value) || 0)
   if (column.kind === 'index') return String(value)
+  // A share the system could not work out is a dash, never 0% — "0% traced to
+  // bank" is a serious claim and "we did not compute this" is not that claim.
+  if (column.kind === 'percent') return value === '' ? '—' : `${Math.round(Number(value) * 100)}%`
   return String(value ?? '') || '—'
 }
 
@@ -377,8 +457,10 @@ export function cfoTotalValues(
       salesValue: totals.salesValue,
       bankInflow: totals.bankInflow,
       surplusDeficit: totals.surplusDeficit,
-      remarks: '',
+      pfiLocation: label,
       bankBacked: null,
+      inflowMakeup: '',
+      remarks: '',
       correctedBy: '',
     },
   }

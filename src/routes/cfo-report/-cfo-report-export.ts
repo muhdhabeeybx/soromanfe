@@ -1,7 +1,7 @@
 import { format, parseISO } from 'date-fns'
 import type { CfoReport, CfoDay, CfoRow, CfoTotals } from '#/lib/hooks/useCfoReport'
 import {
-  CFO_COLUMNS, CFO_CORE_COLUMNS, cfoRowValues, cfoTotalValues, cfoDisplay,
+  CFO_SHEET_COLUMNS, CFO_CORE_COLUMNS, cfoRowValues, cfoTotalValues, cfoDisplay,
   quantityAcrossUnits, unitShort, rowRemark, nairaIn, nairaSignedIn,
   type CurrencyMark,
 } from './-cfo-columns'
@@ -166,12 +166,12 @@ export async function exportCfoReportExcel(report: CfoReport, filters: CfoExport
   const ws = wb.addWorksheet('CFO Report', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   })
-  ws.columns = CFO_COLUMNS.map((c) => ({ key: c.key, width: c.width }))
+  ws.columns = CFO_SHEET_COLUMNS.map((c) => ({ key: c.key, width: c.width }))
 
   let cursor = writeTitleBlock(ws, 1, {
     title: 'CFO Report — Depot Sales per PFI',
     subtitle: subtitle(report, filters),
-    columnSpan: CFO_COLUMNS.length,
+    columnSpan: CFO_SHEET_COLUMNS.length,
   })
   cursor += 1
 
@@ -222,7 +222,7 @@ export async function exportCfoReportExcel(report: CfoReport, filters: CfoExport
     r.getCell(1).font = { size: 8.5, color: { argb: XL.inkSoft } }
     r.getCell(1).alignment = { wrapText: true, vertical: 'top' }
     r.height = 26
-    ws.mergeCells(cursor, 1, cursor, CFO_COLUMNS.length)
+    ws.mergeCells(cursor, 1, cursor, CFO_SHEET_COLUMNS.length)
     cursor++
   }
 
@@ -242,13 +242,13 @@ function writeDaySection(ws: any, start: number, d: CfoDay): number {
   heading.getCell(1).value = day(d.date).toUpperCase()
   heading.getCell(1).font = SECTION_FONT
   heading.height = ROW_HEIGHT.header
-  ws.mergeCells(cursor, 1, cursor, CFO_COLUMNS.length)
+  ws.mergeCells(cursor, 1, cursor, CFO_SHEET_COLUMNS.length)
   cursor++
 
   const headerRow = ws.getRow(cursor)
-  headerRow.values = Object.fromEntries(CFO_COLUMNS.map((c) => [c.key, c.header]))
+  headerRow.values = Object.fromEntries(CFO_SHEET_COLUMNS.map((c) => [c.key, c.header]))
   headerRow.height = ROW_HEIGHT.header
-  for (const c of CFO_COLUMNS) {
+  for (const c of CFO_SHEET_COLUMNS) {
     const cell = headerRow.getCell(c.key)
     cell.font = HEADER_FONT
     cell.fill = HEADER_FILL
@@ -262,7 +262,7 @@ function writeDaySection(ws: any, start: number, d: CfoDay): number {
     empty.getCell(1).value = 'No PFIs trading on this date.'
     empty.getCell(1).font = { italic: true, size: 9, color: { argb: XL.inkSoft } }
     empty.getCell(1).border = ALL_BORDERS
-    ws.mergeCells(cursor, 1, cursor, CFO_COLUMNS.length)
+    ws.mergeCells(cursor, 1, cursor, CFO_SHEET_COLUMNS.length)
     return cursor + 1
   }
 
@@ -282,7 +282,7 @@ function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
   excelRow.values = values
   excelRow.height = ROW_HEIGHT.body
 
-  for (const c of CFO_COLUMNS) {
+  for (const c of CFO_SHEET_COLUMNS) {
     const cell = excelRow.getCell(c.key)
     cell.border = ALL_BORDERS
     if (c.kind === 'qty') cell.numFmt = qtyFmtFor(row.productUnit)
@@ -291,7 +291,17 @@ function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
       cell.numFmt = NGN_SIGNED
       paintSigned(cell, row.surplusDeficit)
     }
-    if (c.kind === 'text' || c.kind === 'index') cell.alignment = { vertical: 'middle', wrapText: c.key === 'remarks' }
+    if (c.kind === 'percent') cell.numFmt = '0%'
+    if (c.kind === 'text' || c.kind === 'index') {
+      cell.alignment = {
+        vertical: 'middle',
+        wrapText: c.key === 'remarks' || c.key === 'inflowMakeup',
+      }
+    }
+    // The figures the eye should land on: what is left, what it came to, what
+    // arrived, and the gap. Bold is the only emphasis used in the body, so it
+    // keeps its force.
+    if (c.bold) cell.font = { ...(cell.font || {}), bold: true }
 
     /**
      * A remark the row wrote about itself is set in the soft ink and says so
@@ -300,8 +310,11 @@ function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
      * will quote it back as a colleague's judgement.
      */
     if (c.key === 'remarks' && remark.auto) {
-      cell.font = { ...(cell.font || {}), italic: true, color: { argb: XL.inkSoft } }
-      cell.note = 'Generated from this row\u2019s own figures. Nobody typed this.'
+      // Set in the soft ink and marked in its note — but NOT italicised: a
+      // whole column of italics is harder to read than the sentences are
+      // worth, and the note is what actually carries the fact.
+      cell.font = { ...(cell.font || {}), color: { argb: XL.inkSoft } }
+      cell.note = 'Written from this row\u2019s own figures. Nobody typed this.'
     }
 
     /**
@@ -334,7 +347,7 @@ function writeTotalRow(ws: any, index: number, totals: CfoTotals, label: string,
   const row = ws.getRow(index)
   row.height = ROW_HEIGHT.total
 
-  for (const c of CFO_COLUMNS) {
+  for (const c of CFO_SHEET_COLUMNS) {
     const cell = row.getCell(c.key)
     const value = values[c.key]
     // Null is "these rows are in more than one unit and have no sum" — left
@@ -420,7 +433,12 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
    * table lines up with the heading above it.
    *
    *   A4 landscape 297mm − 28mm of margin = 269mm, and the fixed widths come
-   *   to 242mm, leaving 27mm for Remarks.
+   *   to 235mm, leaving 34mm for Remarks.
+   *
+   * Thirteen columns will not sit at 6pt inside that, so the body steps down
+   * to 5.6. That is preferable to the two alternatives: dropping a column
+   * loses information from the printed document, and moving to A3 hands
+   * people paper their office does not stock.
    */
   const margin = { left: 14, right: 14 }
 
@@ -456,13 +474,19 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
    * left, which is correct: prose is the one thing on this sheet that should
    * wrap.
    */
-  const columnStyles: Record<number, { halign: 'left' | 'right'; cellWidth?: number }> =
+  const columnStyles: Record<
+    number,
+    { halign: 'left' | 'right'; cellWidth?: number; fontStyle?: 'bold' }
+  > =
     Object.fromEntries(
       CFO_CORE_COLUMNS.map((c, i) => [
         i,
         {
           halign: (c.kind === 'text' || c.kind === 'index' ? 'left' : 'right') as 'left' | 'right',
           ...(c.pdf ? { cellWidth: c.pdf } : {}),
+          // The same four figures the workbook bolds, so a reader moving
+          // between the two documents is looking at the same emphasis.
+          ...(c.bold ? { fontStyle: 'bold' as const } : {}),
         },
       ]),
     )
@@ -510,9 +534,9 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
         : [['—', 'No PFIs trading on this date.', ...Array(CFO_CORE_COLUMNS.length - 2).fill('')]],
       foot,
       theme: 'grid',
-      styles: { ...pdfStyles.body, ...face, fontSize: 6, cellPadding: 1.6 },
-      headStyles: { ...pdfStyles.head, ...face, fontSize: 6 },
-      footStyles: { ...pdfStyles.foot, ...face, fontSize: 6 },
+      styles: { ...pdfStyles.body, ...face, fontSize: 5.6, cellPadding: 1.3 },
+      headStyles: { ...pdfStyles.head, ...face, fontSize: 5.6, cellPadding: 1.6 },
+      footStyles: { ...pdfStyles.foot, ...face, fontSize: 5.6, cellPadding: 1.3 },
       columnStyles,
       margin,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -539,10 +563,17 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
 
         // A remark the row wrote about itself is set in italic soft ink, so it
         // cannot be read as a colleague's words.
+        // A remark the row wrote about itself sits in the soft ink. Not
+        // italicised — a column of italics is harder to read than the
+        // sentences are worth.
         if (column.key === 'remarks' && rowRemark(row, mark).auto) {
           data.cell.styles.textColor = PDF.inkSoft
-          data.cell.styles.fontStyle = 'italic'
         }
+        if (column.key === 'inflowMakeup') data.cell.styles.textColor = PDF.inkSoft
+
+        // The PFI reference over the place it trades from: the reference is
+        // the line that gets looked up, so it is the one in bold.
+        if (column.key === 'pfiLocation') data.cell.styles.fontStyle = 'bold'
       },
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

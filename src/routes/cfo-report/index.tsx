@@ -12,7 +12,6 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
-import { StatusChip } from '#/components/ui/status-chip'
 import { NativeSelect } from '#/components/ui/native-select'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
 import {
@@ -27,14 +26,13 @@ import { cn } from '#/lib/utils'
 import { routeGuard } from '#/lib/route-guard'
 import { useDepotsForFilter, usePfiList, type PfiWithFinancials } from '#/lib/hooks/usePfis'
 import {
-  useCfoReport, useSaveCfoEntry, useResetCfoEntry, verifiableShare, unitsOf,
+  useCfoReport, useSaveCfoEntry, useResetCfoEntry, unitsOf,
   CFO_OVERRIDE_FIELDS,
   type CfoDay, type CfoRow, type CfoOverrideField, type CfoEntryPayload,
 } from '#/lib/hooks/useCfoReport'
 import {
   CFO_CORE_COLUMNS, CFO_NUMERIC, cfoRowValues, cfoTotalValues, cfoDisplay,
-  quantityAcrossUnits, unitShort, drawnDownShare, moneyState, MONEY_STATE_LABEL,
-  rowRemark, nairaCompact,
+  quantityAcrossUnits, unitShort, stockShare, stockState, rowRemark, nairaCompact,
 } from './-cfo-columns'
 import { exportCfoReportExcel, exportCfoReportPdf, type CfoExportFilters } from './-cfo-report-export'
 
@@ -222,19 +220,16 @@ function CfoReportPage() {
                 .map(([unit, v]) => `${Math.round(v).toLocaleString('en-NG')} ${unitShort(unit)}`)
                 .join(' · ') || '0'
             }
-            description={`${totals.rows} PFI${totals.rows === 1 ? '' : 's'} on the closing day`}
           />
           <StatCard
             icon={<Scale />}
             label="Stock balance"
             value={quantityAcrossUnits(totals, (u) => u.stockBalance)}
-            description={`of ${quantityAcrossUnits(totals, (u) => u.initialQty)} landed`}
           />
           <StatCard
             icon={<Banknote />}
             label="Bank inflow confirmed"
             value={ngnShort(totals.bankInflow)}
-            description={`against ${ngnShort(totals.salesValue)} invoiced`}
           />
           {/* The only card that can be either way, so the only one that is
               allowed to be red or green. See report-theme. */}
@@ -243,7 +238,6 @@ function CfoReportPage() {
             icon={totals.surplusDeficit < 0 ? <TrendingDown /> : <TrendingUp />}
             label={totals.surplusDeficit < 0 ? 'Deficit' : 'Surplus'}
             value={ngnShort(totals.surplusDeficit)}
-            description={totals.surplusDeficit < 0 ? 'Owed on sales already booked' : 'Held beyond what was invoiced'}
           />
         </StatCardGrid>
       )}
@@ -452,7 +446,9 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
                       ) : c.kind === 'signed' ? (
                         <Signed value={Number(value)} />
                       ) : (
-                        cfoDisplay(c, value, unit || 'Litres')
+                        <span className={cn(c.bold && 'font-semibold')}>
+                          {cfoDisplay(c, value, unit || 'Litres')}
+                        </span>
                       )}
                     </TableCell>
                   )
@@ -506,9 +502,8 @@ function Signed({ value }: { value: number }) {
  */
 function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdit: (row: CfoRow) => void }) {
   const values = cfoRowValues(row, index)
-  const share = verifiableShare(row)
-  const drawn = drawnDownShare(row)
-  const state = moneyState(row)
+  const left = stockShare(row)
+  const stock = stockState(row)
   const remark = rowRemark(row)
 
   return (
@@ -516,76 +511,63 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
       {CFO_CORE_COLUMNS.map((c) => {
         const corrected = !!c.field && row.edited.includes(c.field)
         const content =
-          c.kind === 'signed' ? (
-            <span className="inline-flex flex-col items-end gap-1">
-              <Signed value={Number(values[c.key])} />
-              {/*
-                The state in a word as well as a colour. Red and green are the
-                palette's reserved pair for signed money, and a reader who
-                cannot tell them apart — or who printed this in mono — gets
-                nothing from the colour alone.
-              */}
-              <StatusChip
-                fill="solid"
-                tone={state === 'deficit' ? 'destructive' : state === 'surplus' ? 'accent' : 'inert'}
-                className="text-[10px]"
-              >
-                {MONEY_STATE_LABEL[state]}
-              </StatusChip>
+          c.key === 'pfiLocation' ? (
+            // The PFI, then where it trades from. Same size as everything else
+            // on the row — a reference set smaller than the figures beside it
+            // reads as a footnote to them rather than as the thing they are
+            // about.
+            <span className="block min-w-[16ch]">
+              <span className="block font-semibold">{row.pfiNumber}</span>
+              <span className="block text-muted-foreground">{row.locationName}</span>
             </span>
-          ) : c.key === 'pfi' ? (
-            <span className="whitespace-nowrap font-mono text-xs">{row.pfiNumber}</span>
           ) : c.key === 'stockBalance' ? (
             /*
-              The figure, with how drawn down the PFI is drawn underneath it.
-              One hue on a muted track, never red or green: a cargo that has
-              sold out is a success, and colouring an empty tank like a loss
-              would say the opposite of what happened. The number above is the
-              bar's label, so it carries none of its own.
+              The figure, with what is LEFT drawn under it. The bar shrinks as
+              the tank empties and turns amber then red on the way — low stock
+              is the one genuinely actionable state on this sheet, so it is the
+              only one allowed to go red.
             */
             <span className="block">
-              <span className="whitespace-nowrap">
+              <span className="whitespace-nowrap font-semibold">
                 {cfoDisplay(c, values[c.key], row.productUnit)}
               </span>
-              {drawn !== null && (
+              {left !== null && (
                 <span
                   className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-foreground/10"
                   role="img"
-                  aria-label={`${Math.round(drawn * 100)}% of this PFI has been sold`}
-                  title={`${Math.round(drawn * 100)}% sold · ${cfoDisplay(c, values[c.key], row.productUnit)} left of ${Math.round(row.initialQty).toLocaleString('en-NG')} ${unitShort(row.productUnit)}`}
+                  aria-label={`${Math.round(left * 100)}% of this PFI is still in the tank`}
+                  title={`${Math.round(left * 100)}% left of ${Math.round(row.initialQty).toLocaleString('en-NG')} ${unitShort(row.productUnit)}`}
                 >
                   <span
-                    className="block h-full rounded-full bg-accent/70"
-                    style={{ width: `${Math.max(drawn * 100, drawn > 0 ? 2 : 0)}%` }}
+                    className={cn(
+                      'block h-full rounded-full',
+                      stock === 'low' ? 'bg-destructive' : stock === 'fair' ? 'bg-warning' : 'bg-accent/70',
+                    )}
+                    style={{ width: `${Math.max(left * 100, left > 0 ? 2 : 0)}%` }}
                   />
                 </span>
               )}
             </span>
+          ) : c.key === 'inflowMakeup' ? (
+            <span className="block min-w-[18ch] max-w-[24ch] text-muted-foreground">
+              {values[c.key]}
+            </span>
           ) : c.key === 'remarks' ? (
             /*
-              A remark the row wrote about itself is muted and italic; one a
-              person typed is neither. On a document people sign off, a
-              generated sentence that looks like a colleague's is worse than
-              an empty cell.
+              Wrapped inside a fixed measure. Left to itself this column is
+              prose in a table with no width bound and it pushed the sheet off
+              the side of the page.
             */
             <span
-              className={cn('block max-w-[30ch]', remark.auto && 'italic text-muted-foreground')}
-              title={remark.auto ? `${remark.text}\n\nGenerated from this row's own figures. Nobody typed this.` : remark.text}
+              className={cn('block w-[26ch] whitespace-normal', remark.auto && 'text-muted-foreground')}
+              title={remark.auto ? `${remark.text}\n\nWritten from this row's own figures. Nobody typed this.` : remark.text}
             >
               {remark.text}
             </span>
-          ) : c.key === 'bankInflow' && share !== null && share < 0.999 ? (
-            // How much of this money an external auditor could tie to a bank
-            // statement. The rest is legacy wallet-era money and transfers
-            // between orders — real, recorded, and not checkable.
-            <span className="whitespace-nowrap">
-              {cfoDisplay(c, values[c.key], row.productUnit)}
-              <span className="block text-[11px] text-muted-foreground">
-                {Math.round(share * 100)}% bank-backed
-              </span>
-            </span>
           ) : (
-            <span className="whitespace-nowrap">{cfoDisplay(c, values[c.key], row.productUnit)}</span>
+            <span className={cn('whitespace-nowrap', c.bold && 'font-semibold')}>
+              {cfoDisplay(c, values[c.key], row.productUnit)}
+            </span>
           )
 
         return (
@@ -593,7 +575,7 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
             key={c.key}
             className={cn(
               CFO_NUMERIC.has(c.key) && 'text-right tabular-nums',
-              c.key === 'remarks' && 'align-top',
+              (c.key === 'remarks' || c.key === 'inflowMakeup' || c.key === 'pfiLocation') && 'align-top',
               corrected && 'font-medium text-blue-700 dark:text-blue-300',
             )}
             title={
@@ -607,8 +589,9 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
         )
       })}
       <TableCell className="text-right align-top">
-        <Button variant="ghost" size="sm" onClick={() => onEdit(row)} aria-label={`Edit ${row.pfiNumber}`}>
-          <Pencil className="size-3.5" />
+        <Button variant="outline" size="sm" onClick={() => onEdit(row)}>
+          <Pencil data-icon="inline-start" />
+          Edit
         </Button>
       </TableCell>
     </TableRow>
@@ -641,9 +624,16 @@ function ReportNotes({ meta }: { meta: NonNullable<ReturnType<typeof useCfoRepor
           over, so a row always adds up.
         </p>
         <p>
-          A <span className="italic">remark set in italics</span> was written by the row from its own
-          figures — nobody typed it. Type one and it replaces the generated sentence outright and is
-          shown in plain text. The bar under a stock balance shows how much of that PFI has sold.
+          <span className="font-medium text-foreground">Traced to bank</span> is how much of that
+          inflow you could put a bank statement in front of. It is below 100% where money was
+          recorded before payments were kept against orders — real money, received, but with no
+          statement line anywhere. The next column says what the untraced part actually is.
+        </p>
+        <p>
+          A <span className="text-muted-foreground/80">remark in grey</span> was written by the row
+          from its own figures — nobody typed it. Type one and it replaces that sentence outright
+          and is shown in normal text. The bar under a stock balance is how much is still in the
+          tank; it turns amber under a quarter left and red under a tenth.
         </p>
         {meta.partPaidHeld > 0 && (
           <p>

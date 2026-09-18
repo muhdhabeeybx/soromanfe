@@ -65,6 +65,19 @@ export interface CfoComputed {
    * verifiable" are two different assurances.
    */
   statementInflow: number
+  /**
+   * What the rest of the inflow is. These four always sum to bankInflow.
+   *
+   *   legacyInflow  recorded before payments were kept against orders. Real
+   *                 money, no bank line, and none can be produced — this is
+   *                 the part nothing can evidence.
+   *   transferIn    surplus moved onto this PFI's orders from elsewhere. The
+   *                 bank line exists, on the order it came from.
+   *   transferOut   negative. Money this PFI gave away.
+   */
+  legacyInflow: number
+  transferIn: number
+  transferOut: number
   stockBalance: number
   surplusDeficit: number
 }
@@ -267,17 +280,35 @@ export function isCorrected(row: CfoRow): boolean {
 }
 
 /**
- * How much of a row's inflow an external auditor could check.
+ * How much of a row's inflow can be traced to a bank line somewhere.
  *
- * Null once the inflow has been overridden: the statement-backed portion is a
- * property of the payment rows the system found, and it says nothing about a
- * figure somebody typed in. Printing it beside a corrected total would be
- * quoting evidence for a number that evidence does not cover.
+ * ── Why it is not statementInflow ÷ bankInflow ────────────────────────────
+ *
+ * That was the first definition and it produced figures above 100%. A PFI that
+ * transfers surplus away holds LESS than its statement lines brought in — on
+ * 18 September, PFI 39 showed ₦29,524m of statement payments against ₦29,388m
+ * held, because ₦202m had been moved to another order. "100.5% bank-backed" is
+ * not a rounding artefact, it is a ratio of two things that do not divide.
+ *
+ * What the column actually has to answer is the auditor's question: how much
+ * of this money can I follow to a bank statement? Everything can, except the
+ * legacy rows — those predate payments being kept against orders and no
+ * statement line exists for them anywhere. A transfer is traceable; you follow
+ * it to the order it came from and find the line there.
+ *
+ * So: the non-legacy share, which cannot exceed 1 because legacy is one of the
+ * parts that make up the whole.
+ *
+ * Null once the inflow has been overridden — the composition describes the
+ * payment rows the system found and says nothing about a figure somebody
+ * typed. Printing it beside a corrected total would be quoting evidence for a
+ * number that evidence does not cover.
  */
-export function verifiableShare(row: CfoRow): number | null {
+export function bankBackedShare(row: CfoRow): number | null {
   if (row.edited.includes('bankInflow')) return null
-  if (row.computed.bankInflow <= 0) return null
-  return row.computed.statementInflow / row.computed.bankInflow
+  const { bankInflow, legacyInflow } = row.computed
+  if (bankInflow <= 0) return null
+  return Math.min(1, Math.max(0, (bankInflow - legacyInflow) / bankInflow))
 }
 
 /** The quantity units present in a set of totals, litres first. */
