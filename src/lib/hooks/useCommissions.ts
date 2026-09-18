@@ -92,6 +92,9 @@ export function useCustomerCommissionRates() {
 /**
  * Set — or clear — one customer's own commission rate.
  *
+ * Used instead of the depot rate where that depot and product already pay a
+ * commission; it does not create one where none is configured.
+ *
  * `null` clears the agreement and hands the customer back to the usual depot
  * rate. That is a different instruction from 0, which is an agreement that
  * they earn nothing, so the field is always sent: never omitted to mean

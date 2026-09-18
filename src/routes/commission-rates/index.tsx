@@ -329,9 +329,10 @@ function CustomerRatesPanel() {
           <div>
             <CardTitle className="text-lg">Customer rates</CardTitle>
             <CardDescription>
-              A rate agreed with one customer, applied wherever they buy. It overrides the depot
-              rate above. Clearing it puts them back on the usual rate — which is not the same as
-              setting it to ₦0.00, and that is a real agreement meaning they earn nothing.
+              A rate agreed with one customer, used instead of the depot rate above. It only
+              applies where that depot and product already pay a commission — it does not open up
+              a location that pays nobody. Clearing it puts them back on the usual rate, which is
+              not the same as setting ₦0.00: that is a real agreement meaning they earn nothing.
             </CardDescription>
           </div>
         </div>
