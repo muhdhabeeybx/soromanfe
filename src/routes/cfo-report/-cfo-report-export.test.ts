@@ -138,7 +138,10 @@ describe('CFO report exports', () => {
     // Traced-to-bank sits immediately beside the inflow it qualifies — on its
     // own it is a number nobody can act on.
     expect(docKeys.indexOf('bankBacked')).toBe(docKeys.indexOf('bankInflow') + 1)
-    expect(docKeys.indexOf('inflowMakeup')).toBe(docKeys.indexOf('bankBacked') + 1)
+    // The breakdown of the untraced part is on the cell, not in a column of
+    // its own — it is something somebody goes looking for once.
+    expect(docKeys).not.toContain('inflowMakeup')
+    expect(notes.some((n) => n.includes('legacy'))).toBe(true)
 
     // A share is written as a percentage, not as a raw fraction.
     expect(cells.some((c) => c.numFmt === '0%')).toBe(true)
@@ -252,16 +255,25 @@ describe('CFO report exports', () => {
     const base = row()
 
     // Half-sold and square: nothing worth saying beyond the two facts.
-    const quiet = rowRemark({ ...base, dayVolume: 0, cumulativeVolume: 11000000, stockBalance: 12213083, surplusDeficit: 0 })
+    //
+    // "No orders", not "No movement" — the day's figure is the quantity
+    // ORDERED on confirmed orders placed that day, and whether a truck has
+    // loaded against it is a fact this report never looks at. The clause is
+    // keyed on the order count, not on the quantity.
+    const quiet = rowRemark({ ...base, dayVolume: 0, dayOrders: 0, cumulativeVolume: 11000000, stockBalance: 12213083, surplusDeficit: 0 })
     expect(quiet.auto).toBe(true)
-    expect(quiet.text).toBe('No movement. Settled in full.')
+    expect(quiet.text).toBe('No orders. Settled in full.')
 
-    const sold = rowRemark({ ...base, dayVolume: 936000, surplusDeficit: -112600000 })
+    const sold = rowRemark({ ...base, dayVolume: 936000, dayOrders: 4, surplusDeficit: -112600000 })
     expect(sold.auto).toBe(true)
-    expect(sold.text).toBe('Sold 936,000 L. ₦112.6m still owed.')
+    expect(sold.text).toBe('Sold 936,000 L on 4 orders. ₦112.6m still owed.')
+
+    // One order is not "1 orders".
+    const single = rowRemark({ ...base, dayVolume: 30000, dayOrders: 1, surplusDeficit: 0 })
+    expect(single.text).toBe('Sold 30,000 L on 1 order. Settled in full.')
 
     // Nearly-dry is called out, because that is the unusual state.
-    const dry = rowRemark({ ...base, dayVolume: 0, initialQty: 160000, cumulativeVolume: 159060, stockBalance: 940, productUnit: 'kg', surplusDeficit: 20000 })
+    const dry = rowRemark({ ...base, dayVolume: 0, dayOrders: 0, initialQty: 160000, cumulativeVolume: 159060, stockBalance: 940, productUnit: 'kg', surplusDeficit: 20000 })
     expect(dry.text).toContain('Nearly dry — 940 kg left.')
 
     // A person's words are never merged with a generated sentence.

@@ -2,7 +2,7 @@ import { format, parseISO } from 'date-fns'
 import type { CfoReport, CfoDay, CfoRow, CfoTotals } from '#/lib/hooks/useCfoReport'
 import {
   CFO_SHEET_COLUMNS, CFO_CORE_COLUMNS, cfoRowValues, cfoTotalValues, cfoDisplay,
-  quantityAcrossUnits, unitShort, rowRemark, nairaIn, nairaSignedIn,
+  quantityAcrossUnits, unitShort, rowRemark, nairaIn, nairaSignedIn, inflowMakeup,
   type CurrencyMark,
 } from './-cfo-columns'
 import {
@@ -302,6 +302,17 @@ function writeDataRow(ws: any, index: number, row: CfoRow, position: number) {
     // arrived, and the gap. Bold is the only emphasis used in the body, so it
     // keeps its force.
     if (c.bold) cell.font = { ...(cell.font || {}), bold: true }
+    // Money arriving is good news and is the one unsigned column with a
+    // colour. Signed money keeps the green/red pair it already had.
+    if (c.positive) cell.font = { ...(cell.font || {}), color: { argb: XL.gain } }
+
+    /*
+     * What the untraced part of the inflow actually is, on the cell rather
+     * than in a column of its own. Thirteen columns was more than the sheet
+     * could carry, and this is something somebody goes looking for once — not
+     * something they read on every row.
+     */
+    if (c.key === 'bankBacked') cell.note = inflowMakeup(row)
 
     /**
      * A remark the row wrote about itself is set in the soft ink and says so
@@ -433,12 +444,7 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
    * table lines up with the heading above it.
    *
    *   A4 landscape 297mm − 28mm of margin = 269mm, and the fixed widths come
-   *   to 235mm, leaving 34mm for Remarks.
-   *
-   * Thirteen columns will not sit at 6pt inside that, so the body steps down
-   * to 5.6. That is preferable to the two alternatives: dropping a column
-   * loses information from the printed document, and moving to A3 hands
-   * people paper their office does not stock.
+   *   to 234mm, leaving 35mm for Remarks.
    */
   const margin = { left: 14, right: 14 }
 
@@ -476,7 +482,12 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
    */
   const columnStyles: Record<
     number,
-    { halign: 'left' | 'right'; cellWidth?: number; fontStyle?: 'bold' }
+    {
+      halign: 'left' | 'right'
+      cellWidth?: number
+      fontStyle?: 'bold'
+      textColor?: [number, number, number]
+    }
   > =
     Object.fromEntries(
       CFO_CORE_COLUMNS.map((c, i) => [
@@ -487,6 +498,9 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
           // The same four figures the workbook bolds, so a reader moving
           // between the two documents is looking at the same emphasis.
           ...(c.bold ? { fontStyle: 'bold' as const } : {}),
+          // Spread: report-theme freezes its tuples and autotable wants a
+          // mutable one.
+          ...(c.positive ? { textColor: [...PDF.gain] as [number, number, number] } : {}),
         },
       ]),
     )
@@ -534,9 +548,9 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
         : [['—', 'No PFIs trading on this date.', ...Array(CFO_CORE_COLUMNS.length - 2).fill('')]],
       foot,
       theme: 'grid',
-      styles: { ...pdfStyles.body, ...face, fontSize: 5.6, cellPadding: 1.3 },
-      headStyles: { ...pdfStyles.head, ...face, fontSize: 5.6, cellPadding: 1.6 },
-      footStyles: { ...pdfStyles.foot, ...face, fontSize: 5.6, cellPadding: 1.3 },
+      styles: { ...pdfStyles.body, ...face, fontSize: 6, cellPadding: 1.5 },
+      headStyles: { ...pdfStyles.head, ...face, fontSize: 6, cellPadding: 1.8 },
+      footStyles: { ...pdfStyles.foot, ...face, fontSize: 6, cellPadding: 1.5 },
       columnStyles,
       margin,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -569,8 +583,6 @@ export async function exportCfoReportPdf(report: CfoReport, filters: CfoExportFi
         if (column.key === 'remarks' && rowRemark(row, mark).auto) {
           data.cell.styles.textColor = PDF.inkSoft
         }
-        if (column.key === 'inflowMakeup') data.cell.styles.textColor = PDF.inkSoft
-
         // The PFI reference over the place it trades from: the reference is
         // the line that gets looked up, so it is the one in bold.
         if (column.key === 'pfiLocation') data.cell.styles.fontStyle = 'bold'

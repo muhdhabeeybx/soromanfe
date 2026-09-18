@@ -46,6 +46,14 @@ export interface CfoColumn {
   only?: 'sheet' | 'doc'
   /** Figures a reader's eye should land on first. */
   bold?: true
+  /**
+   * Money coming IN, coloured green wherever it appears.
+   *
+   * Distinct from `signed`, which is green OR red depending on which way the
+   * figure falls. Bank inflow is only ever money received, so it carries the
+   * one colour and never the other.
+   */
+  positive?: true
 }
 
 /**
@@ -58,50 +66,51 @@ export interface CfoColumn {
  * same litres.
  */
 export const CFO_COLUMNS: CfoColumn[] = [
-  { key: 'sn', header: 'S/N', kind: 'index', width: 6, pdf: 7 },
+  { key: 'sn', header: 'S/N', kind: 'index', width: 6, pdf: 8 },
 
   // Screen and PDF: one cell, PFI over location. Workbook: two columns.
-  { key: 'pfiLocation', header: 'PFI', kind: 'text', width: 32, pdf: 30, only: 'doc' },
+  { key: 'pfiLocation', header: 'PFI', kind: 'text', width: 32, pdf: 34, only: 'doc' },
   { key: 'pfi', header: 'PFI', kind: 'text', width: 32, only: 'sheet' },
   { key: 'location', header: 'Location', kind: 'text', width: 26, only: 'sheet' },
 
-  { key: 'product', header: 'Product', kind: 'text', width: 13, pdf: 13 },
-  { key: 'initialQty', header: 'Initial Qty', kind: 'qty', width: 16, pdf: 17, field: 'initialQty' },
+  { key: 'product', header: 'Product', kind: 'text', width: 13, pdf: 14 },
+  { key: 'initialQty', header: 'Initial Qty', kind: 'qty', width: 16, pdf: 18, field: 'initialQty' },
   {
     key: 'cumulativeVolume',
     header: 'Cumulative Sales Volume',
     kind: 'qty',
     width: 20,
-    pdf: 17,
+    pdf: 19,
     field: 'cumulativeVolume',
   },
-  { key: 'dayVolume', header: 'Sales Volume (Day)', kind: 'qty', width: 17, pdf: 17, field: 'dayVolume' },
+  { key: 'dayVolume', header: 'Sales Volume (Day)', kind: 'qty', width: 17, pdf: 18, field: 'dayVolume' },
   // Derived — no `field`, so nothing renders an input over it. See the header
   // of useCfoReport for why these two cannot be typed.
-  { key: 'stockBalance', header: 'Stock Balance', kind: 'qty', width: 17, pdf: 17, bold: true },
+  { key: 'stockBalance', header: 'Stock Balance', kind: 'qty', width: 17, pdf: 19, bold: true },
 
-  { key: 'salesValue', header: 'Sales Value To Date', kind: 'money', width: 23, pdf: 28, field: 'salesValue', bold: true },
+  { key: 'salesValue', header: 'Sales Value To Date', kind: 'money', width: 23, pdf: 30, field: 'salesValue', bold: true },
   {
     key: 'bankInflow',
     header: 'Bank Inflow Confirmed',
     kind: 'money',
     width: 23,
-    pdf: 28,
+    pdf: 30,
     field: 'bankInflow',
     bold: true,
+    positive: true,
   },
   /**
    * How much of that money you could put a bank statement in front of.
    *
-   * Sits immediately beside the inflow it qualifies, because on its own it is
-   * a number nobody can act on — and the column after it says what the
-   * remainder actually is. See bankBackedShare for why this is the non-legacy
-   * share rather than the statement share.
+   * Sits immediately beside the inflow it qualifies. What the untraced part
+   * consists of had its own column and no longer does — thirteen columns was
+   * more than the sheet could carry, and the breakdown is a thing you go
+   * looking for once, not something you read on every row. It is on the
+   * cell: hover on screen, a cell note in the workbook. See inflowMakeup.
    */
-  { key: 'bankBacked', header: 'Traced To Bank', kind: 'percent', width: 14, pdf: 13 },
-  { key: 'inflowMakeup', header: 'What Is Not Traced', kind: 'text', width: 30, pdf: 24 },
+  { key: 'bankBacked', header: 'Traced To Bank', kind: 'percent', width: 14, pdf: 15 },
 
-  { key: 'surplusDeficit', header: 'Surplus / (Deficit)', kind: 'signed', width: 23, pdf: 24, bold: true },
+  { key: 'surplusDeficit', header: 'Surplus / (Deficit)', kind: 'signed', width: 23, pdf: 29, bold: true },
   // No pdf width: Remarks takes whatever the columns before it leave, and
   // prose is the one thing on this sheet that SHOULD wrap.
   { key: 'remarks', header: 'Remarks', kind: 'text', width: 46 },
@@ -324,10 +333,19 @@ export function rowRemark(
 
   const parts: string[] = []
 
+  /*
+   * Keyed on the ORDER COUNT, not the quantity.
+   *
+   * It used to read "No movement", which is a claim about stock physically
+   * leaving a tank — and that is not what this column measures. The day's
+   * figure is the quantity ORDERED on confirmed orders placed that day;
+   * whether a truck has loaded against it is a separate fact this report
+   * never looks at. A day with no orders is what there is to say.
+   */
   parts.push(
-    row.dayVolume > 0
-      ? `Sold ${qtyText(row.dayVolume, row.productUnit)}.`
-      : 'No movement.',
+    row.dayOrders > 0
+      ? `Sold ${qtyText(row.dayVolume, row.productUnit)} on ${row.dayOrders} order${row.dayOrders === 1 ? '' : 's'}.`
+      : 'No orders.',
   )
 
   const share = stockShare(row)
@@ -389,7 +407,6 @@ export function cfoRowValues(
     // composition describes the payment rows the system found and says
     // nothing about a figure somebody typed. See bankBackedShare.
     bankBacked: bankBackedShare(row) ?? '',
-    inflowMakeup: inflowMakeup(row, symbol),
     // The typed remark, or the one the row writes about itself. Callers that
     // need to know which it was ask rowRemark directly — see its header.
     remarks: rowRemark(row, symbol).text,
@@ -459,7 +476,6 @@ export function cfoTotalValues(
       surplusDeficit: totals.surplusDeficit,
       pfiLocation: label,
       bankBacked: null,
-      inflowMakeup: '',
       remarks: '',
       correctedBy: '',
     },

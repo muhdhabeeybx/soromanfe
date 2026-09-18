@@ -33,6 +33,7 @@ import {
 import {
   CFO_CORE_COLUMNS, CFO_NUMERIC, cfoRowValues, cfoTotalValues, cfoDisplay,
   quantityAcrossUnits, unitShort, stockShare, stockState, rowRemark, nairaCompact,
+  inflowMakeup,
 } from './-cfo-columns'
 import { exportCfoReportExcel, exportCfoReportPdf, type CfoExportFilters } from './-cfo-report-export'
 
@@ -444,9 +445,9 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
                         // figures are stated under the table instead.
                         <span className="text-muted-foreground">—</span>
                       ) : c.kind === 'signed' ? (
-                        <Signed value={Number(value)} />
+                        <Signed value={Number(value)} bold />
                       ) : (
-                        <span className={cn(c.bold && 'font-semibold')}>
+                        <span className={cn(c.bold && 'font-semibold', c.positive && 'text-success')}>
                           {cfoDisplay(c, value, unit || 'Litres')}
                         </span>
                       )}
@@ -482,13 +483,19 @@ function DaySection({ day, onEdit }: { day: CfoDay; onEdit: (row: CfoRow) => voi
 }
 
 /** Money that carries meaning in its sign, coloured the same way everywhere. */
-function Signed({ value }: { value: number }) {
+function Signed({ value, bold }: { value: number; bold?: boolean }) {
   const text =
     value < 0
       ? `(₦${Math.abs(value).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
       : ngn(value)
   return (
-    <span className={cn('whitespace-nowrap', value < 0 ? 'text-destructive' : value > 0 ? 'text-success' : '')}>
+    <span
+      className={cn(
+        'whitespace-nowrap',
+        bold && 'font-semibold',
+        value < 0 ? 'text-destructive' : value > 0 ? 'text-success' : '',
+      )}
+    >
       {text}
     </span>
   )
@@ -548,10 +555,11 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
                 </span>
               )}
             </span>
-          ) : c.key === 'inflowMakeup' ? (
-            <span className="block min-w-[18ch] max-w-[24ch] text-muted-foreground">
-              {values[c.key]}
-            </span>
+          ) : c.kind === 'signed' ? (
+            // Surplus green, deficit red. This went missing when the state
+            // chip was removed and the column fell through to the plain
+            // renderer — a surplus and a shortfall printed identically.
+            <Signed value={Number(values[c.key])} bold />
           ) : c.key === 'remarks' ? (
             /*
               Wrapped inside a fixed measure. Left to itself this column is
@@ -565,7 +573,19 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
               {remark.text}
             </span>
           ) : (
-            <span className={cn('whitespace-nowrap', c.bold && 'font-semibold')}>
+            <span
+              className={cn(
+                'whitespace-nowrap',
+                c.bold && 'font-semibold',
+                // Money arriving is good news and is the one unsigned column
+                // that carries a colour.
+                c.positive && 'text-success',
+              )}
+              // What the untraced part of the inflow actually is. It had its
+              // own column and no longer does: it is something you go looking
+              // for once, not something you read on every row.
+              title={c.key === 'bankBacked' ? inflowMakeup(row) : undefined}
+            >
               {cfoDisplay(c, values[c.key], row.productUnit)}
             </span>
           )
@@ -575,7 +595,7 @@ function CfoTableRow({ row, index, onEdit }: { row: CfoRow; index: number; onEdi
             key={c.key}
             className={cn(
               CFO_NUMERIC.has(c.key) && 'text-right tabular-nums',
-              (c.key === 'remarks' || c.key === 'inflowMakeup' || c.key === 'pfiLocation') && 'align-top',
+              (c.key === 'remarks' || c.key === 'pfiLocation') && 'align-top',
               corrected && 'font-medium text-blue-700 dark:text-blue-300',
             )}
             title={
@@ -627,7 +647,7 @@ function ReportNotes({ meta }: { meta: NonNullable<ReturnType<typeof useCfoRepor
           <span className="font-medium text-foreground">Traced to bank</span> is how much of that
           inflow you could put a bank statement in front of. It is below 100% where money was
           recorded before payments were kept against orders — real money, received, but with no
-          statement line anywhere. The next column says what the untraced part actually is.
+          statement line anywhere. Hover the percentage to see what the untraced part actually is.
         </p>
         <p>
           A <span className="text-muted-foreground/80">remark in grey</span> was written by the row
