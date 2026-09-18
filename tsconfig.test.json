@@ -1,0 +1,20 @@
+{
+  /*
+   * The test files, typechecked apart from the app.
+   *
+   * They need Node's types — the export suite writes a real workbook and a
+   * real PDF and then weighs the file — and the app must NOT. Adding "node"
+   * to tsconfig.app.json would make `process`, `fs` and friends typecheck
+   * inside components that cannot use them, which is a compile error traded
+   * for a runtime one.
+   */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["vite/client", "node", "vitest/globals"]
+  },
+  /* `extends` carries the app config's exclude across, which would exclude
+     exactly the files this project exists to check. */
+  "exclude": [],
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

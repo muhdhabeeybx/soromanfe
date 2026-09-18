@@ -33,5 +33,11 @@
   },
   "include": [
     "src"
+  ],
+  /* Tests are typechecked by tsconfig.test.json, which gives them Node's
+     types. The app itself must not have them — see that file. */
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
   ]
 }
