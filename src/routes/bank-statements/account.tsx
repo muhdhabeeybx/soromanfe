@@ -468,14 +468,73 @@ function PaymentsTable({
   onDownloadDay: (day: string) => void
 }) {
   const rows: React.ReactNode[] = []
-  let lastDay = ''
+  let openDay = ''
+
+  /**
+   * A day's subtotal, closing the day rather than opening it.
+   *
+   * It had been folded into the date cell of the day's FIRST payment, which
+   * put a day's total, its payment count and a download button on a row that
+   * describes one credit — so the row read as if ₦214,560,000 and "3 payments"
+   * were facts about the ₦53,640,000 sitting beside them. A subtotal belongs
+   * on a row of its own, under the column it totals.
+   */
+  const pushDayTotal = (day: string) => {
+    const t = dayTotals.get(day)
+    if (!t) return
+    rows.push(
+      <TableRow
+        key={`total-${day}`}
+        className="border-l-4 border-l-transparent border-b-2 border-b-foreground/25 bg-muted/60 hover:bg-muted/60"
+      >
+        <TableCell className="whitespace-nowrap font-semibold">
+          {formatPlainDay(day)} total
+        </TableCell>
+        {/* Under the Amount column, because that is the column it totals. */}
+        <TableCell className="text-right text-base font-semibold whitespace-nowrap tabular-nums">
+          {formatCurrency(Number(t.total_amount))}
+        </TableCell>
+        <TableCell colSpan={8}>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusChip tone="inert" fill="solid">
+              {t.line_count} payment{t.line_count === 1 ? '' : 's'}
+            </StatusChip>
+            <StatusChip tone={t.matched_count > 0 ? 'accent' : 'inert'} fill="solid">
+              {t.matched_count} matched
+            </StatusChip>
+            <StatusChip tone={t.unmatched_count > 0 ? 'warning' : 'inert'} fill="solid">
+              {t.unmatched_count} unmatched
+            </StatusChip>
+            {/*
+              How many files this day arrived in. It is what makes a day look
+              wrong when it is not — a day re-uploaded four times still holds
+              each credit once, and saying so pre-empts the question.
+            */}
+            {t.upload_count > 1 && (
+              <span className="text-muted-foreground">from {t.upload_count} uploads</span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          <Button
+            variant="outline" size="sm"
+            disabled={downloading}
+            onClick={() => onDownloadDay(day)}
+          >
+            <Download data-icon="inline-start" />
+            Download
+          </Button>
+        </TableCell>
+      </TableRow>,
+    )
+  }
 
   for (const l of lines) {
     const day = String(l.txn_date).slice(0, 10)
-    // The first row of each day is the one that carries the day's total.
-    const opensDay = day !== lastDay
-    lastDay = day
-    const totals = opensDay ? dayTotals.get(day) : undefined
+    // Rows arrive newest day first, so a day is contiguous: the moment the
+    // date changes, the day before it is complete and gets its subtotal.
+    if (openDay && day !== openDay) pushDayTotal(openDay)
+    openDay = day
 
     const matched = l.status === 'MATCHED'
     // Matched, but the order it named is gone — a real state (an order can be
@@ -495,41 +554,9 @@ function PaymentsTable({
         className={cn(
           'border-l-4',
           matched ? 'border-l-accent' : 'border-l-warning bg-warning/5',
-          // Losing the banner lost the day boundary with it. A heavier rule
-          // above the day's first row puts it back without adding a second
-          // kind of row to the table.
-          opensDay && 'border-t-2 border-t-foreground/25',
         )}
       >
-        {/*
-          The day's total sits under the date on the day's first row, rather
-          than on a banner above it. A banner spanning eleven columns is a
-          second kind of row the eye has to classify before it can read
-          anything; under the date it is just the date, qualified.
-        */}
-        <TableCell className={cn('whitespace-normal', totals && 'align-top')}>
-          <span className="block whitespace-nowrap">{formatPlainDay(l.txn_date)}</span>
-          {totals && (
-            <span className="mt-1 block">
-              <span className="block font-semibold tabular-nums">
-                {formatCurrency(Number(totals.total_amount))}
-              </span>
-              <span className="block text-muted-foreground">
-                {totals.line_count} payment{totals.line_count === 1 ? '' : 's'} this day
-                {totals.upload_count > 1 && ` · ${totals.upload_count} uploads`}
-              </span>
-              <button
-                type="button"
-                disabled={downloading}
-                onClick={() => onDownloadDay(day)}
-                className="mt-1 inline-flex items-center gap-1 underline underline-offset-2 hover:text-accent disabled:opacity-50"
-              >
-                <Download className="size-3.5" />
-                Download this day
-              </button>
-            </span>
-          )}
-        </TableCell>
+        <TableCell className="whitespace-nowrap">{formatPlainDay(l.txn_date)}</TableCell>
         <TableCell className="text-right text-base font-semibold whitespace-nowrap tabular-nums">
           ₦{Number(l.amount).toLocaleString()}
         </TableCell>
@@ -596,6 +623,8 @@ function PaymentsTable({
       </TableRow>,
     )
   }
+  // The last day on the page has no following day to trigger its subtotal.
+  if (openDay) pushDayTotal(openDay)
 
   /*
     ── whitespace-normal on every cell that holds free text ────────────────
@@ -610,20 +639,19 @@ function PaymentsTable({
 
     Ten columns of bank narration do not fit a panel, and an auto-layout table
     told to be w-full does not scroll — it compresses every column to its
-    minimum and lets the content spill across its neighbours, which is the
-    overlap this replaces. Fixing the columns makes each one a known width that
-    text WRAPS inside, and the minimum width is what makes Table's own
-    overflow-x-auto container actually scroll.
+    minimum and lets the content spill across its neighbours. Fixing the
+    columns makes each one a known width that text WRAPS inside, and the
+    minimum width is what makes Table's own overflow-x-auto actually scroll.
 
     Table already wraps itself in an overflow-x-auto div, so there is no outer
     scroller here — a second one only produced a scrollbar that moved nothing.
   */
   return (
-    <Table className="min-w-[1952px] table-fixed">
+    <Table className="min-w-[1872px] table-fixed">
       <TableHeader>
         <TableRow>
-          <TableHead className="w-[12rem]">Date</TableHead>
-          <TableHead className="w-[9.5rem] text-right">Amount</TableHead>
+          <TableHead className="w-[9.5rem]">Date</TableHead>
+          <TableHead className="w-[10rem] text-right">Amount</TableHead>
           <TableHead className="w-[6.5rem]">Status</TableHead>
           <TableHead className="w-[20rem]">Depositor</TableHead>
           <TableHead className="w-[12rem]">Bank reference</TableHead>
@@ -632,7 +660,7 @@ function PaymentsTable({
           <TableHead className="w-[10rem]">Matched on</TableHead>
           <TableHead className="w-[10rem]">Uploaded by</TableHead>
           <TableHead className="w-[10rem]">Uploaded on</TableHead>
-          <TableHead className="w-[14rem]">Source file</TableHead>
+          <TableHead className="w-[11rem]">Source file</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>{rows}</TableBody>
