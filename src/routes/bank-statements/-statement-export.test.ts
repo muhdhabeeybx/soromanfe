@@ -47,24 +47,26 @@ async function build(lines: AccountStatementLine[], opts: Record<string, unknown
 }
 
 describe('the statement workbook', () => {
-  test('carries eleven columns, none of them a duplicate of another', async () => {
+  test('carries ten columns, none of them a duplicate of another', async () => {
     const ws = await build([line()])
-    const headers = ws.getRow(8).values as string[]
+    const headers = ws.getRow(7).values as string[]
     expect(headers.slice(1)).toEqual([
       'Date', 'Amount', 'Depositor', 'Bank reference',
-      'Status', 'Order', 'Customer', 'Matched by', 'Matched on',
+      'Status', 'Order', 'Matched by', 'Matched on',
       'Uploaded by', 'Uploaded on',
     ])
     // Deposit reference was the bank reference again; narration and the source
-    // file belong to the upload, not the credit.
+    // file belong to the upload, not the credit; customer duplicates what the
+    // order reference already names.
     expect(headers).not.toContain('Deposit reference')
     expect(headers).not.toContain('Narration')
     expect(headers).not.toContain('Source file')
+    expect(headers).not.toContain('Customer')
   })
 
   test('the amount is a number with a currency format, so it can be totalled', async () => {
     const ws = await build([line({ amount: '30000000' })])
-    const cell = ws.getCell('B9')
+    const cell = ws.getCell('B8')
     expect(typeof cell.value).toBe('number')
     expect(cell.value).toBe(30000000)
     expect(cell.numFmt).toContain('₦')
@@ -75,14 +77,14 @@ describe('the statement workbook', () => {
       line({ id: 1, amount: '1000' }),
       line({ id: 2, amount: '2500' }),
     ])
-    const total = ws.getCell('B11').value as { formula: string; result: number }
-    expect(total.formula).toBe('SUM(B9:B10)')
+    const total = ws.getCell('B10').value as { formula: string; result: number }
+    expect(total.formula).toBe('SUM(B8:B9)')
     expect(total.result).toBe(3500)
   })
 
   test('the transaction date is the day the bank printed, never a day out', async () => {
     const ws = await build([line({ txn_date: '2026-09-17' })])
-    const d = ws.getCell('A9').value as Date
+    const d = ws.getCell('A8').value as Date
     expect(d.getFullYear()).toBe(2026)
     expect(d.getMonth()).toBe(8)
     expect(d.getDate()).toBe(17)
@@ -100,7 +102,7 @@ describe('the statement workbook', () => {
 
   test('a matched line whose order is gone says so rather than showing blank', async () => {
     const ws = await build([line({ order_reference: null, order_id: null, status: 'MATCHED' })])
-    expect(ws.getCell('F9').value).toBe('Order deleted')
+    expect(ws.getCell('F8').value).toBe('Order deleted')
   })
 
   test('the summary is cells, not one concatenated sentence', async () => {
@@ -113,10 +115,16 @@ describe('the statement workbook', () => {
     expect(ws.getCell('D5').value).toBe(500)   // unmatched
   })
 
-  test('the three bands sit above the column headers', async () => {
+  test('only the masthead is centred; every column is left-aligned', async () => {
     const ws = await build([line()])
-    expect(String(ws.getCell('A7').value)).toBe('THE CREDIT')
-    expect(String(ws.getCell('E7').value)).toBe('MATCHED TO')
-    expect(String(ws.getCell('J7').value)).toBe('IMPORTED')
+    expect(ws.getCell('A1').alignment?.horizontal).toBe('center')
+    expect(ws.getCell('A1').font?.bold).toBe(true)
+    expect(ws.getCell('A2').alignment?.horizontal).toBe('center')
+    expect(ws.getCell('A2').font?.bold).toBe(true)
+    // The header row, and the amount — the one column that would conventionally
+    // pull right — both sit left with everything else.
+    expect(ws.getCell('A7').alignment?.horizontal).toBe('left')
+    expect(ws.getCell('B7').alignment?.horizontal).toBe('left')
+    expect(ws.getCell('B8').alignment?.horizontal).toBe('left')
   })
 })

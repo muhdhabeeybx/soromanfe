@@ -5,25 +5,26 @@ import type { AccountStatementLine, StatementAccountSummary } from '#/lib/hooks/
 /**
  * A bank statement off the screen and into somebody's hands.
  *
- * ── The columns are grouped by the question they answer ────────────────────
+ * ── The columns run in the order a credit is read ──────────────────────────
  *
- * A statement line carries three unrelated kinds of fact, and they were
- * interleaved: the source file sat beside the customer, the deposit reference
- * between the order and who matched it. So the sheet is banded —
- *
- *   THE CREDIT     what the bank says happened: date, amount, payer, reference
- *   MATCHED TO     what became of it: status, order, customer, who and when
- *   IMPORTED       how it got here: who uploaded it and when
- *
- * — and a band header sits above the column headers, so one glance answers
- * "where do I look for the order" without reading eleven headings.
+ * What the bank says happened, then what became of it, then how it got here.
+ * They were once interleaved — the source file beside the customer, the
+ * deposit reference between the order and who matched it — and then banded
+ * under merged headers, which only added a row to classify before anything
+ * could be read. The order carries the grouping on its own.
  *
  * ── What was dropped ───────────────────────────────────────────────────────
  *
  * Deposit reference was the bank reference again, verbatim, in a second
  * column. Narration is the depositor line with more of the same text after
  * it. Source file belongs to the upload rather than to the credit, and the
- * screen still carries it. Eleven columns instead of fourteen, none a copy.
+ * screen still carries it. Customer duplicates what the order reference
+ * already names. Ten columns instead of fourteen, none of them a copy.
+ *
+ * ── One alignment, one centred thing ───────────────────────────────────────
+ *
+ * Everything is left-aligned. Only the masthead is centred, because it names
+ * the whole document rather than labelling a column.
  *
  * ── Real numbers, with a cell format ───────────────────────────────────────
  *
@@ -99,52 +100,42 @@ type Column = {
   width: number
   value: (l: AccountStatementLine) => string | number | Date | null
   fmt?: string
-  align?: 'left' | 'right' | 'center'
 }
 
-/** The three bands, in the order a credit is actually read. */
-const GROUPS: { label: string; columns: Column[] }[] = [
+/**
+ * The columns, in the order a credit is actually read: what the bank says
+ * happened, what became of it, then how it got here.
+ *
+ * They were grouped under merged band headers — THE CREDIT / MATCHED TO /
+ * IMPORTED — which added a row to classify before anything could be read. The
+ * order already carries the grouping; the banner was saying it twice.
+ *
+ * Everything is left-aligned, amounts included. A right-aligned money column
+ * is the convention, but a sheet with one column pulling the other way reads
+ * as ragged, and the figures are bold and green enough to find without it.
+ */
+const COLUMNS: Column[] = [
+  { label: 'Date', width: 14, fmt: DAY, value: (l) => asDay(l.txn_date) },
+  { label: 'Amount', width: 20, fmt: NGN, value: (l) => Number(l.amount) },
+  { label: 'Depositor', width: 44, value: (l) => l.depositor || null },
+  { label: 'Bank reference', width: 22, value: (l) => l.bank_ref || null },
+  { label: 'Status', width: 13, value: (l) => (l.status === 'MATCHED' ? 'Matched' : 'Unmatched') },
   {
-    label: 'The credit',
-    columns: [
-      { label: 'Date', width: 14, fmt: DAY, value: (l) => asDay(l.txn_date) },
-      { label: 'Amount', width: 20, fmt: NGN, align: 'right', value: (l) => Number(l.amount) },
-      { label: 'Depositor', width: 38, value: (l) => l.depositor || null },
-      { label: 'Bank reference', width: 22, value: (l) => l.bank_ref || null },
-    ],
+    label: 'Order', width: 14,
+    // A matched line whose order has since been deleted is a real state, and a
+    // blank cell would hide it. See the repository note on PU11486.
+    value: (l) => l.order_reference || (l.status === 'MATCHED' ? 'Order deleted' : null),
   },
-  {
-    label: 'Matched to',
-    columns: [
-      {
-        label: 'Status', width: 13, align: 'center',
-        value: (l) => (l.status === 'MATCHED' ? 'Matched' : 'Unmatched'),
-      },
-      {
-        label: 'Order', width: 14,
-        // A matched line whose order has since been deleted is a real state,
-        // and a blank cell would hide it. See the repository note on PU11486.
-        value: (l) => l.order_reference || (l.status === 'MATCHED' ? 'Order deleted' : null),
-      },
-      { label: 'Customer', width: 32, value: (l) => l.customer_name || null },
-      { label: 'Matched by', width: 22, value: (l) => l.matched_by_name || null },
-      { label: 'Matched on', width: 21, fmt: STAMP, value: (l) => asStamp(l.matched_at) },
-    ],
-  },
-  {
-    label: 'Imported',
-    columns: [
-      { label: 'Uploaded by', width: 22, value: (l) => l.uploaded_by_name || null },
-      { label: 'Uploaded on', width: 21, fmt: STAMP, value: (l) => asStamp(l.uploaded_at) },
-    ],
-  },
+  { label: 'Matched by', width: 22, value: (l) => l.matched_by_name || null },
+  { label: 'Matched on', width: 21, fmt: STAMP, value: (l) => asStamp(l.matched_at) },
+  { label: 'Uploaded by', width: 22, value: (l) => l.uploaded_by_name || null },
+  { label: 'Uploaded on', width: 21, fmt: STAMP, value: (l) => asStamp(l.uploaded_at) },
 ]
 
-const COLUMNS = GROUPS.flatMap((g) => g.columns)
 const AMOUNT_COL = 2
 const ORDER_COL = 6
 const STATUS_COL = 5
-const HEADER_ROW = 8
+const HEADER_ROW = 7
 const FIRST_DATA_ROW = HEADER_ROW + 1
 
 export async function exportStatementLines({
@@ -177,12 +168,16 @@ export async function exportStatementLines({
   const title = ws.getCell(1, 1)
   title.value = account.account_name.toUpperCase()
   title.font = { bold: true, size: 16, color: { argb: INK } }
+  // The masthead is the one place centring earns its keep — it names the whole
+  // document rather than labelling a column, so it sits over all of them.
+  title.alignment = { horizontal: 'center', vertical: 'middle' }
   ws.getRow(1).height = 24
 
   ws.mergeCells(2, 1, 2, lastCol)
   const sub = ws.getCell(2, 1)
   sub.value = `${account.bank_name.toUpperCase()}  ·  ${account.account_number}`
-  sub.font = { size: 11, color: { argb: MUTED } }
+  sub.font = { bold: true, size: 11, color: { argb: MUTED } }
+  sub.alignment = { horizontal: 'center', vertical: 'middle' }
 
   /*
     ── The summary is a table now ────────────────────────────────────────
@@ -241,22 +236,6 @@ export async function exportStatementLines({
     note.fill = solid(AMBER_FILL)
   }
 
-  // ── Band headers, above the column headers ──────────────────────────────
-  let at = 1
-  for (const g of GROUPS) {
-    const start = at
-    const end = at + g.columns.length - 1
-    ws.mergeCells(7, start, 7, end)
-    const cell = ws.getCell(7, start)
-    cell.value = g.label.toUpperCase()
-    cell.font = { bold: true, size: 9, color: { argb: NAVY } }
-    cell.fill = solid(BAND)
-    cell.alignment = { horizontal: 'center', vertical: 'middle' }
-    cell.border = hairline(NAVY)
-    at = end + 1
-  }
-  ws.getRow(7).height = 18
-
   const header = ws.getRow(HEADER_ROW)
   header.values = COLUMNS.map((c) => c.label)
   header.height = 20
@@ -264,7 +243,7 @@ export async function exportStatementLines({
     const cell = header.getCell(i + 1)
     cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 }
     cell.fill = solid(NAVY)
-    cell.alignment = { horizontal: c.align || 'left', vertical: 'middle' }
+    cell.alignment = { horizontal: 'left', vertical: 'middle' }
     cell.border = hairline(NAVY)
   })
 
@@ -280,7 +259,7 @@ export async function exportStatementLines({
       const cell = row.getCell(i + 1)
       if (c.fmt) cell.numFmt = c.fmt
       cell.border = hairline()
-      cell.alignment = { horizontal: c.align || 'left', vertical: 'top', wrapText: c.width > 30 }
+      cell.alignment = { horizontal: 'left', vertical: 'top', wrapText: c.width > 30 }
       cell.font = { size: 10, color: { argb: INK } }
       // Unmatched money is what somebody is hunting for, so the whole row
       // carries it rather than one cell.
@@ -321,11 +300,11 @@ export async function exportStatementLines({
     amountCell.value = { formula: `SUM(B${FIRST_DATA_ROW}:B${cursor - 1})`, result: total }
     amountCell.numFmt = NGN
     amountCell.font = { bold: true, size: 12, color: { argb: GREEN_INK } }
-    amountCell.alignment = { horizontal: 'right', vertical: 'middle' }
+    amountCell.alignment = { horizontal: 'left', vertical: 'middle' }
 
     const statusTotal = totals.getCell(STATUS_COL)
     statusTotal.value = `${matched.length} matched`
-    statusTotal.alignment = { horizontal: 'center', vertical: 'middle' }
+    statusTotal.alignment = { horizontal: 'left', vertical: 'middle' }
     statusTotal.font = { bold: true, size: 10, color: { argb: GREEN_INK } }
   }
 
