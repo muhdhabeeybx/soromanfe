@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { format } from 'date-fns'
 import {
   Loader2, ShieldCheck, Landmark, Users, Pencil, FileBadge2Icon,
 } from 'lucide-react'
@@ -75,12 +74,21 @@ function Fact({ label, value, sub, wide }: {
   )
 }
 
-/** A tonnage as it is written on the papers — two decimals, or nothing. */
-const mt = (v: unknown) => {
+/**
+ * A tonnage as it is written on the papers — two decimals, and the unit.
+ *
+ * Two decimals because tonnage is decimal in reality (15,850.62 MT) and
+ * rounding it misstates the figure somebody is checking against the papers.
+ *
+ * Zero is not a tonnage: qty_volume_mt defaults to "0" and bl_qty_mt is null
+ * on most rows, so a weight nobody entered reads as a dash rather than
+ * "0.00 MT" — the same rule the form and every report follow.
+ */
+const mtOf = (v: unknown) => {
   const n = Number(v ?? 0)
   return Number.isFinite(n) && n > 0
     ? `${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`
-    : null
+    : '—'
 }
 
 /**
@@ -199,34 +207,36 @@ export function PfiActivateDialog({
             PFI Details
           </span>
 
-          <dl className="grid gap-x-6 gap-y-4 rounded-lg border border-foreground/15 bg-muted/30 p-4 sm:grid-cols-4">
-            <Fact
-              label="Date"
-              value={pfi.pfiDate ? format(new Date(pfi.pfiDate), 'd MMM yyyy') : '—'}
-            />
-            {/*
-              Tank and BL both carry their tonnage. A cargo is measured in
-              litres and billed in tonnes, and checking one against the papers
-              means reading both — so neither is left to be worked out.
-            */}
-            <Fact
-              label={`Tank quantity (${unit.short})`}
-              value={qty > 0 ? qty.toLocaleString() : '—'}
-              sub={mt(pfi.qtyVolumeMt)}
-            />
-            <Fact
-              label={`Price per Litre`}
-              value={price > 0 ? naira(price) : '—'}
-            />
-            {/* Blank means unknown, so it reads as a dash rather than ₦0 —
-                the same rule the form and every report follow. */}
-            <Fact label="Cargo value" value={cargoValue != null ? naira(cargoValue) : '—'} />
+          <dl className="grid gap-x-6 gap-y-4 rounded-lg border border-foreground/15 bg-muted/30 p-4 sm:grid-cols-3">
+            {/* The date is deliberately not here: the header already carries
+                when the batch was raised, and repeating it cost a cell in a
+                grid where every other one is a figure. It is in git history
+                if it turns out to be wanted. */}
 
+            {/*
+              Each quantity twice, once per unit, rather than one figure with
+              the other beneath it.
+
+              A cargo is measured in litres and billed in tonnes; both are read
+              against the shipping papers, and neither is the subtitle of the
+              other. The unit rides on the FIGURE, not the label — "20,000.00
+              MT" is a quantity, "Tank Quantity (MT)" is a heading with a
+              number under it, and only the first can be read on its own.
+            */}
+            <Fact label="Tank Quantity" value={mtOf(pfi.qtyVolumeMt)} />
+            <Fact
+              label="Tank Quantity"
+              value={qty > 0 ? `${qty.toLocaleString()} ${unit.plural}` : '—'}
+            />
+            <Fact label="Price per Litre" value={price > 0 ? naira(price) : '—'} />
+
+            {isCargo && <Fact label="BL Quantity" value={mtOf(pfi.blQtyMt)} />}
             {isCargo && (
               <Fact
-                label={`BL figures (${unit.short})`}
-                value={pfi.blQtyLitres != null ? Number(pfi.blQtyLitres).toLocaleString() : '—'}
-                sub={mt(pfi.blQtyMt)}
+                label="BL Quantity"
+                value={pfi.blQtyLitres != null
+                  ? `${Number(pfi.blQtyLitres).toLocaleString()} ${unit.plural}`
+                  : '—'}
               />
             )}
             {!isCargo && (
@@ -235,8 +245,13 @@ export function PfiActivateDialog({
                 value={pfi.ticketCount != null ? Number(pfi.ticketCount).toLocaleString() : '—'}
               />
             )}
-            <Fact label="IT compliance" value={pfi.itComplianceOfficerName || '—'} />
-            <Fact label="Security exit" value={pfi.securityExitOfficerName || '—'} />
+
+            {/* Blank means unknown, so it reads as a dash rather than ₦0 —
+                the same rule the form and every report follow. */}
+            <Fact label="Cargo Value" value={cargoValue != null ? naira(cargoValue) : '—'} />
+
+            <Fact label="IT Compliance" value={pfi.itComplianceOfficerName || '—'} />
+            <Fact label="Security Exit" value={pfi.securityExitOfficerName || '—'} />
             {pfi.description
               ? <Fact label="Description" value={pfi.description} />
               : <Fact label="Vessel" value={pfi.vesselName || '—'} />}
