@@ -51,16 +51,37 @@ const TYPE_LABEL: Record<string, string> = {
   trucking: 'Trucking',
 }
 
-/** One labelled fact. Dashes where a figure was never entered, never a false 0. */
-function Fact({ label, value, wide }: { label: string; value: React.ReactNode; wide?: boolean }) {
+/**
+ * One labelled fact. Dashes where a figure was never entered, never a false 0.
+ *
+ * `sub` carries the SAME quantity in another unit — a cargo is measured in
+ * litres and billed in tonnes, and the two are read together. It is a second
+ * line rather than a second Fact so the pair cannot be separated by the grid
+ * reflowing, and so the MT figure never reads as a quantity of its own.
+ */
+function Fact({ label, value, sub, wide }: {
+  label: string
+  value: React.ReactNode
+  sub?: React.ReactNode
+  wide?: boolean
+}) {
   return (
     <div className={cn('min-w-0', wide && 'sm:col-span-2')}>
       <dt className={cn(MICRO, 'text-muted-foreground')}>{label}</dt>
       <dd className="mt-1 truncate text-sm font-medium" title={typeof value === 'string' ? value : undefined}>
         {value}
       </dd>
+      {sub && <dd className="truncate text-xs text-muted-foreground">{sub}</dd>}
     </div>
   )
+}
+
+/** A tonnage as it is written on the papers — two decimals, or nothing. */
+const mt = (v: unknown) => {
+  const n = Number(v ?? 0)
+  return Number.isFinite(n) && n > 0
+    ? `${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`
+    : null
 }
 
 /**
@@ -184,9 +205,15 @@ export function PfiActivateDialog({
               label="Date"
               value={pfi.pfiDate ? format(new Date(pfi.pfiDate), 'd MMM yyyy') : '—'}
             />
+            {/*
+              Tank and BL both carry their tonnage. A cargo is measured in
+              litres and billed in tonnes, and checking one against the papers
+              means reading both — so neither is left to be worked out.
+            */}
             <Fact
-              label={`Quantity (${unit.short})`}
+              label={`Tank quantity (${unit.short})`}
               value={qty > 0 ? qty.toLocaleString() : '—'}
+              sub={mt(pfi.qtyVolumeMt)}
             />
             <Fact
               label={`Price per Litre`}
@@ -198,8 +225,9 @@ export function PfiActivateDialog({
 
             {isCargo && (
               <Fact
-                label={`BL quantity (${unit.short})`}
+                label={`BL figures (${unit.short})`}
                 value={pfi.blQtyLitres != null ? Number(pfi.blQtyLitres).toLocaleString() : '—'}
+                sub={mt(pfi.blQtyMt)}
               />
             )}
             {!isCargo && (
@@ -261,7 +289,7 @@ export function PfiActivateDialog({
 
         {/* ── What it needs to trade ────────────────────────────────────── */}
         <div className="space-y-5 border-t border-foreground/15 bg-muted/20 px-6 py-5">
-          <div className="flex items-start gap-2.5">
+          {/* <div className="flex items-start gap-2.5">
             <Info className="mt-0.5 size-4 shrink-0 text-accent" />
             <p className="text-sm text-muted-foreground">
               Its remaining stock joins the {pfi.productName || 'product'} total and its revenue
@@ -271,7 +299,7 @@ export function PfiActivateDialog({
                 Assigning an officer is also what lets them see this PFI.
               </span>
             </p>
-          </div>
+          </div> */}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -351,9 +379,9 @@ export function PfiActivateDialog({
           </Button>
 
           <div className="ml-auto flex flex-wrap items-center gap-3">
-            {missing && (
+            {/* {missing && (
               <span className="text-sm text-muted-foreground">{missing}</span>
-            )}
+            )} */}
             <Button onClick={submit} disabled={!!missing || activate.isPending}>
               {activate.isPending
                 ? <Loader2 className="animate-spin" />
