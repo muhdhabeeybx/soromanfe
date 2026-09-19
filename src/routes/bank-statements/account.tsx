@@ -550,7 +550,7 @@ function PaymentsTable({
         <TableCell className="align-top text-right text-base font-semibold whitespace-nowrap tabular-nums">
           ₦{Number(l.amount).toLocaleString()}
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           <span className="block break-words">{l.depositor || '—'}</span>
           {l.narration && l.narration !== l.depositor && (
             <span className="mt-1 block break-words text-muted-foreground">
@@ -558,10 +558,10 @@ function PaymentsTable({
             </span>
           )}
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           <span className="block font-mono break-all">{l.bank_ref || '—'}</span>
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           {l.order_reference && l.order_id != null ? (
             /*
               The order reference is the end of the money's journey, so it goes
@@ -582,19 +582,19 @@ function PaymentsTable({
             <StatusChip tone="warning" fill="solid">Unmatched</StatusChip>
           )}
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           <span className="block break-words">{l.matched_by_name || '—'}</span>
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           {l.matched_at ? format(new Date(l.matched_at), 'd MMM yyyy, HH:mm') : '—'}
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           <span className="block break-words">{l.uploaded_by_name || '—'}</span>
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           {l.uploaded_at ? format(new Date(l.uploaded_at), 'd MMM yyyy, HH:mm') : '—'}
         </TableCell>
-        <TableCell className="align-top">
+        <TableCell className="align-top whitespace-normal">
           <span className="block break-all text-muted-foreground">
             {l.filename || '—'}
           </span>
@@ -604,7 +604,15 @@ function PaymentsTable({
   }
 
   /*
-    table-fixed with a stated minimum, not the default w-full auto layout.
+    ── whitespace-normal on every cell that holds free text ────────────────
+
+    TableCell ships `whitespace-nowrap`. A cell inherits that to its children,
+    and `white-space: nowrap` beats `overflow-wrap: break-word` outright — so
+    the wrapping asked of the depositor and the file name could never happen
+    and the text ran straight over the next column instead. The width was never
+    the problem; the default was. Date and Amount keep nowrap on purpose.
+
+    ── table-fixed with a stated minimum, not the default w-full auto layout ─
 
     Ten columns of bank narration do not fit a panel, and an auto-layout table
     told to be w-full does not scroll — it compresses every column to its
@@ -617,7 +625,7 @@ function PaymentsTable({
     scroller here — a second one only produced a scrollbar that moved nothing.
   */
   return (
-    <Table className="min-w-[1680px] table-fixed">
+    <Table className="min-w-[1768px] table-fixed">
       <TableHeader>
         <TableRow>
           <TableHead className="w-[7rem]">Date</TableHead>

@@ -685,12 +685,10 @@ function ReviewStage({ preflight }: { preflight: StatementPreview }) {
                   <TableRow key={`${r.bankRef}-${i}`}>
                     <TableCell className="text-right text-xs text-muted-foreground/70">{i + 1}</TableCell>
                     <TableCell className="whitespace-nowrap">{formatPlainDay(r.txnDate)}</TableCell>
-                    <TableCell>
-                      <span className="block max-w-[20rem] truncate" title={r.narration || r.depositor}>
-                        {r.depositor || '—'}
-                      </span>
+                    <TableCell className="whitespace-normal">
+                      <span className="block max-w-[22rem] break-words">{r.depositor || '—'}</span>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{r.bankRef || '—'}</TableCell>
+                    <TableCell className="font-mono text-xs whitespace-normal break-all">{r.bankRef || '—'}</TableCell>
                     <TableCell className="text-right font-semibold whitespace-nowrap tabular-nums">
                       ₦{Number(r.amount).toLocaleString()}
                     </TableCell>
@@ -734,10 +732,10 @@ function ReviewStage({ preflight }: { preflight: StatementPreview }) {
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {formatPlainDay(r.txnDate)}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        <span className="block max-w-[18rem] truncate">{r.depositor || '—'}</span>
+                      <TableCell className="whitespace-normal text-muted-foreground">
+                        <span className="block max-w-[18rem] break-words">{r.depositor || '—'}</span>
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
+                      <TableCell className="font-mono text-xs whitespace-normal break-all text-muted-foreground">
                         {r.bankRef || '—'}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap tabular-nums text-muted-foreground">
