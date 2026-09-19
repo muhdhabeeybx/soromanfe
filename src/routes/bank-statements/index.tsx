@@ -1,458 +1,317 @@
-import { useMemo, useRef, useState } from 'react'
-import { PageHeader } from '#/components/PageHeader'
-import { createFileRoute } from '@tanstack/react-router'
+import { useMemo, useState } from 'react'
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { format } from 'date-fns'
 import {
-  Upload, FileSpreadsheet, Settings2, Loader2, CheckCircle2, AlertCircle,
+  Upload, Landmark, CheckCircle2, AlertCircle, Settings2, Search,
+  ArrowRight, FileSpreadsheet,
 } from 'lucide-react'
 
+import { PageHeader } from '#/components/PageHeader'
+import { PageEmpty } from '#/components/PageEmpty'
 import { Button } from '#/components/ui/button'
-import { NativeSelect } from '#/components/ui/native-select'
+import { Input } from '#/components/ui/input'
 import { StatCard, StatCardGrid } from '#/components/ui/stat-card'
 import { StatusChip } from '#/components/ui/status-chip'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#/components/ui/table'
-import { PANEL, MICRO, PANEL_RAIL, PANEL_BODY } from '#/lib/panel'
+import { PANEL, MICRO } from '#/lib/panel'
+import { formatCurrency } from '#/lib/format'
+import { formatPlainDay } from '#/lib/bank-statement-parser'
 import { cn } from '#/lib/utils'
-import { useBankAccounts } from '#/lib/hooks/useBankAccounts'
-import {
-  useStatementMapping, useSaveStatementMapping, useBankStatements,
-  useUploadStatement, useDeleteStatement,
-} from '#/lib/hooks/useBankStatements'
-import { StatementUploads } from './-statement-uploads'
-import {
-  readGrid, parseRows, formatPlainDay,
-  type Grid, type ColumnMapping, type DateOrder,
-} from '#/lib/bank-statement-parser'
 import { routeGuard } from '#/lib/route-guard'
+import {
+  useStatementAccounts, type StatementAccountSummary,
+} from '#/lib/hooks/useBankStatements'
+import { UploadStatementDialog } from './-upload-dialog'
 
 export const Route = createFileRoute('/bank-statements/')({
   beforeLoad: () => routeGuard('/bank-statements'),
   component: BankStatementsPage,
 })
 
-const NONE = -1
-
-const FIELDS: { key: keyof ColumnMapping; label: string; required?: boolean; hint?: string }[] = [
-  { key: 'dateColumn', label: 'Date', required: true },
-  { key: 'creditColumn', label: 'Credit', hint: 'If credits and debits are separate columns' },
-  { key: 'amountColumn', label: 'Amount', hint: 'If one signed column holds both' },
-  { key: 'depositorColumn', label: 'Depositor' },
-  { key: 'referenceColumn', label: 'Reference' },
-  { key: 'narrationColumn', label: 'Narration' },
-]
-
+/**
+ * Bank statements, one bank at a time.
+ *
+ * This page used to be a single upload form with an account dropdown and one
+ * flat list of every file ever imported, across every account. That is not how
+ * anybody holds the problem: a bank statement belongs to a bank, and the
+ * questions asked of it — how much has come in on this account, how much of it
+ * has been claimed, what is still sitting there — are all per account.
+ *
+ * So the account is the unit. Each bank gets a card carrying its own totals,
+ * and everything else happens inside it.
+ */
 function BankStatementsPage() {
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [bankAccountId, setBankAccountId] = useState('')
-  const [grid, setGrid] = useState<Grid | null>(null)
-  const [filename, setFilename] = useState('')
-  const [reading, setReading] = useState(false)
-  const [editingFormat, setEditingFormat] = useState(false)
-  const [draft, setDraft] = useState<ColumnMapping>({
-    headerRow: 0, dateColumn: 0, amountColumn: null, creditColumn: null,
-    depositorColumn: null, referenceColumn: null, narrationColumn: null,
-  })
+  const [search, setSearch] = useState('')
+  const [onlyActive, setOnlyActive] = useState(true)
+  const [uploadFor, setUploadFor] = useState<StatementAccountSummary | null>(null)
 
-  const { data: banks = [], isLoading: loadingBanks } = useBankAccounts()
+  const { data: accounts = [], isLoading } = useStatementAccounts()
 
-  const { data: saved } = useStatementMapping(bankAccountId || undefined)
-  const { data: statements = [] } = useBankStatements(bankAccountId || undefined)
-  const saveMapping = useSaveStatementMapping()
-  const upload = useUploadStatement()
-  const remove = useDeleteStatement()
-
-  // The saved format, if this account has one.
-  const mapping: ColumnMapping | null = useMemo(() => {
-    if (!saved) return null
+  const totals = useMemo(() => {
+    const withUploads = accounts.filter((a) => a.statement_count > 0)
+    const sum = (pick: (a: StatementAccountSummary) => string) =>
+      accounts.reduce((s, a) => s + Number(pick(a) || 0), 0)
     return {
-      headerRow: saved.header_row ?? 0,
-      dateColumn: saved.date_column,
-      amountColumn: saved.amount_column,
-      creditColumn: saved.credit_column,
-      depositorColumn: saved.depositor_column,
-      referenceColumn: saved.reference_column,
-      narrationColumn: saved.narration_column,
+      banks: withUploads.length,
+      files: accounts.reduce((s, a) => s + a.statement_count, 0),
+      total: sum((a) => a.total_amount),
+      matched: sum((a) => a.matched_amount),
+      unmatched: sum((a) => a.unmatched_amount),
+      unmatchedRows: accounts.reduce((s, a) => s + a.unmatched_count, 0),
     }
-  }, [saved])
+  }, [accounts])
 
-  // Column selects read from the freshly uploaded file when there is one, and
-  // fall back to the headers captured the last time this account's format was
-  // saved — so the format can be edited without uploading a file first.
-  // Rows migrated from the legacy system store sample_headers as
-  // `{ keys: [...], legacy: {...} }` rather than a flat array — handle both.
-  const savedHeaders: string[] = Array.isArray(saved?.sample_headers)
-    ? saved.sample_headers
-    : (Array.isArray(saved?.sample_headers?.keys) ? saved.sample_headers.keys : [])
-  const liveHeaders = grid?.[draft.headerRow] ?? []
-  const headers = liveHeaders.length > 0 ? liveHeaders : savedHeaders
-  const showFormatPanel = (grid && !mapping) || editingFormat
-  const effectiveMapping = editingFormat ? draft : (mapping ?? draft)
-  /**
-   * An override for a file the evidence cannot settle. Per upload, not saved:
-   * the next statement is a different file and may be exported differently,
-   * and a sticky setting would silently apply this decision to it.
-   */
-  const [dateOrder, setDateOrder] = useState<DateOrder | undefined>(undefined)
-  const preview = grid
-    ? parseRows(grid, { ...effectiveMapping, dateOrder })
-    : null
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return accounts.filter((a) => {
+      // An account with history stays visible whatever its status says — the
+      // money is already on it, and hiding it would hide the money.
+      if (onlyActive && a.status !== 'Active' && a.statement_count === 0) return false
+      if (!q) return true
+      return [a.bank_name, a.account_name, a.account_number]
+        .some((v) => String(v || '').toLowerCase().includes(q))
+    })
+  }, [accounts, search, onlyActive])
 
-  const handleFile = async (file: File) => {
-    setReading(true)
-    try {
-      const g = await readGrid(file)
-      setGrid(g)
-      setFilename(file.name)
-      if (!mapping) setDraft((d) => ({ ...d, headerRow: 0 }))
-    } finally {
-      setReading(false)
-    }
-  }
-
-  const handleEditFormat = () => {
-    if (mapping) setDraft(mapping)
-    setEditingFormat(true)
-  }
-
-  const handleCancelEditFormat = () => {
-    setEditingFormat(false)
-    if (mapping) setDraft(mapping)
-  }
-
-  const handleUpload = async () => {
-    if (!preview?.rows.length) return
-    await upload.mutateAsync({ bankAccountId, filename, rows: preview.rows })
-    setGrid(null); setFilename('')
-    if (fileInput.current) fileInput.current.value = ''
-  }
-
-  const totals = useMemo(() => ({
-    statements: statements.length,
-    lines: statements.reduce((s, x) => s + (x.row_count || 0), 0),
-    matched: statements.reduce((s, x) => s + (x.matched_count || 0), 0),
-    duplicates: statements.reduce((s, x) => s + (x.duplicate_count || 0), 0),
-  }), [statements])
+  const uploaded = shown.filter((a) => a.statement_count > 0)
+  const untouched = shown.filter((a) => a.statement_count === 0)
 
   return (
     <div className="space-y-6">
       <PageHeader
-      eyebrow="Finance"
-      title="Bank statements"
-      description="Upload statements so Finance can match deposits instead of retyping them."
+        eyebrow="Finance"
+        title="Bank statements"
+        description="Every account, what has been uploaded against it, and how much of it an order has claimed."
       />
 
       <StatCardGrid count={4}>
-                <StatCard icon={<FileSpreadsheet />} label="Statements" value={totals.statements} />
-                <StatCard icon={<Upload />} label="Credit rows" value={totals.lines.toLocaleString()} />
-                <StatCard icon={<CheckCircle2 />} label="Matched" value={totals.matched.toLocaleString()} />
-                <StatCard
-                tone={totals.duplicates > 0 ? 'amber' : 'green'}
-                icon={<AlertCircle />} label="Duplicates skipped" value={totals.duplicates.toLocaleString()}
-                />
-                </StatCardGrid>
-                <section className={PANEL}>
-                <div className={PANEL_RAIL}>
-                <span className={MICRO}>Upload a statement</span>
-                <div className="flex items-center gap-2">
-                {mapping && !editingFormat && (
-                <>
-                <StatusChip tone="accent" size="rail">Format saved</StatusChip>
-                <Button variant="ghost" size="xs" onClick={handleEditFormat}>
-                <Settings2 data-icon="inline-start" />
-                Edit format
-                </Button>
-                </>
-                )}
-                {editingFormat && mapping && (
-                <Button variant="ghost" size="xs" onClick={handleCancelEditFormat}>
-                Cancel
-                </Button>
-                )}
-                </div>
-                </div>
-                <div className={cn(PANEL_BODY, 'space-y-5')}>
-                <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                <label className={cn(MICRO, 'block text-muted-foreground')} htmlFor="bank">
-                Bank account
-                </label>
-                <NativeSelect
-                id="bank"
-                value={bankAccountId}
-                onChange={(e) => {
-                  setBankAccountId(e.target.value); setGrid(null); setEditingFormat(false)
-                }}
-                >
-                <option value="">
-                {loadingBanks ? 'Loading…' : 'Choose an account'}
-                </option>
-                {banks.map((b: any) => (
-                <option key={b.id} value={b.id}>
-                {b.bankName} — {b.accountName} — {b.accountNumber}
-                </option>
-                ))}
-                </NativeSelect>
-                </div>
-                <div className="space-y-2">
-                <label className={cn(MICRO, 'block text-muted-foreground')} htmlFor="file">
-                Statement file
-                </label>
-                <input
-                ref={fileInput}
-                id="file"
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                disabled={!bankAccountId}
-                onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none file:mr-3 file:h-6 file:rounded-md file:border-0 file:bg-muted file:px-2 file:text-xs file:font-normal disabled:pointer-events-none disabled:opacity-50 dark:bg-input/30"
-                />
-                </div>
-                </div>
-                {!bankAccountId && (
-                <p className="text-sm text-muted-foreground">
-                Pick an account to begin. Each bank's format is set up once, then every later
-                upload for that account parses automatically.
-                </p>
-                )}
-                {reading && (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Reading the file…
-                </p>
-                )}
-                {/* Format setup — for a first upload, or when explicitly editing. */}
-                {showFormatPanel && (
-                <div className="space-y-4 rounded-lg border border-warning/40 bg-warning/5 p-4">
-                <div className="flex items-start gap-2">
-                <Settings2 className="mt-0.5 size-4 shrink-0 text-warning" />
-                <div>
-                <p className="text-sm font-normal">
-                {mapping ? "Edit this account's format" : "Set up this account's format"}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                {mapping
-                  ? 'Pick which columns to use for this account. Saving overwrites the current format for every future upload.'
-                  : "Tell us which row holds the headers and what each column means. Saved once, then reused for every future upload."}
-                </p>
-                </div>
-                </div>
-                {grid && (
-                <div className="space-y-2">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>Header row</label>
-                <NativeSelect
-                value={String(draft.headerRow)}
-                onChange={(e) => setDraft((d) => ({ ...d, headerRow: Number(e.target.value) }))}
-                className="sm:max-w-xs"
-                >
-                {grid.slice(0, 10).map((row, i) => (
-                <option key={i} value={i}>
-                Row {i + 1} — {row.filter(Boolean).slice(0, 4).join(' · ').slice(0, 60)}
-                </option>
-                ))}
-                </NativeSelect>
-                </div>
-                )}
-                {!grid && (
-                <p className="text-xs text-muted-foreground/70">
-                Columns below are from the last uploaded file. Upload a new file instead if the
-                header row itself has moved.
-                </p>
-                )}
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {FIELDS.map((f) => (
-                <div key={f.key} className="space-y-1.5">
-                <label className={cn(MICRO, 'block text-muted-foreground')}>
-                {f.label}{f.required && <span className="text-destructive"> *</span>}
-                </label>
-                <NativeSelect
-                value={String((draft[f.key] as number | null) ?? NONE)}
-                onChange={(e) => {
-                const v = Number(e.target.value)
-                setDraft((d) => ({ ...d, [f.key]: v === NONE ? null : v }))
-                }}
-                >
-                <option value={NONE}>Not present</option>
-                {headers.map((h, i) => (
-                <option key={i} value={i}>
-                {h?.trim() || `Column ${i + 1}`}
-                </option>
-                ))}
-                </NativeSelect>
-                {f.hint && <p className="text-xs text-muted-foreground/70">{f.hint}</p>}
-                </div>
-                ))}
-                </div>
-                <div className="flex items-center gap-2">
-                <Button
-                size="sm"
-                disabled={saveMapping.isPending || (draft.amountColumn === null && draft.creditColumn === null)}
-                onClick={() =>
-                saveMapping.mutate(
-                { bankAccountId, mapping: draft, sampleHeaders: headers },
-                { onSuccess: () => setEditingFormat(false) },
-                )
-                }
-                >
-                {saveMapping.isPending && <Loader2 className="animate-spin" />}
-                Save format
-                </Button>
-                {editingFormat && mapping && (
-                <Button variant="ghost" size="sm" onClick={handleCancelEditFormat}>
-                Cancel
-                </Button>
-                )}
-                </div>
-                {draft.amountColumn === null && draft.creditColumn === null && (
-                <p className="text-xs text-muted-foreground/70">
-                Choose either a credit column or a signed amount column.
-                </p>
-                )}
-                </div>
-                )}
-                {/* What will be imported. */}
-                {grid && preview && (
-                <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                <StatusChip tone={preview.rows.length ? 'accent' : 'warning'}>
-                {preview.rows.length} credit row{preview.rows.length === 1 ? '' : 's'}
-                </StatusChip>
-                <StatusChip tone="inert">{preview.skipped} skipped</StatusChip>
-                {/*
-                  Why they were skipped, not just how many.
-                  "365 skipped" is a black box, and the one question anybody
-                  asks of an import is why a line they can see in the file is
-                  not in the system.
-                */}
-                {Object.entries(preview.skipSummary).map(([reason, n]) => (
-                <StatusChip
-                key={reason}
-                tone={reason === 'debit, not a credit' ? 'inert' : 'warning'}
-                >
-                {n} {reason}
-                </StatusChip>
-                ))}
-                {/*
-                  Which way round the dates were read, always said out loud.
+        <StatCard
+          icon={<Landmark />} label="Banks with statements"
+          value={totals.banks}
+          description={`${totals.files.toLocaleString()} file${totals.files === 1 ? '' : 's'} imported`}
+        />
+        <StatCard
+          icon={<FileSpreadsheet />} tone="neutral" label="Total credited"
+          value={formatCurrency(totals.total)}
+        />
+        <StatCard
+          icon={<CheckCircle2 />} label="Matched to an order"
+          value={formatCurrency(totals.matched)}
+          description={
+            totals.total > 0
+              ? `${Math.round((totals.matched / totals.total) * 100)}% of everything uploaded`
+              : undefined
+          }
+        />
+        <StatCard
+          tone={totals.unmatched > 0 ? 'amber' : 'green'}
+          icon={<AlertCircle />} label="Still unmatched"
+          value={formatCurrency(totals.unmatched)}
+          description={`${totals.unmatchedRows.toLocaleString()} row${totals.unmatchedRows === 1 ? '' : 's'} unclaimed`}
+        />
+      </StatCardGrid>
 
-                  09/01/2026 is 1 September to one bank and 9 January to
-                  another, and nothing in the row decides it. Reading it the
-                  wrong way is invisible — the date still looks like a date —
-                  so the only safe version of this is to state the reading and
-                  let somebody disagree with it.
-                */}
-                <StatusChip tone={preview.dateOrderDetected ? 'accent' : 'warning'}>
-                {preview.dateOrder === 'month-first' ? 'Month/day' : 'Day/month'}
-                {preview.dateOrderDetected ? ' — from the file' : ' — assumed'}
-                </StatusChip>
-                <span className="text-xs text-muted-foreground">
-                Debits, blanks, totals and repeated headers are skipped, not errors.
-                </span>
-                </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 sm:max-w-xs">
+          <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Find a bank or account number"
+            className="pl-8"
+          />
+        </div>
+        <Button
+          variant={onlyActive ? 'outline' : 'ghost'}
+          size="sm"
+          onClick={() => setOnlyActive((v) => !v)}
+        >
+          {onlyActive ? 'Hiding closed accounts' : 'Showing every account'}
+        </Button>
+      </div>
 
-                {/*
-                  An assumption gets a way to be corrected; a proven reading
-                  does not need one and offering it would invite somebody to
-                  override the evidence.
-                */}
-                {!preview.dateOrderDetected && (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
-                <AlertCircle className="size-3.5 shrink-0 text-warning" />
-                <span className="text-xs text-muted-foreground">
-                No date in this file is past the 12th, so it cannot say which half is the
-                day. Reading it as{' '}
-                <strong className="text-foreground">
-                {preview.dateOrder === 'month-first' ? 'month/day' : 'day/month'}
-                </strong>
-                {' — '}the first row is {preview.rows[0] ? formatPlainDay(preview.rows[0].txnDate) : '—'}.
-                </span>
-                <Button
-                variant="outline" size="sm"
-                onClick={() => setDateOrder(
-                preview.dateOrder === 'month-first' ? 'day-first' : 'month-first',
-                )}
-                >
-                Read as {preview.dateOrder === 'month-first' ? 'day/month' : 'month/day'}
-                </Button>
-                </div>
-                )}
-                {/*
-                  The rows that were left out for a reason other than being a
-                  debit — those are the ones worth a person's eye, because a
-                  mis-mapped column and a genuinely blank cell look the same
-                  from a count.
-                */}
-                {preview.skipNotes.some((n) => n.reason !== 'debit, not a credit') && (
-                <details className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium">
-                Show the rows that were left out for another reason
-                </summary>
-                <ul className="mt-2 space-y-0.5">
-                {preview.skipNotes
-                .filter((n) => n.reason !== 'debit, not a credit')
-                .slice(0, 40)
-                .map((n, i) => (
-                <li key={i} className="text-xs text-muted-foreground">
-                <span className="text-foreground">Row {n.row}</span>
-                {' — '}{n.reason}
-                {n.value ? <span className="text-muted-foreground/70">{' · saw "'}{n.value}{'"'}</span> : null}
-                </li>
+      {isLoading ? (
+        <section className={PANEL}>
+          <PageEmpty title="Loading accounts…" description="Reading what has been uploaded." />
+        </section>
+      ) : shown.length === 0 ? (
+        <section className={PANEL}>
+          <PageEmpty
+            title="No accounts match"
+            description="Nothing here answers to that search. Clear it to see every bank account."
+          />
+        </section>
+      ) : (
+        <div className="space-y-6">
+          {uploaded.length > 0 && (
+            <div className="space-y-3">
+              <span className={cn(MICRO, 'block text-muted-foreground')}>
+                With statements ({uploaded.length})
+              </span>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {uploaded.map((a) => (
+                  <BankCard key={a.bank_account_id} account={a} onUpload={() => setUploadFor(a)} />
                 ))}
-                </ul>
-                </details>
-                )}
+              </div>
+            </div>
+          )}
 
-                {preview.rows.length > 0 && (
-                <div className="overflow-hidden rounded-lg border border-foreground/15">
-                <Table>
-                <TableHeader>
-                <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Depositor</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                </TableRow>
-                </TableHeader>
-                <TableBody>
-                {preview.rows.slice(0, 5).map((r, i) => (
-                <TableRow key={i}>
-                <TableCell>{formatPlainDay(r.txnDate)}</TableCell>
-                <TableCell>{r.depositor || '—'}</TableCell>
-                <TableCell className="text-muted-foreground">{r.bankRef || '—'}</TableCell>
-                <TableCell className="text-right font-semibold">
-                ₦{r.amount.toLocaleString()}
-                </TableCell>
-                </TableRow>
+          {untouched.length > 0 && (
+            <div className="space-y-3">
+              <span className={cn(MICRO, 'block text-muted-foreground')}>
+                Nothing uploaded yet ({untouched.length})
+              </span>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {untouched.map((a) => (
+                  <BankCard key={a.bank_account_id} account={a} onUpload={() => setUploadFor(a)} />
                 ))}
-                </TableBody>
-                </Table>
-                </div>
-                )}
-                <Button
-                onClick={handleUpload}
-                disabled={!mapping || editingFormat || !preview.rows.length || upload.isPending}
-                >
-                {upload.isPending && <Loader2 className="animate-spin" />}
-                <Upload data-icon="inline-start" />
-                Import {preview.rows.length} row{preview.rows.length === 1 ? '' : 's'}
-                </Button>
-                {!mapping && (
-                <p className="text-xs text-muted-foreground/70">
-                Save the format first — uploads are rejected until it exists.
-                </p>
-                )}
-                {mapping && editingFormat && (
-                <p className="text-xs text-muted-foreground/70">
-                Save or cancel the format change above before importing.
-                </p>
-                )}
-                </div>
-                )}
-                </div>
-                </section>
-      <StatementUploads
-        statements={statements}
-        onDelete={(id) => remove.mutate(id)}
-        deleting={remove.isPending}
-      />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {uploadFor && (
+        <UploadStatementDialog
+          open
+          onOpenChange={(v) => !v && setUploadFor(null)}
+          bankAccountId={uploadFor.bank_account_id}
+          bankLabel={`${uploadFor.bank_name} — ${uploadFor.account_name} · ${uploadFor.account_number}`}
+        />
+      )}
     </div>
   )
 }
 
+/**
+ * One bank's whole statement position on a card.
+ *
+ * The figure that leads is the total credited, because that is the one anybody
+ * asks for first. Matched and unmatched sit under it as a split of that same
+ * figure rather than as two unrelated numbers — the point of the pair is the
+ * proportion, and a bar says that faster than two amounts do.
+ */
+function BankCard({
+  account: a, onUpload,
+}: {
+  account: StatementAccountSummary
+  onUpload: () => void
+}) {
+  const total = Number(a.total_amount || 0)
+  const matched = Number(a.matched_amount || 0)
+  const unmatched = Number(a.unmatched_amount || 0)
+  const pct = total > 0 ? Math.round((matched / total) * 100) : 0
+  const empty = a.statement_count === 0
+
+  return (
+    <section className={cn(PANEL, 'flex flex-col')}>
+      <div className="flex items-start justify-between gap-3 border-b border-foreground/15 px-5 py-4">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{a.bank_name}</p>
+          <p className="truncate text-xs text-muted-foreground">{a.account_name}</p>
+          <p className="font-mono text-xs text-muted-foreground/70">{a.account_number}</p>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {a.has_format
+            ? <StatusChip tone="accent" size="rail">Format saved</StatusChip>
+            : <StatusChip tone="warning" size="rail">No format</StatusChip>}
+          {a.status !== 'Active' && <StatusChip tone="inert" size="rail">{a.status}</StatusChip>}
+        </div>
+      </div>
+
+      <div className="flex-1 space-y-4 px-5 py-4">
+        {empty ? (
+          <p className="text-sm text-muted-foreground">
+            No statement has been uploaded for this account.
+            {!a.has_format && ' Its format will be set up on the first upload.'}
+          </p>
+        ) : (
+          <>
+            <div>
+              <span className={cn(MICRO, 'block text-muted-foreground')}>Total credited</span>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">{formatCurrency(total)}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {a.statement_count.toLocaleString()} file{a.statement_count === 1 ? '' : 's'}
+                {' · '}{a.line_count.toLocaleString()} row{a.line_count === 1 ? '' : 's'}
+                {' · '}{a.day_count.toLocaleString()} day{a.day_count === 1 ? '' : 's'}
+              </p>
+            </div>
+
+            {/* Matched against unmatched, as a split of the one total. */}
+            <div className="space-y-1.5">
+              <div className="flex h-1.5 overflow-hidden rounded-full bg-foreground/10">
+                <div className="bg-accent" style={{ width: `${pct}%` }} />
+                <div className="bg-warning" style={{ width: `${100 - pct}%` }} />
+              </div>
+              <div className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="text-accent">
+                  {formatCurrency(matched)}
+                  <span className="text-muted-foreground"> matched · {pct}%</span>
+                </span>
+                <span className={unmatched > 0 ? 'text-warning' : 'text-muted-foreground'}>
+                  {formatCurrency(unmatched)}
+                  <span className="text-muted-foreground"> left</span>
+                </span>
+              </div>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+              <div>
+                <dt className="text-muted-foreground">First uploaded</dt>
+                <dd>{a.first_uploaded_at ? format(new Date(a.first_uploaded_at), 'd MMM yyyy') : '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Last uploaded</dt>
+                <dd>{a.last_uploaded_at ? format(new Date(a.last_uploaded_at), 'd MMM yyyy') : '—'}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-muted-foreground">Statement covers</dt>
+                {/*
+                  formatPlainDay, not new Date(): these are calendar days, and
+                  `new Date('2026-09-17')` is UTC midnight — the exact round
+                  trip that put 1,066 rows a day out. See migration 0039.
+                */}
+                <dd>
+                  {a.first_txn_date && a.last_txn_date
+                    ? `${formatPlainDay(a.first_txn_date)} – ${formatPlainDay(a.last_txn_date)}`
+                    : '—'}
+                </dd>
+              </div>
+            </dl>
+
+            {/*
+              A repeated reference is a finding, not a statistic. One or two is
+              an ordinary overlap between two exports; hundreds means this
+              account's reference column is mapped onto something that is not a
+              reference, and every upload is quietly shedding real credits.
+            */}
+            {a.repeated_reference_count > 0 && (
+              <p className="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-xs text-muted-foreground">
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span>
+                  <strong className="text-foreground">{a.repeated_reference_count.toLocaleString()}</strong>
+                  {' '}row{a.repeated_reference_count === 1 ? '' : 's'} skipped on a repeated
+                  reference. Check the reference column if this keeps growing.
+                </span>
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 border-t border-foreground/15 bg-muted/40 px-5 py-3">
+        <Button variant="ghost" size="sm" onClick={onUpload}>
+          {a.has_format ? <Upload data-icon="inline-start" /> : <Settings2 data-icon="inline-start" />}
+          {a.has_format ? 'Upload' : 'Set up & upload'}
+        </Button>
+        {!empty && (
+          <Button asChild variant="outline" size="sm">
+            <Link to="/bank-statements/account" search={{ id: String(a.bank_account_id) }}>
+              Open
+              <ArrowRight data-icon="inline-end" />
+            </Link>
+          </Button>
+        )}
+      </div>
+    </section>
+  )
+}

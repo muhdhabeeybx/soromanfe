@@ -22,13 +22,175 @@ export type BankStatement = {
   filename: string
   row_count: number
   duplicate_count: number
+  /** Of those duplicates, the ones dropped on the reference alone. */
+  repeated_reference_count: number
   period_start: string | null
   period_end: string | null
   matched_count: number
+  total_amount: string
+  matched_amount: string
   bank_name: string
   account_name: string
   account_number: string
+  uploaded_by_name: string | null
   created_at: string
+}
+
+/** One bank account's whole statement history, rolled up. */
+export type StatementAccountSummary = {
+  bank_account_id: number
+  bank_name: string
+  account_name: string
+  account_number: string
+  currency: string
+  status: string
+  has_format: boolean
+  statement_count: number
+  duplicate_count: number
+  repeated_reference_count: number
+  first_uploaded_at: string | null
+  last_uploaded_at: string | null
+  line_count: number
+  total_amount: string
+  matched_count: number
+  matched_amount: string
+  unmatched_count: number
+  unmatched_amount: string
+  day_count: number
+  first_txn_date: string | null
+  last_txn_date: string | null
+}
+
+/** One day of one account's statement. */
+export type StatementDay = {
+  day: string
+  line_count: number
+  total_amount: string
+  matched_count: number
+  matched_amount: string
+  unmatched_count: number
+  unmatched_amount: string
+  /** How many separate uploads this day's rows arrived in. */
+  upload_count: number
+  first_imported_at: string
+  last_imported_at: string
+}
+
+export type StatementTotals = {
+  total: number
+  matched: number
+  unmatched: number
+  total_amount: string
+  matched_amount: string
+  unmatched_amount: string
+}
+
+/**
+ * Every bank account and what has been uploaded against it.
+ *
+ * Accounts with nothing uploaded come back too — that is where a first upload
+ * starts, and an account with no format saved is the one worth finding.
+ */
+export function useStatementAccounts() {
+  return useQuery({
+    queryKey: ['bank-statements', 'summary'],
+    queryFn: async () => {
+      const res = await api.get('/bank-statements/summary')
+      return res.data.data.accounts as StatementAccountSummary[]
+    },
+  })
+}
+
+/** One account's statement, a day at a time — the unit it is read in. */
+export function useStatementDays(
+  bankAccountId?: number | string,
+  range: { from?: string; to?: string } = {},
+) {
+  return useQuery({
+    enabled: Boolean(bankAccountId),
+    queryKey: ['bank-statements', 'days', bankAccountId, range],
+    queryFn: async () => {
+      const res = await api.get(`/bank-statements/accounts/${bankAccountId}/days`, {
+        params: { from: range.from || undefined, to: range.to || undefined },
+      })
+      return res.data.data.days as StatementDay[]
+    },
+    placeholderData: (prev) => prev,
+  })
+}
+
+/**
+ * Lines across one account, each carrying where it came from and where it went.
+ *
+ * Unlike the per-file view this does not care which upload a row arrived in,
+ * which is the point: a month re-uploaded in two halves reads as one month.
+ */
+export function useAccountStatementLines(
+  bankAccountId: number | string | undefined,
+  params: {
+    from?: string; to?: string; day?: string
+    status?: string; q?: string; page?: number; limit?: number
+  } = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    enabled: Boolean(bankAccountId) && options.enabled !== false,
+    queryKey: ['bank-statements', 'account-lines', bankAccountId, params],
+    queryFn: async () => {
+      const res = await api.get(`/bank-statements/accounts/${bankAccountId}/lines`, {
+        params: {
+          from: params.from || undefined,
+          to: params.to || undefined,
+          day: params.day || undefined,
+          status: params.status || undefined,
+          q: params.q || undefined,
+          page: params.page ?? 1,
+          limit: params.limit ?? 50,
+        },
+      })
+      return res.data.data as {
+        lines: AccountStatementLine[]
+        pagination: { page: number; limit: number; total: number; pages: number }
+        totals: StatementTotals
+      }
+    },
+    placeholderData: (prev) => prev,
+  })
+}
+
+/**
+ * Reads every line in a range in one go, for the export.
+ *
+ * Not a hook: an export that quietly stopped at the first page would produce a
+ * file that looks complete and is not, which is the one failure a bank
+ * statement must never have.
+ */
+export async function fetchAllAccountLines(
+  bankAccountId: number | string,
+  params: { from?: string; to?: string; day?: string; status?: string; q?: string },
+) {
+  const PAGE = 5000
+  const out: AccountStatementLine[] = []
+  for (let page = 1; ; page++) {
+    const res = await api.get(`/bank-statements/accounts/${bankAccountId}/lines`, {
+      params: {
+        from: params.from || undefined,
+        to: params.to || undefined,
+        day: params.day || undefined,
+        status: params.status || undefined,
+        q: params.q || undefined,
+        page,
+        limit: PAGE,
+      },
+    })
+    const data = res.data.data as {
+      lines: AccountStatementLine[]
+      pagination: { pages: number }
+    }
+    out.push(...data.lines)
+    if (page >= data.pagination.pages) break
+  }
+  return out
 }
 
 /** The saved format for one account, or null when it has never been set up. */
@@ -126,6 +288,16 @@ export function useStatementLines(
     },
     placeholderData: (prev) => prev,
   })
+}
+
+/** A line seen from the account, so it carries the file it arrived in. */
+export interface AccountStatementLine extends StatementLineDetail {
+  statement_id: number
+  filename: string
+  uploaded_at: string
+  uploaded_by_name: string | null
+  /** When the row itself landed in the table — the same instant, per row. */
+  imported_at: string
 }
 
 export function useUploadStatement() {

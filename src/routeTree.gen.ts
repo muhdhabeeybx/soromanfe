@@ -26,6 +26,7 @@ import { Route as BankAccountsIndexRouteImport } from './routes/bank-accounts/in
 import { Route as BankAccountsDetailsRouteImport } from './routes/bank-accounts/details'
 import { Route as BankAccountsFormRouteImport } from './routes/bank-accounts/form'
 import { Route as BankStatementsIndexRouteImport } from './routes/bank-statements/index'
+import { Route as BankStatementsAccountRouteImport } from './routes/bank-statements/account'
 import { Route as CfoReportIndexRouteImport } from './routes/cfo-report/index'
 import { Route as CommissionRatesIndexRouteImport } from './routes/commission-rates/index'
 import { Route as CommissionsIndexRouteImport } from './routes/commissions/index'
@@ -210,6 +211,11 @@ const BankAccountsFormRoute = BankAccountsFormRouteImport.update({
 const BankStatementsIndexRoute = BankStatementsIndexRouteImport.update({
   id: '/bank-statements/',
   path: '/bank-statements/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BankStatementsAccountRoute = BankStatementsAccountRouteImport.update({
+  id: '/bank-statements/account',
+  path: '/bank-statements/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CfoReportIndexRoute = CfoReportIndexRouteImport.update({
@@ -725,6 +731,7 @@ export interface FileRoutesByFullPath {
   '/admin/update': typeof AdminUpdateRoute
   '/bank-accounts/details': typeof BankAccountsDetailsRoute
   '/bank-accounts/form': typeof BankAccountsFormRoute
+  '/bank-statements/account': typeof BankStatementsAccountRoute
   '/customers/details': typeof CustomersDetailsRoute
   '/customers/form': typeof CustomersFormRoute
   '/dangote-order-request/review': typeof DangoteOrderRequestReviewRoute
@@ -842,6 +849,7 @@ export interface FileRoutesByTo {
   '/admin/update': typeof AdminUpdateRoute
   '/bank-accounts/details': typeof BankAccountsDetailsRoute
   '/bank-accounts/form': typeof BankAccountsFormRoute
+  '/bank-statements/account': typeof BankStatementsAccountRoute
   '/customers/details': typeof CustomersDetailsRoute
   '/customers/form': typeof CustomersFormRoute
   '/dangote-order-request/review': typeof DangoteOrderRequestReviewRoute
@@ -960,6 +968,7 @@ export interface FileRoutesById {
   '/admin/update': typeof AdminUpdateRoute
   '/bank-accounts/details': typeof BankAccountsDetailsRoute
   '/bank-accounts/form': typeof BankAccountsFormRoute
+  '/bank-statements/account': typeof BankStatementsAccountRoute
   '/customers/details': typeof CustomersDetailsRoute
   '/customers/form': typeof CustomersFormRoute
   '/dangote-order-request/review': typeof DangoteOrderRequestReviewRoute
@@ -1079,6 +1088,7 @@ export interface FileRouteTypes {
     | '/admin/update'
     | '/bank-accounts/details'
     | '/bank-accounts/form'
+    | '/bank-statements/account'
     | '/customers/details'
     | '/customers/form'
     | '/dangote-order-request/review'
@@ -1196,6 +1206,7 @@ export interface FileRouteTypes {
     | '/admin/update'
     | '/bank-accounts/details'
     | '/bank-accounts/form'
+    | '/bank-statements/account'
     | '/customers/details'
     | '/customers/form'
     | '/dangote-order-request/review'
@@ -1313,6 +1324,7 @@ export interface FileRouteTypes {
     | '/admin/update'
     | '/bank-accounts/details'
     | '/bank-accounts/form'
+    | '/bank-statements/account'
     | '/customers/details'
     | '/customers/form'
     | '/dangote-order-request/review'
@@ -1431,6 +1443,7 @@ export interface RootRouteChildren {
   AdminUpdateRoute: typeof AdminUpdateRoute
   BankAccountsDetailsRoute: typeof BankAccountsDetailsRoute
   BankAccountsFormRoute: typeof BankAccountsFormRoute
+  BankStatementsAccountRoute: typeof BankStatementsAccountRoute
   CustomersDetailsRoute: typeof CustomersDetailsRoute
   CustomersFormRoute: typeof CustomersFormRoute
   DangoteOrderRequestReviewRoute: typeof DangoteOrderRequestReviewRoute
@@ -1656,6 +1669,13 @@ declare module '@tanstack/react-router' {
       path: '/bank-statements'
       fullPath: '/bank-statements/'
       preLoaderRoute: typeof BankStatementsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bank-statements/account': {
+      id: '/bank-statements/account'
+      path: '/bank-statements/account'
+      fullPath: '/bank-statements/account'
+      preLoaderRoute: typeof BankStatementsAccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cfo-report/': {
@@ -2359,6 +2379,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminUpdateRoute: AdminUpdateRoute,
   BankAccountsDetailsRoute: BankAccountsDetailsRoute,
   BankAccountsFormRoute: BankAccountsFormRoute,
+  BankStatementsAccountRoute: BankStatementsAccountRoute,
   CustomersDetailsRoute: CustomersDetailsRoute,
   CustomersFormRoute: CustomersFormRoute,
   DangoteOrderRequestReviewRoute: DangoteOrderRequestReviewRoute,

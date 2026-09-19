@@ -55,7 +55,7 @@ export function StatementUploads({
         {statements.length === 0 ? (
           <PageEmpty
             title="Nothing uploaded yet"
-            description="Choose a bank account above — statements imported for it are listed here."
+            description="Every statement file imported for this account will be listed here."
           />
         ) : (
           <div className="px-2 pb-2">
@@ -63,10 +63,11 @@ export function StatementUploads({
               <TableHeader>
                 <TableRow>
                   <TableHead>File</TableHead>
-                  <TableHead>Account</TableHead>
                   <TableHead>Period</TableHead>
                   <TableHead className="text-right">Rows</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
                   <TableHead className="text-right">Matched</TableHead>
+                  <TableHead className="text-right">Skipped</TableHead>
                   <TableHead>Uploaded</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -86,22 +87,54 @@ export function StatementUploads({
                           <span className="max-w-[18rem] truncate">{s.filename || '—'}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {s.bank_name} · {s.account_name} · {s.account_number}
-                      </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {formatPlainDay(s.period_start, 'd MMM')}
                         {' – '}
                         {formatPlainDay(s.period_end)}
                       </TableCell>
-                      <TableCell className="text-right">{s.row_count}</TableCell>
+                      <TableCell className="text-right tabular-nums">{s.row_count}</TableCell>
+                      <TableCell className="text-right font-semibold whitespace-nowrap tabular-nums">
+                        ₦{Number(s.total_amount || 0).toLocaleString()}
+                      </TableCell>
                       <TableCell className="text-right">
                         {s.matched_count > 0
                           ? <StatusChip tone="accent">{s.matched_count}</StatusChip>
                           : <span className="text-muted-foreground">0</span>}
                       </TableCell>
+                      {/*
+                        What this file was refused, not just what it brought.
+                        A duplicate is ordinary; a duplicate caught on the
+                        REFERENCE alone means this file describes a credit
+                        differently from the one that brought it in, and a
+                        column of those is a mis-mapped reference column.
+                      */}
+                      <TableCell className="text-right">
+                        {s.duplicate_count > 0 ? (
+                          <span
+                            className={cn(
+                              'tabular-nums',
+                              s.repeated_reference_count > 0 ? 'text-warning' : 'text-muted-foreground',
+                            )}
+                            title={
+                              s.repeated_reference_count > 0
+                                ? `${s.repeated_reference_count} skipped on a reference already on this account`
+                                : 'Rows already on this account'
+                            }
+                          >
+                            {s.duplicate_count}
+                            {s.repeated_reference_count > 0 && ` (${s.repeated_reference_count} ref)`}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {format(new Date(s.created_at), 'd MMM yyyy')}
+                        {format(new Date(s.created_at), 'd MMM yyyy, HH:mm')}
+                        {s.uploaded_by_name && (
+                          <span className="block text-xs text-muted-foreground/70">
+                            by {s.uploaded_by_name}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
