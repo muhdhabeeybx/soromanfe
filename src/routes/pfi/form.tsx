@@ -24,6 +24,9 @@ import { useProductList } from '#/lib/hooks/useProducts'
 import { useAdminList } from '#/lib/hooks/useAdmin'
 import { routeGuard } from '#/lib/route-guard'
 import { naira, unitNames, SurplusDeficit } from '#/routes/pfi/-pfi-utils'
+import {
+  TruckPicker, useFleetPicks, truckSelectionSummary, type TruckSelection,
+} from '#/components/delivery-operations/TruckPicker'
 import type { PfiType } from '#/lib/types'
 
 export const Route = createFileRoute('/pfi/form')({
@@ -37,8 +40,6 @@ export const Route = createFileRoute('/pfi/form')({
 const EMPTY_FORM = {
   id: '',
   pfiType: 'coastal' as PfiType,
-  // Most batches are raised to trade. One bought ahead of selling says so.
-  notStarted: false,
   pfiDate: '',
   pfiNumber: '',
   description: '',
@@ -116,6 +117,12 @@ const PFI_TYPES: Array<{
     hint: 'Loaded onto trucks at one depot and sold at several. Counted in trucks.',
     icon: <Truck />,
   },
+  {
+    value: 'trucking',
+    label: 'Trucking',
+    hint: 'A batch of trucks. Raised here with its plates and loads, and it becomes the delivery batch once approved.',
+    icon: <Truck />,
+  },
 ]
 
 /** The label for a type wherever one is named in a sentence or a chip. */
@@ -123,6 +130,7 @@ const TYPE_LABEL: Record<PfiType, string> = {
   coastal: 'Coastal',
   gantry: 'Gantry',
   delivery: 'Delivery',
+  trucking: 'Trucking',
 }
 
 function formatDateToInput(dateStr: string | null | undefined): string {
@@ -326,7 +334,6 @@ function PFIForm() {
           : 'coastal',
         // A closed batch is never shown as not-started: closing is the
         // /finish endpoint's business and this form must not undo it.
-        notStarted: editingPfi.status === 'not_started',
         pfiDate: formatDateToInput(editingPfi.pfiDate),
         pfiNumber: editingPfi.pfiNumber || '',
         description: editingPfi.description || '',
@@ -370,8 +377,23 @@ function PFIForm() {
   const [submitted, setSubmitted] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  /**
+   * A trucking batch: its code, the day it loaded, and the trucks that took
+   * it. The same TruckPicker the delivery screens use, so the two cannot
+   * drift into asking for trucks differently.
+   *
+   * The depot and product come from the fields the form already has — a batch
+   * loads at the PFI's own location and carries the PFI's own product, and
+   * asking twice would let them disagree.
+   */
+  const [batchCode, setBatchCode] = useState('')
+  const [batchDate, setBatchDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [truckSelection, setTruckSelection] = useState<TruckSelection>({})
+  const fleet = useFleetPicks()
+
   const isGantry = form.pfiType === 'gantry'
   const isDelivery = form.pfiType === 'delivery'
+  const isTrucking = form.pfiType === 'trucking'
   /**
    * Neither gantry nor delivery is weighed against shipping papers.
    *
@@ -381,7 +403,15 @@ function PFIForm() {
    * cost section: one quantity, a price, and a count of the units it was
    * split into.
    */
-  const isCargo = !isGantry && !isDelivery
+  const isCargo = !isGantry && !isDelivery && !isTrucking
+
+  // Ticking, per-truck quantities, their totals and every complaint about the
+  // selection all live in TruckPicker.
+  const batch = { trucks: truckSelectionSummary(truckSelection, fleet) }
+  const batchDepotName =
+    depots.find((d: any) => String(d.id ?? d._id) === form.locationId)?.name || ''
+  const productNameFor = (pid: string) =>
+    products.find((pr: any) => String(pr.id ?? pr._id) === pid)?.name || ''
 
   /** The picked product's unit, so no label ever says "Litres" over a tonnage. */
   const unit = useMemo(() => unitNames(form.productUnit), [form.productUnit])
@@ -446,15 +476,32 @@ function PFIForm() {
       return
     }
 
+    /**
+     * A trucking PFI without its batch is not a trucking PFI.
+     *
+     * Every complaint about the selection itself — none picked, one with no
+     * quantity, one loaded past capacity — comes from TruckPicker, so the two
+     * screens that ask for trucks refuse the same things for the same reasons.
+     */
+    if (isTrucking && !isEdit) {
+      if (!batchCode.trim()) {
+        setError('Give the batch its code off the loading papers.')
+        return
+      }
+      if (batch.trucks.problem) {
+        setError(batch.trucks.problem)
+        return
+      }
+    }
+
     setIsSubmitting(true)
     try {
       const payload = {
         pfiType: form.pfiType,
-        // Only ever the two live states. A finished batch's status is not
-        // this form's to move, so an edit of one leaves it untouched.
-        ...(editingPfi?.status === 'finished'
-          ? {}
-          : { status: form.notStarted ? 'not_started' : 'active' }),
+        // No status. Raising a PFI always lands not_started and only the
+        // review releases it (see activatePfi); an edit leaves whatever
+        // status the batch already has, because moving it is not this form's
+        // act. updatePfi only writes fields that are actually sent.
         pfiDate: form.pfiDate || null,
         pfiNumber: form.pfiNumber.trim(),
         description: form.description,
@@ -490,12 +537,40 @@ function PFIForm() {
               surveyorName: form.surveyorName || null,
               surveyorPhone: form.surveyorPhone || null,
             }),
-        auditOfficerId: form.auditOfficerId || null,
-        productOfficerId: form.productOfficerId || null,
-        itComplianceOfficerId: form.itComplianceOfficerId || null,
-        securityExitOfficerId: form.securityExitOfficerId || null,
-        commissionOfficerId: form.commissionOfficerId || null,
-        salesManagerId: form.salesManagerId || null,
+        // Only on an edit. Raising a batch does not name its officers — the
+        // review does, and that is also what grants them sight of it.
+        ...(isEdit
+          ? {
+              auditOfficerId: form.auditOfficerId || null,
+              productOfficerId: form.productOfficerId || null,
+              itComplianceOfficerId: form.itComplianceOfficerId || null,
+              securityExitOfficerId: form.securityExitOfficerId || null,
+              commissionOfficerId: form.commissionOfficerId || null,
+              salesManagerId: form.salesManagerId || null,
+            }
+          : {}),
+        /**
+         * A trucking batch's trucks, parked with the PFI.
+         *
+         * Sent on create only. They are written as delivery_inventory rows at
+         * activation — putting them on the inventory now would owe money
+         * against a batch nobody has approved.
+         */
+        ...(isTrucking && !isEdit && batch.trucks.trucks.length
+          ? {
+              batch: {
+                code: batchCode.trim().toUpperCase().replace(/\s+/g, '-'),
+                depotName: batchDepotName,
+                productName: productNameFor(form.productId),
+                dateAllocated: batchDate,
+                trucks: batch.trucks.trucks.map((t) => ({
+                  truckId: t.truckId ?? null,
+                  plateNumber: t.plateNumber,
+                  loadedQty: t.loadedQty,
+                })),
+              },
+            }
+          : {}),
       }
 
       /**
@@ -667,37 +742,29 @@ function PFIForm() {
                 })}
               </div>
 
-              {/* Whether the batch is trading yet.
-                  A cargo is bought, shipped and paid for weeks before the
-                  first litre leaves the depot, and those costs have to land
-                  on the batch that incurred them. Marking it not-started
-                  lets it take expenses while staying out of the stock and
-                  revenue totals, so "PMS remaining" never counts product
-                  nobody can ship today.
-                  Hidden once a batch is closed: reopening it is not this
-                  form's business. */}
-              {editingPfi?.status !== 'finished' && (
-                <label
-                  className={cn(
-                    'flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors duration-250 ease-luxe',
-                    form.notStarted
-                      ? 'border-warning/40 bg-warning/5'
-                      : 'border-foreground/15 hover:border-foreground/30 hover:bg-muted/40',
-                  )}
-                >
-                  <Checkbox
-                    checked={form.notStarted}
-                    onCheckedChange={(v) => set('notStarted', v === true)}
-                    className="mt-0.5"
-                  />
+              {/*
+                What happens after Save, said before it.
+
+                This was a "Not selling yet" tick, and the choice it offered no
+                longer exists: every PFI is raised not_started and only the
+                review releases it (see activatePfi, migration 0046). Leaving
+                the tick would have been worse than removing it — it would
+                have looked like a decision while the server ignored it.
+              */}
+              {!isEdit && (
+                <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/5 p-4">
+                  <Info className="mt-0.5 size-4 shrink-0 text-warning" />
                   <span className="min-w-0">
-                    <span className="block text-sm font-semibold">Not selling yet</span>
+                    <span className="block text-sm font-semibold">
+                      This batch will not trade until it is reviewed
+                    </span>
                     <span className="mt-1 block text-xs leading-snug text-muted-foreground">
-                      The cargo exists and can take expenses, but its stock and revenue stay
-                      out of the portfolio totals until you start it from the PFI list.
+                      Saving raises it and notifies the review desk. Somebody else assigns its
+                      bank account and its officers, and that is what activates it. Until then it
+                      can take expenses but stays out of stock and revenue.
                     </span>
                   </span>
-                </label>
+                </div>
               )}
 
               {/* Switching an existing batch discards figures that stop
@@ -1081,6 +1148,89 @@ function PFIForm() {
           </div>
 
           <div className="space-y-6">
+            {/*
+              A trucking batch IS the delivery batch.
+
+              The code off the loading papers, the day it loaded, and the
+              plates with what each one actually took. The depot and the
+              product are not asked again — a batch loads at the PFI's own
+              location and carries its own product, and asking twice would let
+              the two disagree.
+
+              Only on a create. The trucks are written once, at activation;
+              editing a batch's loads afterwards is the delivery screens' job.
+            */}
+            {isTrucking && !isEdit && (
+              <Section
+                step={4}
+                icon={<Truck />} title="The batch"
+                description="The code, the day it loaded, and the trucks that carried it."
+                aside={
+                  <span className={cn(MICRO, 'hidden shrink-0 font-semibold text-muted-foreground sm:block')}>
+                    {batch.trucks.trucks.length} truck{batch.trucks.trucks.length === 1 ? '' : 's'}
+                  </span>
+                }
+              >
+                <div className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Batch code">
+                      <Input
+                        value={batchCode}
+                        onChange={(e) => setBatchCode(e.target.value)}
+                        placeholder="PFI-25C"
+                      />
+                    </Field>
+                    <Field label="Date loaded">
+                      <Input
+                        type="date"
+                        value={batchDate}
+                        onChange={(e) => setBatchDate(e.target.value)}
+                      />
+                    </Field>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Loading at{' '}
+                    <span className="font-medium text-foreground">
+                      {batchDepotName || 'the location chosen above'}
+                    </span>
+                    {', carrying '}
+                    <span className="font-medium text-foreground">
+                      {productNameFor(form.productId) || 'the product chosen above'}
+                    </span>.
+                  </p>
+
+                  <TruckPicker
+                    fleet={fleet}
+                    value={truckSelection}
+                    onChange={setTruckSelection}
+                    unit={unit.short}
+                  />
+
+                  <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-muted-foreground">
+                    <Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                    <span>
+                      These loads do not reach the inventory or the sales ledger until the batch
+                      is approved — nothing is owed against a batch nobody has signed off.
+                    </span>
+                  </p>
+                </div>
+              </Section>
+            )}
+
+            {/*
+              Officers are assigned at review, not here.
+
+              Raising a batch and deciding who is answerable for it are two
+              acts by two people — that separation is the whole point of the
+              gate. Offering the selects at stage one would let the person
+              raising it name themselves, and the server ignores officers on
+              create anyway, so the controls would have been decoration.
+
+              On an EDIT they stay: an active batch's officers can change, and
+              the person doing that has already been through the review.
+            */}
+            {isEdit && (
             <Section
               step={4}
               icon={<Users />} title="Officers"
@@ -1104,6 +1254,7 @@ function PFIForm() {
                 ))}
               </div>
             </Section>
+            )}
 
             {/* A gantry batch never touches a vessel, so there is nothing here
                 to leave blank. */}

@@ -18,12 +18,12 @@ import { naira } from '#/routes/pfi/-pfi-utils'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import {
-  Plus, Search, Truck, Droplets, CheckCircle2, X, Settings, Wallet,
+  Plus, Search, Truck, Droplets, CheckCircle2, X, Wallet,
   ChevronRight, Loader2, Trash2, AlertTriangle, FileSpreadsheet, FileText, RotateCcw,
 } from 'lucide-react'
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import {
-  useDeliveryInventoryList, useUpdateDeliveryInventory, useDeleteDeliveryBatch,
+  useDeliveryInventoryList, useDeleteDeliveryBatch,
   useDeliveryBatchStatuses, useSetDeliveryBatchStatus,
 } from '#/lib/hooks/useDeliveryInventory'
 import { useRoles } from '#/lib/hooks/useRoles'
@@ -41,8 +41,6 @@ import { buildLoadSplit, formatShareList, type LoadSplit } from '#/lib/load-spli
 import type { DeliveryInventory, DeliveryCustomer } from '#/lib/types'
 import type { Pfi } from '#/lib/hooks/usePfis'
 
-import { ManageCodesDialog } from '#/components/delivery-operations/ManageCodesDialog'
-import { NewBatchDialog } from '#/components/delivery-operations/NewBatchDialog'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '#/components/ui/dialog'
@@ -164,7 +162,6 @@ function DeliveryOperationsPage() {
   }, [customersData])
 
   // ── Mutations ───────────────────────────────────────────────────────────
-  const updateInventory = useUpdateDeliveryInventory()
   const deleteBatch = useDeleteDeliveryBatch()
   const { data: batchStatuses } = useDeliveryBatchStatuses()
   const setBatchStatus = useSetDeliveryBatchStatus()
@@ -195,8 +192,6 @@ function DeliveryOperationsPage() {
   const [deliveryCodes, setDeliveryCodes] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('dsl_trip_codes') || '[]') } catch { return [] }
   })
-  const [manageCodesOpen, setManageCodesOpen] = useState(false)
-  const [newBatchOpen, setNewBatchOpen] = useState(false)
   /**
    * Which batch is open, by code. One at a time, deliberately: the point of
    * the summary rows is that batches can be compared down a column, and every
@@ -676,11 +671,16 @@ function DeliveryOperationsPage() {
                 : <FileText className="size-4" />}
               PDF
             </Button>
-            <Button
-              className="gap-2 bg-accent hover:bg-accent/80 text-accent-foreground cursor-pointer"
-              onClick={() => setNewBatchOpen(true)}
-            >
-              <Plus className="size-4" /> New Batch
+            {/*
+              Batches are raised in the PFI register now, as a trucking PFI,
+              so they arrive with a bank account and officers against them
+              instead of existing only as loose allocation codes. This page
+              reads them; it no longer makes them.
+            */}
+            <Button asChild variant="outline" className="gap-2">
+              <Link to="/pfi/form" search={{ id: '' }}>
+                <Plus className="size-4" /> New batch in PFI
+              </Link>
             </Button>
           </div>
         }
@@ -784,13 +784,12 @@ function DeliveryOperationsPage() {
           housekeeping on an existing list, so it sits with the filters where
           housekeeping belongs, not beside the one thing this page is for.
         */}
-        <Button
-          variant="ghost" size="sm" className="ml-auto"
-          onClick={() => setManageCodesOpen(true)}
-        >
-          <Settings data-icon="inline-start" />
-          Rename or delete codes
-        </Button>
+        {/*
+          Renaming or deleting a code used to be housekeeping on a list this
+          page owned. A code is a PFI's batch now — the PFI names it and the
+          approval releases it — so editing one here would rename something
+          the register is still pointing at.
+        */}
       </FilterBar>
 
       {activeChips.length > 0 && (
@@ -840,8 +839,10 @@ function DeliveryOperationsPage() {
                 <X data-icon="inline-start" /> Clear all filters
               </Button>
             ) : (
-              <Button onClick={() => setNewBatchOpen(true)}>
-                <Plus data-icon="inline-start" /> New batch
+              <Button asChild>
+                <Link to="/pfi/form" search={{ id: '' }}>
+                  <Plus data-icon="inline-start" /> Raise a trucking PFI
+                </Link>
               </Button>
             )}
           </EmptyContent>
@@ -1245,12 +1246,6 @@ function DeliveryOperationsPage() {
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* Dialogs */}
-      <NewBatchDialog
-        open={newBatchOpen}
-        onOpenChange={setNewBatchOpen}
-        existingCodes={deliveryCodes}
-      />
-
       {/* ── Closing a batch, and reopening it ──────────────────────────── */}
       <Dialog
         open={closingBatch !== null}
@@ -1448,21 +1443,6 @@ function DeliveryOperationsPage() {
         </DialogContent>
       </Dialog>
 
-      <ManageCodesDialog
-        open={manageCodesOpen}
-        onOpenChange={setManageCodesOpen}
-        deliveryCodes={deliveryCodes}
-        setDeliveryCodes={setDeliveryCodes}
-        truckRecords={truckRecords}
-        allEntries={allEntries}
-        onRename={async (oldCode, newCode) => {
-          const toUpdate = allEntries.filter(e => (e.allocationCode || '').trim().toUpperCase() === oldCode)
-          await Promise.all(toUpdate.map(e =>
-            updateInventory.mutateAsync({ id: e._id || e.id || '', data: { allocationCode: newCode } as any })
-          ))
-        }}
-        toast={toast}
-      />
     </div>
   )
 }

@@ -529,6 +529,7 @@ function PFIDashboard() {
         <option value="coastal">Coastal</option>
         <option value="gantry">Gantry</option>
         <option value="delivery">Delivery</option>
+        <option value="trucking">Trucking</option>
         </NativeSelect>
         <div className="flex items-center gap-1">
         <NativeSelect className="w-44" value={sort.key} onChange={(e) => setSortKey(e.target.value as SortKey)}>
@@ -587,7 +588,8 @@ function PFIDashboard() {
                * batch "Gantry".
                */
               const gantry = f.isGantry
-              const delivery = p.pfiType === 'delivery'
+              const trucking = p.pfiType === 'trucking'
+              const delivery = p.pfiType === 'delivery' || trucking
               const uncosted = f.grandTotalCost == null
               const heroLabel = uncosted
                 ? 'Cost'
@@ -615,7 +617,7 @@ function PFIDashboard() {
                             {finished ? 'Finished' : notStarted ? 'Not started' : 'Active'}
                           </StatusChip>
                           <StatusChip fill="solid" tone="inert">
-                            {delivery ? 'Delivery' : gantry ? 'Gantry' : 'Coastal'}
+                            {trucking ? 'Trucking' : delivery ? 'Delivery' : gantry ? 'Gantry' : 'Coastal'}
                           </StatusChip>
                         </div>
                         <p className="mt-0.5 truncate text-sm text-muted-foreground">

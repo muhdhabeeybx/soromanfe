@@ -862,6 +862,26 @@ export const useStartPfi = () =>
     'PFI is now active',
   )
 
+/**
+ * The review: assign the bank and the officers, and release the batch.
+ *
+ * The server refuses without a bank account, an audit officer and a finance
+ * officer, so this cannot activate a batch that is missing any of them. It is
+ * also the access grant — assigning an officer is what lets them see the PFI —
+ * so the two can never drift apart. See activatePfi and migration 0046.
+ */
+export const useActivatePfi = () =>
+  useMoneyMutation<{
+    id: number
+    bankAccountIds: number[]
+    officers: Record<string, string | number | null>
+    note?: string
+  }>(
+    async ({ id, bankAccountIds, officers, note }) =>
+      (await api.post(`/pfis/${id}/activate`, { bankAccountIds, officers, note })).data,
+    'PFI activated',
+  )
+
 export const useFinishPfi = () =>
   useMoneyMutation<{ id: number; data: Record<string, any> }>(
     async ({ id, data }) => (await api.post(`/pfis/${id}/finish`, data)).data,

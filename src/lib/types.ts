@@ -288,7 +288,14 @@ export interface LpgStationItem {
  * so every screen that reads a delivery batch was comparing against a member
  * TypeScript believed could not exist.
  */
-export type PfiType = 'coastal' | 'gantry' | 'delivery'
+/**
+ * `trucking` is a batch of trucks raised in the PFI register — it IS the
+ * delivery batch, and creates the delivery_inventory rows when the PFI is
+ * activated. `delivery` predates it and means something narrower: a cargo
+ * loaded at one depot and sold at several, counted in trucks but not itself a
+ * batch. See migration 0045.
+ */
+export type PfiType = 'coastal' | 'gantry' | 'delivery' | 'trucking'
 
 /**
  * A batch's trading life.
@@ -308,6 +315,26 @@ export interface Pfi {
   /** Absent on rows written before the distinction existed — read as coastal. */
   pfiType?: PfiType
   status: PfiStatus
+  /**
+   * The review gate — see migration 0046. A PFI is raised `not_started` and
+   * only trades once somebody who did not raise it assigns its bank account
+   * and officers. Both halves are named on the row.
+   */
+  raisedBy?: number | null
+  raisedAt?: string | null
+  activatedBy?: number | null
+  activatedAt?: string | null
+  reviewNote?: string | null
+  /** A trucking PFI's unwritten batch, parked until activation. */
+  pendingBatch?: {
+    code: string
+    depotName?: string
+    productName?: string
+    dateAllocated?: string
+    trucks: Array<{ truckId?: number | null; plateNumber: string; loadedQty: number }>
+  } | null
+  /** The delivery batch this PFI raised, by its code. Trucking only. */
+  allocationCode?: string | null
   description?: string
   pfiDate?: string | null
   locationId?: number | null

@@ -19,6 +19,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { PhoneLink } from '#/components/ContactLink'
 import { cn } from '#/lib/utils'
 import { pfiStatusLabel } from '#/routes/pfi/-pfi-utils'
+import { PfiReviewPanel } from '#/routes/pfi/-pfi-review'
 
 export const Route = createFileRoute('/pfi/details')({
   beforeLoad: () => routeGuard('/pfi'),
@@ -97,8 +98,16 @@ function PFIDetails() {
 
   const isGantry = pfi.pfiType === 'gantry'
   const isDelivery = pfi.pfiType === 'delivery'
+  const isTrucking = pfi.pfiType === 'trucking'
+  /**
+   * The two share a shape — trucks, one quantity, no shipping papers — but
+   * not a meaning. Only a delivery batch has an allowlist of depots that may
+   * sell from it; a trucking batch sells off the truck, so that card would be
+   * an empty panel explaining nothing.
+   */
+  const isTruckCounted = isDelivery || isTrucking
   /** Only a coastal batch has shipping papers, a vessel and a surveyor. */
-  const isCargo = !isGantry && !isDelivery
+  const isCargo = !isGantry && !isTruckCounted
 
   const rawUnit = pfi.productUnit || (Number(pfi.qtyVolumeMt || 0) > 0 && Number(pfi.startingQtyLitres || 0) === 0 ? 'MT' : 'Litres')
   const names = unitNames(rawUnit)
@@ -212,6 +221,17 @@ function PFIDetails() {
         </div>
       </header>
 
+      {/*
+        Stage two, at the top of the page.
+
+        A batch waiting for review is not a detail of this screen — it is the
+        only thing that can be done with it — so it sits above everything
+        rather than below the figures somebody has to scroll past.
+      */}
+      {pfi.status === 'not_started' && (
+        <PfiReviewPanel pfi={pfi as any} />
+      )}
+
       {/* Hero Badge Panel */}
       <Card className="card-hover">
         <CardContent className="bg-primary/5 p-4 sm:p-5">
@@ -229,10 +249,10 @@ function PFIDetails() {
                 <Badge variant="outline" className="font-normal text-xs">
                   {isGantry
                     ? <Ticket className="size-3 mr-1 text-info inline" />
-                    : isDelivery
+                    : isTruckCounted
                       ? <Truck className="size-3 mr-1 text-info inline" />
                       : <Package className="size-3 mr-1 text-primary inline" />}
-                  {isGantry ? 'Gantry' : isDelivery ? 'Delivery' : 'Coastal'}
+                  {isTrucking ? 'Trucking' : isGantry ? 'Gantry' : isDelivery ? 'Delivery' : 'Coastal'}
                 </Badge>
                 <Badge
                   className={cn(
@@ -294,7 +314,7 @@ function PFIDetails() {
               {!isCargo ? (
                 <div>
                   <dt className="text-muted-foreground font-normal">
-                    {isDelivery ? 'Number of Trucks' : 'Number of Tickets'}
+                    {isTruckCounted ? 'Number of Trucks' : 'Number of Tickets'}
                   </dt>
                   <dd className="font-semibold text-foreground mt-0.5">
                     {pfi.ticketCount == null ? '—' : pfi.ticketCount.toLocaleString()}
