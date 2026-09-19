@@ -70,7 +70,12 @@ function BankStatementsPage() {
       .filter((a) => !q || [a.bank_name, a.account_name, a.account_number]
         .some((v) => String(v || '').toLowerCase().includes(q)))
       .sort((a, b) =>
-        collator.compare(a.bank_name || '', b.bank_name || '')
+        // Accounts that have statements come first. An account with nothing
+        // uploaded is not what anybody opened this page to find, and sorting
+        // it alphabetically among the rest scatters the empty ones through
+        // the grid so the page reads as half-empty wherever you look.
+        Number(b.statement_count > 0) - Number(a.statement_count > 0)
+        || collator.compare(a.bank_name || '', b.bank_name || '')
         // Descending within the bank — Z first, as asked.
         || collator.compare(b.account_name || '', a.account_name || ''))
   }, [accounts, search])
@@ -83,12 +88,11 @@ function BankStatementsPage() {
         description="Every account, what has been uploaded against it, and how much of it an order has claimed."
       />
 
-      {/*
-        Two by two. Four figures with no captions under them — the label above
-        each one already says what it is, and a caption repeating it in smaller
-        type was noise around the number somebody came here to read.
-      */}
       <StatCardGrid count={4} className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2">
+        <StatCard
+          tone="neutral" icon={<Landmark />} label="Banks with statements"
+          value={totals.banks}
+        />
         <StatCard
           tone="blue" icon={<Wallet />} label="Total credited"
           value={formatCurrency(totals.total)}
@@ -104,10 +108,7 @@ function BankStatementsPage() {
           value={formatCurrency(totals.unmatched)}
           valueClassName="text-warning"
         />
-        <StatCard
-          tone="neutral" icon={<Landmark />} label="Banks with statements"
-          value={totals.banks}
-        />
+        
       </StatCardGrid>
 
       <div className="relative">
@@ -218,7 +219,7 @@ function BankCard({
           <>
             <div>
               <span className={cn(MICRO, 'block text-muted-foreground')}>Total credited</span>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-blue-700 dark:text-blue-300">
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-black dark:text-white">
                 {formatCurrency(total)}
               </p>
               {/*
@@ -230,7 +231,7 @@ function BankCard({
               <p className="mt-1 text-sm text-muted-foreground">
                 {a.statement_count.toLocaleString()} time{a.statement_count === 1 ? '' : 's'} uploaded
                 {', '}{a.line_count.toLocaleString()} payment{a.line_count === 1 ? '' : 's'}
-                {', '}{a.day_count.toLocaleString()} day{a.day_count === 1 ? '' : 's'} covered
+                {/* {', '}{a.day_count.toLocaleString()} day{a.day_count === 1 ? '' : 's'} covered */}
               </p>
             </div>
 
@@ -243,7 +244,7 @@ function BankCard({
               <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
                 <span className="font-semibold text-accent">
                   {formatCurrency(matched)}
-                  <span className="font-normal text-muted-foreground"> matched · {pct}%</span>
+                  <span className="font-normal text-muted-foreground"> matched</span>
                 </span>
                 <span className={cn('font-semibold', unmatched > 0 ? 'text-warning' : 'text-muted-foreground')}>
                   {formatCurrency(unmatched)}
