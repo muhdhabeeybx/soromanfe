@@ -8,7 +8,7 @@ import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
 import { Separator } from '#/components/ui/separator'
 import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Truck, Clock, Play } from 'lucide-react'
-import { usePfiDetails, useUpdatePfi, useDeletePfi, usePfiLocations } from '#/lib/hooks/usePfis'
+import { usePfiDetails, useUpdatePfi, useDeletePfi, usePfiLocations, usePfiTrucks } from '#/lib/hooks/usePfis'
 import { unitNames } from '#/routes/pfi/-pfi-utils'
 import { useAdminList } from '#/lib/hooks/useAdmin'
 import { useToast } from '#/lib/hooks/useToast'
@@ -49,6 +49,19 @@ function PFIDetails() {
    * Only a delivery batch has an allowlist, and only it is asked for one.
    * A null id disables the query, so a coastal batch never makes the call.
    */
+  /**
+   * The trucks on this batch.
+   *
+   * A trucking batch's whole substance is its trucks, and until this they
+   * could be read on the delivery screens but not on the PFI they belong to.
+   * The endpoint answers from pfi_trucks or from the delivery rows, whichever
+   * holds them, so this does not have to know which type it is looking at.
+   */
+  const { data: truckData } = usePfiTrucks(
+    (pfi?.pfiType === 'trucking' || pfi?.pfiType === 'delivery') && pfi?.id != null
+      ? Number(pfi.id)
+      : null,
+  )
   const { data: allowedDepots = [] } = usePfiLocations(
     pfi?.pfiType === 'delivery' && pfi?.id != null ? Number(pfi.id) : null,
   )
@@ -109,6 +122,26 @@ function PFIDetails() {
   const isTruckCounted = isDelivery || isTrucking
   /** Only a coastal batch has shipping papers, a vessel and a surveyor. */
   const isCargo = !isGantry && !isTruckCounted
+
+  /**
+   * Whichever list actually holds this batch's trucks.
+   *
+   * The parked draft while it waits for approval, the real rows once
+   * activation has written them. Normalised to one shape so the table below
+   * does not branch on which it got.
+   */
+  const truckRows: Array<{ plateNumber: string; loadedQty: number; status?: string }> =
+    (truckData?.trucks?.length
+      ? truckData.trucks.map((t: any) => ({
+          plateNumber: t.plateNumber,
+          loadedQty: Number(t.loadedQty || 0),
+          status: t.notes || undefined,
+        }))
+      : (pfi.pendingBatch?.trucks || []).map((t) => ({
+          plateNumber: t.plateNumber,
+          loadedQty: Number(t.loadedQty || 0),
+        })))
+  const truckLoaded = truckRows.reduce((sum, t) => sum + t.loadedQty, 0)
 
   const rawUnit = pfi.productUnit || (Number(pfi.qtyVolumeMt || 0) > 0 && Number(pfi.startingQtyLitres || 0) === 0 ? 'MT' : 'Litres')
   const names = unitNames(rawUnit)
@@ -379,6 +412,63 @@ function PFIDetails() {
             type exists. A coastal or gantry batch is sold out of the depot it
             sits in, so its answer is the Location field above and a card here
             would restate it. */}
+        {/*
+          The trucks, once there are any.
+
+          Before activation a trucking batch's trucks live on the PFI as a
+          parked draft and nowhere else, so both sources are read: the draft
+          while it waits, the real rows once they exist. A batch with neither
+          shows nothing rather than an empty table.
+        */}
+        {isTruckCounted && (truckRows.length > 0) && (
+        <Card>
+          <CardHeader className="border-b border-border">
+            <div className="flex items-center gap-2">
+              <div className="size-8 rounded-lg bg-info/10 flex items-center justify-center text-info">
+                <Truck className="size-4" />
+              </div>
+              <div>
+                <CardTitle className="text-sm">
+                  Trucks on this batch
+                  {pfi.allocationCode ? ` — ${pfi.allocationCode}` : ''}
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  {truckRows.length} truck{truckRows.length === 1 ? '' : 's'} ·{' '}
+                  {truckLoaded.toLocaleString()} {names.short} loaded
+                  {pfi.status === 'not_started' && ' · not on the inventory until this batch is started'}
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-muted/60 backdrop-blur-sm">
+                  <tr className="border-b border-border text-left">
+                    <th className="px-4 py-2.5 font-semibold text-muted-foreground">Truck</th>
+                    <th className="px-4 py-2.5 font-semibold text-muted-foreground">Loaded</th>
+                    <th className="px-4 py-2.5 font-semibold text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {truckRows.map((t, i) => (
+                    <tr key={`${t.plateNumber}-${i}`} className="border-b border-border last:border-0">
+                      <td className="px-4 py-2.5 font-medium">{t.plateNumber || '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums">
+                        {Number(t.loadedQty || 0).toLocaleString()} {names.short}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground capitalize">
+                        {t.status || (pfi.status === 'not_started' ? 'awaiting approval' : 'loaded')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
         {isDelivery && (
         <Card>
           <CardHeader className="border-b border-border">

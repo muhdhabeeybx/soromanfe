@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
   Loader2, ShieldCheck, Info, Truck, Landmark, Users, Pencil, FileText,
+  FileBadge2Icon,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -37,10 +38,10 @@ import type { Pfi } from '#/lib/types'
  * not as choices.
  */
 const OFFICERS: Array<{ key: string; label: string; required?: boolean }> = [
-  { key: 'auditOfficerId', label: 'Finance / Audit officer', required: true },
-  { key: 'salesManagerId', label: 'Sales manager', required: true },
-  { key: 'productOfficerId', label: 'Product manager' },
-  { key: 'commissionOfficerId', label: 'Commission officer' },
+  { key: 'auditOfficerId', label: 'Finance/Audit Officer', required: true },
+  { key: 'salesManagerId', label: 'Sales Manager', required: true },
+  { key: 'productOfficerId', label: 'Product Manager' },
+  { key: 'commissionOfficerId', label: 'Commission Officer' },
 ]
 
 const TYPE_LABEL: Record<string, string> = {
@@ -78,7 +79,7 @@ function Fact({ label, value, wide }: { label: string; value: React.ReactNode; w
  * The same act does both, deliberately. An officer named on a PFI they cannot
  * open is answerable for something they cannot see, and PFI assignment now
  * decides what a person's register shows. Said on screen, because it is not
- * obvious from a select box labelled "Finance / Audit officer".
+ * obvious from a select box labelled "Finance/Audit Officer".
  */
 export function PfiActivateDialog({
   pfi, open, onOpenChange, onActivated,
@@ -156,15 +157,14 @@ export function PfiActivateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-3xl gap-0 overflow-y-auto p-0">
-        {/* Header. The close X is DialogContent's own, top-right. */}
-        <DialogHeader className="space-y-1 border-b border-foreground/15 px-6 py-5 text-left">
+        <DialogHeader className="space-y-1 mt-4 border-b border-foreground/15 px-6 py-5 text-left">
           <div className="flex items-center gap-2.5">
-            <ShieldCheck className="size-5 shrink-0 text-accent" />
-            <DialogTitle className="text-lg">Start selling {pfi.pfiNumber}</DialogTitle>
+            <FileBadge2Icon className="size-5 shrink-0 text-accent" />
+            <DialogTitle className="text-lg">Start selling <span className="font-bold">{pfi.pfiNumber}</span></DialogTitle>
           </div>
           <DialogDescription className="flex flex-wrap items-center gap-2 pt-1">
-            <StatusChip tone="warning" fill="solid">Not trading yet</StatusChip>
-            <span>
+            <StatusChip tone="warning" fill="solid">Inactive</StatusChip>
+            <span className="text-sm font-normal uppercase text-muted-foreground">
               {[TYPE_LABEL[pfi.pfiType || 'coastal'], pfi.locationName, pfi.productName]
                 .filter(Boolean)
                 .join('  ·  ')}
@@ -175,13 +175,13 @@ export function PfiActivateDialog({
         {/* ── The batch as raised ───────────────────────────────────────── */}
         <div className="space-y-4 px-6 py-5">
           <span className={cn(MICRO, 'flex items-center gap-2 text-muted-foreground')}>
-            <FileText className="size-3.5" />
-            The batch as raised
+            <FileBadge2Icon className="size-3.5" />
+            PFI Details
           </span>
 
           <dl className="grid gap-x-6 gap-y-4 rounded-lg border border-foreground/15 bg-muted/30 p-4 sm:grid-cols-4">
             <Fact
-              label="Raised"
+              label="Date"
               value={pfi.pfiDate ? format(new Date(pfi.pfiDate), 'd MMM yyyy') : '—'}
             />
             <Fact
@@ -189,7 +189,7 @@ export function PfiActivateDialog({
               value={qty > 0 ? qty.toLocaleString() : '—'}
             />
             <Fact
-              label={`Unit price`}
+              label={`Price per Litre`}
               value={price > 0 ? naira(price) : '—'}
             />
             {/* Blank means unknown, so it reads as a dash rather than ₦0 —
@@ -223,7 +223,7 @@ export function PfiActivateDialog({
           {pending && Array.isArray(pending.trucks) && pending.trucks.length > 0 && (
             <div className="space-y-2">
               <span className={cn(MICRO, 'flex items-center gap-2 text-muted-foreground')}>
-                <Truck className="size-3.5" />
+                <FileBadge2Icon className="size-3.5" />
                 The batch this creates — {pending.code}
               </span>
               <div className="max-h-48 overflow-auto rounded-lg border border-foreground/15">
