@@ -7,7 +7,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Badge } from '#/components/ui/badge'
 import { Separator } from '#/components/ui/separator'
-import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Truck, Clock } from 'lucide-react'
+import { Loader2, Save, CheckCircle, FileText, Edit, Trash2, User, Calendar, Banknote, MapPin, Package, ShieldAlert, Scale, DropletIcon, Ticket, Truck, Clock, Play } from 'lucide-react'
 import { usePfiDetails, useUpdatePfi, useDeletePfi, usePfiLocations } from '#/lib/hooks/usePfis'
 import { unitNames } from '#/routes/pfi/-pfi-utils'
 import { useAdminList } from '#/lib/hooks/useAdmin'
@@ -19,7 +19,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { PhoneLink } from '#/components/ContactLink'
 import { cn } from '#/lib/utils'
 import { pfiStatusLabel } from '#/routes/pfi/-pfi-utils'
-import { PfiReviewPanel } from '#/routes/pfi/-pfi-review'
+import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate-dialog'
 
 export const Route = createFileRoute('/pfi/details')({
   beforeLoad: () => routeGuard('/pfi'),
@@ -80,6 +80,7 @@ function PFIDetails() {
 
   const [error, setError] = useState('')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [activating, setActivating] = useState(false)
 
   if (isLoading) {
     return <div className="flex h-[50svh] items-center justify-center"><Loader2 className="size-8 animate-spin text-primary" /></div>
@@ -212,6 +213,17 @@ function PFIDetails() {
       description="Monitor PFI transaction logs, weight & volume metrics, assigned officers, and closure state"
     />
         <div className="flex items-center gap-2">
+          {/* The one move a batch waiting to trade offers — the same dialog
+              the register uses, so the two cannot ask for different things. */}
+          {pfi.status === 'not_started' && (
+            <Button
+              variant="outline"
+              className="border-accent/40 text-accent hover:bg-accent/10 hover:text-accent"
+              onClick={() => setActivating(true)}
+            >
+              <Play className="size-4 mr-2" /> Start selling
+            </Button>
+          )}
           <Button variant="outline" onClick={handleEdit}>
             <Edit className="size-4 mr-2" /> Edit PFI
           </Button>
@@ -220,17 +232,6 @@ function PFIDetails() {
           </Button>
         </div>
       </header>
-
-      {/*
-        Stage two, at the top of the page.
-
-        A batch waiting for review is not a detail of this screen — it is the
-        only thing that can be done with it — so it sits above everything
-        rather than below the figures somebody has to scroll past.
-      */}
-      {pfi.status === 'not_started' && (
-        <PfiReviewPanel pfi={pfi as any} />
-      )}
 
       {/* Hero Badge Panel */}
       <Card className="card-hover">
@@ -655,6 +656,12 @@ function PFIDetails() {
           )}
         </div>
       </div>
+      <PfiActivateDialog
+        pfi={pfi as any}
+        open={activating}
+        onOpenChange={setActivating}
+      />
+
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}

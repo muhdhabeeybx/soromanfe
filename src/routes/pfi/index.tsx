@@ -25,7 +25,8 @@ import { PfiCloseDialog } from '#/components/PfiCloseDialog'
 import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_FOOTER } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
-import { usePfiList, useStartPfi, useDeletePfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import { usePfiList, useDeletePfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
+import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate-dialog'
 import { useRoles } from '#/lib/hooks/useRoles'
 import {
   naira, litres, qty, unitNames, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
@@ -164,7 +165,6 @@ function PFIDashboard() {
   // button is off.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { isSuperAdmin: canDelete } = useRoles()
-  const startPfi = useStartPfi()
 
   /**
    * Every batch, not the first hundred.
@@ -873,7 +873,7 @@ function PFIDashboard() {
                       the mutation and the dialog below all stay in place so
                       they cannot rot while it is off.
                     */}
-                    {/* {canDelete && (
+                    {canDelete && (
                       <Button
                         variant="outline" size="sm"
                         className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -882,7 +882,7 @@ function PFIDashboard() {
                         <Trash2 data-icon="inline-start" />
                         Delete
                       </Button>
-                    )} */}
+                    )}
                   </div>
                 </div>
               )
@@ -903,25 +903,20 @@ function PFIDashboard() {
         onOpenChange={(o) => !o && setClosing(null)}
       />
 
-      {/* A confirm rather than a form: starting a batch records no figures,
-          it only asserts that the cargo is now sellable. What it changes is
-          worth spelling out, because the stock tiles move the moment it
-          lands. */}
-      <ConfirmDialog
+      {/*
+        Starting a batch IS the review.
+
+        This was a plain confirm — starting recorded no figures, it only
+        asserted the cargo was sellable. That is exactly the moment the bank
+        account and the officers have to exist, so the dialog asks for them
+        rather than there being a panel to fill in first and a button to press
+        afterwards. One act, one place.
+      */}
+      <PfiActivateDialog
+        pfi={starting as any}
         open={starting != null}
         onOpenChange={(o) => !o && setStarting(null)}
-        title={starting ? `Start selling ${starting.pfiNumber}?` : ''}
-        description={
-          starting
-            ? `Its remaining stock joins the ${fuelLabel(starting.productName)} total and its revenue starts counting towards the portfolio. Expenses already booked against it stay exactly as they are.`
-            : ''
-        }
-        confirmLabel="Start selling"
-        loading={startPfi.isPending}
-        onConfirm={async () => {
-          if (starting) await startPfi.mutateAsync(Number(starting.id))
-          setStarting(null)
-        }}
+        onActivated={() => setStarting(null)}
       />
 
       {/* Deleting a batch outright.

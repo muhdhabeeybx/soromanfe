@@ -850,25 +850,17 @@ export const useDeleteCategory = () =>
  * the system computed, plus a warning when stock is still on the books.
  */
 /**
- * Put a batch into trading.
+ * Put a batch into trading — which is also the review.
  *
- * The counterpart to useFinishPfi, and deliberately as small as that one is
- * large: closing records what a cargo settled for, whereas starting asserts
- * one fact — this batch's stock is now stock anyone can sell.
- */
-export const useStartPfi = () =>
-  useMoneyMutation<number>(
-    async (id) => (await api.post(`/pfis/${id}/start`, {})).data,
-    'PFI is now active',
-  )
-
-/**
- * The review: assign the bank and the officers, and release the batch.
+ * The counterpart to useFinishPfi. It used to be as small as that one is
+ * large: starting asserted one fact and recorded nothing. Starting a batch is
+ * the moment its bank account and its officers have to exist, so the same call
+ * assigns them, and the server refuses without an account, an audit officer
+ * and a finance officer.
  *
- * The server refuses without a bank account, an audit officer and a finance
- * officer, so this cannot activate a batch that is missing any of them. It is
- * also the access grant — assigning an officer is what lets them see the PFI —
- * so the two can never drift apart. See activatePfi and migration 0046.
+ * It is also the access grant — assigning an officer is what lets them see the
+ * PFI — so the two can never drift apart. See activatePfi, PfiActivateDialog
+ * and migration 0046.
  */
 export const useActivatePfi = () =>
   useMoneyMutation<{
