@@ -204,10 +204,10 @@ function BankCard({
     >
       <div className="border-b border-foreground/15 px-5 py-4">
         <p className="text-base font-semibold break-words uppercase">{a.account_name}</p>
-        <p className="mt-1 font-medium break-words uppercase text-muted-foreground">
+        <p className="mt-1 break-words uppercase text-muted-foreground">
           {a.bank_name}
         </p>
-        <p className="mt-0.5 font-mono font-semibold">{a.account_number}</p>
+        <p className="font-mono text-muted-foreground font-normal">{a.account_number}</p>
       </div>
 
       <div className="flex-1 space-y-4 px-5 py-4">
