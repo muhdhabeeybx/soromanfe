@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
-  Loader2, ShieldCheck, Info, Truck, Landmark, Users, Pencil, FileText,
-  FileBadge2Icon,
+  Loader2, ShieldCheck, Landmark, Users, Pencil, FileBadge2Icon,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
