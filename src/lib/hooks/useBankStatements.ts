@@ -300,6 +300,61 @@ export interface AccountStatementLine extends StatementLineDetail {
   imported_at: string
 }
 
+/** A row as the server hands it back from a preflight. */
+export interface PreviewRow {
+  txnDate: string
+  amount: number
+  depositor: string
+  bankRef: string
+  narration: string
+  /**
+   * Why a skipped row was skipped. "on record" is an ordinary overlap with a
+   * previous upload; "reference" means this file describes a credit the
+   * account already holds under the same bank reference; the "in this file"
+   * variants mean the file repeats itself.
+   */
+  reason?: string
+}
+
+export interface StatementPreview {
+  rows: PreviewRow[]
+  skipped: PreviewRow[]
+  counts: {
+    incoming: number
+    importing: number
+    duplicates: number
+    repeatedReferences: number
+  }
+  total: number
+}
+
+/**
+ * What the upload would do, asked before it is done.
+ *
+ * The server runs the same partition the import runs and returns it rather
+ * than applying it, so the rows put in front of somebody to confirm are the
+ * rows that will actually be stored. Doing this arithmetic on the client would
+ * mean shipping every reference on the account to the browser AND keeping a
+ * second copy of the dedup rule in step with the first — and a preview that
+ * disagreed with the import would be worse than none, because it would be
+ * believed.
+ */
+export function usePreviewStatement() {
+  const toast = useToast()
+  return useMutation({
+    retry: false,
+    mutationFn: async (payload: {
+      bankAccountId: number | string
+      filename: string
+      rows: ParsedRow[]
+    }) => {
+      const res = await api.post('/bank-statements/preview', payload)
+      return res.data.data as StatementPreview
+    },
+    onError: (err: any) => toast.error(getErrorMessage(err)),
+  })
+}
+
 export function useUploadStatement() {
   const qc = useQueryClient()
   const toast = useToast()

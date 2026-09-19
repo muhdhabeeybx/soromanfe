@@ -115,7 +115,7 @@ export async function exportStatementLines({
 
   ws.mergeCells(1, 1, 1, lastCol)
   const title = ws.getCell(1, 1)
-  title.value = `${account.bank_name} — ${account.account_name} · ${account.account_number}`
+  title.value = `${account.account_name} — ${account.bank_name} · ${account.account_number}`
   title.font = { bold: true, size: 13 }
 
   const total = lines.reduce((s, l) => s + Number(l.amount), 0)
@@ -172,6 +172,6 @@ export async function exportStatementLines({
   const buffer = await wb.xlsx.writeBuffer()
   triggerDownload(
     buffer as ArrayBuffer,
-    `${slug(account.bank_name)}_${slug(account.account_number)}_${stamp}.xlsx`,
+    `${slug(account.account_name)}_${slug(account.account_number)}_${stamp}.xlsx`,
   )
 }
