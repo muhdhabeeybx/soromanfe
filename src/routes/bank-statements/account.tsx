@@ -487,8 +487,8 @@ function PaymentsTable({
         key={`total-${day}`}
         className="border-l-4 border-l-transparent border-b-2 border-b-foreground/25 bg-muted/60 hover:bg-muted/60"
       >
-        <TableCell className="whitespace-nowrap font-semibold">
-          {formatPlainDay(day)} total
+        <TableCell className="whitespace-nowrap text-sm text-muted-foreground font-normal">
+          Total
         </TableCell>
         {/* Under the Amount column, because that is the column it totals. */}
         <TableCell className="text-right text-base font-semibold whitespace-nowrap tabular-nums">
@@ -516,14 +516,14 @@ function PaymentsTable({
           </div>
         </TableCell>
         <TableCell>
-          <Button
+          {/* <Button
             variant="outline" size="sm"
             disabled={downloading}
             onClick={() => onDownloadDay(day)}
           >
             <Download data-icon="inline-start" />
             Download
-          </Button>
+          </Button> */}
         </TableCell>
       </TableRow>,
     )
@@ -540,7 +540,7 @@ function PaymentsTable({
     // Matched, but the order it named is gone — a real state (an order can be
     // deleted after the fact) and one worth showing rather than leaving as an
     // empty cell.
-    const orphaned = matched && l.order_id == null
+    const orphaned = matched && l.order_id == null && !l.claimed_by
 
     rows.push(
       /*
@@ -591,6 +591,15 @@ function PaymentsTable({
             >
               {l.order_reference}
             </Link>
+          ) : l.claimed_by ? (
+            /*
+              A truck sale spends a statement line the same way an order does.
+              Without this the credit would read as MATCHED against nothing,
+              which on a reconciliation screen is indistinguishable from a
+              fault. Not a link: the sales ledger is keyed by truck-cycle
+              rather than by payment id, so there is no single row to open.
+            */
+            <span className="font-semibold">{l.claimed_by.label || 'Truck sale'}</span>
           ) : orphaned ? (
             /*
               Matched, but the order it named has since been deleted. That is
@@ -655,7 +664,7 @@ function PaymentsTable({
           <TableHead className="w-[6.5rem]">Status</TableHead>
           <TableHead className="w-[20rem]">Depositor</TableHead>
           <TableHead className="w-[12rem]">Bank reference</TableHead>
-          <TableHead className="w-[8rem]">Order</TableHead>
+          <TableHead className="w-[8rem]">Order Reference</TableHead>
           <TableHead className="w-[10rem]">Matched by</TableHead>
           <TableHead className="w-[10rem]">Matched on</TableHead>
           <TableHead className="w-[10rem]">Uploaded by</TableHead>

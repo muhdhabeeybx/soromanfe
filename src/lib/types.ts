@@ -577,6 +577,16 @@ export interface DeliverySale {
   bank: string
   /** The managed account, on entries written since the ledger started linking them. */
   bankAccountId?: number | null
+  /**
+   * The bank statement line this payment was claimed from.
+   *
+   * Null on every payment recorded before the ledger matched against
+   * statements, and on a transfer between trucks — that moves money already on
+   * the ledger rather than bringing new money in. See migration 0044.
+   */
+  statementLineId?: number | null
+  /** The bank's own reference, copied off that line. "" on older rows. */
+  bankRef?: string | null
   /** How the money reached the bank. Null on every row that predates the split, and on rows that are not remittances. */
   depositChannel?: DepositChannel | null
   /**

@@ -488,6 +488,7 @@ export function SalesLedgerDetails() {
                         <TableHead className="font-semibold text-muted-foreground">Date Paid</TableHead>
                         <TableHead className="font-semibold text-accent text-right">Amount Paid</TableHead>
                         <TableHead className="font-semibold text-destructive text-right">Balance After</TableHead>
+                        <TableHead className="font-semibold text-muted-foreground">Bank reference</TableHead>
                         <TableHead className="font-semibold text-muted-foreground">Payer Name</TableHead>
                         <TableHead className="font-semibold text-muted-foreground">Payment Method</TableHead>
                         <TableHead className="font-semibold text-muted-foreground">Remarks</TableHead>
@@ -513,6 +514,19 @@ export function SalesLedgerDetails() {
                               </TableCell>
                               <TableCell className={`text-right font-semibold whitespace-nowrap ${balanceAfter > 0 ? 'text-destructive' : balanceAfter < 0 ? 'text-muted-foreground' : targetGroup.expected > 0 ? 'text-accent' : 'text-muted-foreground'}`}>
                                 {targetGroup.expected > 0 ? (balanceAfter === 0 ? '₦0.00' : balanceAfter > 0 ? fmt(balanceAfter) : `+${fmt(Math.abs(balanceAfter))}`) : '—'}
+                              </TableCell>
+                              {/*
+                                The bank's own reference for this credit, on
+                                payments matched against an uploaded statement.
+                                A dash on every row recorded before the ledger
+                                matched — those were keyed in by hand and there
+                                is no reference to show. That is the truth, not
+                                a gap to be filled in.
+                              */}
+                              <TableCell className="whitespace-nowrap">
+                                {payment.bankRef
+                                  ? <span className="font-mono text-sm">{payment.bankRef}</span>
+                                  : <span className="text-muted-foreground">—</span>}
                               </TableCell>
                               <TableCell className="text-foreground font-normal whitespace-nowrap">
                                 {payment.payerName ? (

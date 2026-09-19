@@ -261,6 +261,11 @@ export interface StatementLineDetail {
   order_id: number | null
   /** "ME11485" — built the way every other screen builds it. */
   order_reference: string | null
+  /**
+   * What claimed this credit when an order did not — a truck sale off the
+   * sales ledger. Null on an ordinary order payment and on unmatched lines.
+   */
+  claimed_by: { kind: 'truck_sale'; id: number; label: string } | null
   customer_name: string | null
   matched_by_name: string | null
 }

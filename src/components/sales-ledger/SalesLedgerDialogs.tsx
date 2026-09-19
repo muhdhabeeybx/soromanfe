@@ -20,6 +20,9 @@ import type { DeliverySale, DeliveryInventory, DeliveryCustomer } from '#/lib/ty
 import { toNum, fmt, formatWithCommas, stripCommas, isFillingStation, idKey, entityId } from '#/lib/sales-ledger-utils'
 import { useBankAccountPicker, bankAccountToString, BANK_ACCOUNT_USAGE } from '#/lib/bank-accounts'
 import { NativeSelect } from '#/components/ui/native-select'
+import { StatusChip } from '#/components/ui/status-chip'
+import { StatementLinePicker } from '#/components/StatementLinePicker'
+import type { StatementLine } from '#/lib/hooks/useBankStatements'
 
 // Bank accounts come from the managed table via #/lib/bank-accounts — they
 // used to be three literals right here. See that module for why resolution
@@ -660,27 +663,43 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
   const { options: bankOptions, byId: bankById } = useBankAccountPicker({
     usage: BANK_ACCOUNT_USAGE.truckSales,
   })
-  const [form, setForm] = useState({
-    payment_amount: '',
-    payer_name: '',
-    phone_number: '',
-    date_of_payment: format(new Date(), 'yyyy-MM-dd'),
-    bank_account_id: '',
-  })
+  const [form, setForm] = useState({ phone_number: '', bank_account_id: '' })
+  /**
+   * The credits this payment is. Not an amount somebody typed.
+   *
+   * A truck sale used to be keyed in from a phone screen — amount, payer and
+   * date all by hand — with nothing tying the entry to money that had actually
+   * landed. So a payment could be recorded that the bank never received,
+   * recorded twice, or recorded against the wrong truck, and the ledger had no
+   * way to tell. It names bank rows now, exactly as an order's confirmation
+   * does, and the figures are copied off the statement server-side.
+   */
+  const [statementLines, setStatementLines] = useState<StatementLine[]>([])
+  const [statementQuery, setStatementQuery] = useState('')
 
   // Closing clears the form. Otherwise the next row this dialog opens on
-  // arrives with the previous row's amount and payer already typed in.
+  // arrives with the previous row's selection still made.
   const closeDialog = useCallback((next: boolean) => {
-    if (!next) setForm({ payment_amount: '', payer_name: '', phone_number: '', date_of_payment: format(new Date(), 'yyyy-MM-dd'), bank_account_id: '' })
+    if (!next) {
+      setForm({ phone_number: '', bank_account_id: '' })
+      setStatementLines([])
+      setStatementQuery('')
+    }
     onOpenChange(next)
   }, [onOpenChange])
 
+  const matchedTotal = statementLines.reduce((sum, l) => sum + Number(l.amount), 0)
+
+  const toggleLine = useCallback((line: StatementLine) => {
+    setStatementLines((prev) => prev.some((l) => l.id === line.id)
+      ? prev.filter((l) => l.id !== line.id)
+      : [...prev, line])
+  }, [])
+
   const handleSave = useCallback(async () => {
     if (!target) return
-    const paymentAmount = Number(stripCommas(form.payment_amount))
-    if (!paymentAmount || paymentAmount <= 0) { toast.error('Enter a valid payment amount'); return }
-    const payerName = form.payer_name.trim()
-    if (payerName && !/^[A-Za-z\s'\-.]+$/.test(payerName)) { toast.error('Payer name should contain letters only'); return }
+    if (!form.bank_account_id) { toast.error('Choose the account the money landed in'); return }
+    if (!statementLines.length) { toast.error('Select the credit this payment is'); return }
 
     setSaving(true)
     try {
@@ -696,9 +715,10 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
         quantity: target.quantity || undefined,
         rate: target.rate || undefined,
         salesValue: target.expected || undefined,
-        paymentAmount: paymentAmount,
-        payerName: payerName || undefined,
-        dateOfPayment: form.date_of_payment || format(new Date(), 'yyyy-MM-dd'),
+        // No amount, payer or date: the server takes all three off the
+        // statement lines named below, so what the ledger says is what the
+        // bank says. Sending them as well would only invite the two to differ.
+        lineIds: statementLines.map((l) => l.id),
         phoneNumber: form.phone_number.trim() || undefined,
         // Both are written: the id links the row properly, and the string is
         // what every row predating that column resolves by, so historical and
@@ -710,17 +730,16 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
         enteredBy: currentUser,
         paymentMethod: 'manual',
       } as Partial<DeliverySale>)
-      toast.success(`${target.truckNumber} · ${fmt(paymentAmount)}`)
+      toast.success(`${target.truckNumber} · ${fmt(matchedTotal)}`)
       closeDialog(false)
     } catch (err: any) {
       toast.error(err?.message || 'Failed to record payment')
     } finally {
       setSaving(false)
     }
-  }, [target, form, createSale, toast, closeDialog, bankById])
+  }, [target, form, statementLines, matchedTotal, createSale, toast, closeDialog, bankById])
 
-  const amountTyped = Number(stripCommas(form.payment_amount)) || 0
-  const remainingBalance = target ? target.balance - amountTyped : 0
+  const remainingBalance = target ? target.balance - matchedTotal : 0
 
   return (
     <Dialog open={open} onOpenChange={closeDialog}>
@@ -755,11 +774,11 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
                   </p>
                 </div>
               </div>
-              {amountTyped > 0 && (
+              {matchedTotal > 0 && (
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div>
-                    <p className="text-xs text-muted-foreground font-semibold">Payment Preview</p>
-                    <p className="font-semibold text-muted-foreground mt-0.5">{fmt(amountTyped)}</p>
+                    <p className="text-xs text-muted-foreground font-semibold">Matching now</p>
+                    <p className="font-semibold text-accent mt-0.5">{fmt(matchedTotal)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground font-normal">New Balance</p>
@@ -772,41 +791,57 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Amount Paid</Label>
-              <Input type="text" inputMode="decimal" value={form.payment_amount} onChange={e => setForm(prev => ({ ...prev, payment_amount: formatWithCommas(e.target.value) }))} placeholder="e.g. 5,000,000" />
-            </div>
-            <div className="space-y-1">
-              <Label>Date Paid</Label>
-              <Input type="date" value={form.date_of_payment} onChange={e => setForm(prev => ({ ...prev, date_of_payment: e.target.value }))} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Payer's Name</Label>
-              <Input value={form.payer_name} onChange={e => setForm(prev => ({ ...prev, payer_name: e.target.value.replace(/[0-9]/g, '') }))} />
-            </div>
-            <div className="space-y-1">
-              <Label>Phone Number</Label>
-              <Input value={form.phone_number} onChange={e => setForm(prev => ({ ...prev, phone_number: e.target.value }))} />
-            </div>
-          </div>
-
           {/* Which account the money landed in. The same shortlist the full
-              Record Payment dialog offers — nine truck-collection accounts,
-              not the company's whole banking — so a payment recorded here can
-              be reconciled against the statement it will actually appear on. */}
+              Record Payment dialog offers — the truck-collection accounts,
+              not the company's whole banking — and now the account whose
+              uploaded statement is searched for the credit itself. */}
           <div className="space-y-1">
             <Label>Paid Into</Label>
             <NativeSelect
               value={form.bank_account_id}
-              onChange={e => setForm(prev => ({ ...prev, bank_account_id: e.target.value }))}
+              onChange={e => {
+                // The credits belong to the account they were found on, so
+                // changing it has to drop a selection made against the old one.
+                setForm(prev => ({ ...prev, bank_account_id: e.target.value }))
+                setStatementLines([])
+              }}
             >
               <option value="">Select the account…</option>
               {bankOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
             </NativeSelect>
+          </div>
+
+          {/*
+            The payment IS these credits. Amount, payer, date and reference all
+            come off the bank's own rows server-side — there is nothing here to
+            type, which is the point: a figure that was keyed in could disagree
+            with the statement, and this one cannot.
+          */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Match the credit</Label>
+              {statementLines.length > 0 && (
+                <span className="flex items-center gap-2 text-sm">
+                  <StatusChip tone="accent" fill="solid">
+                    {statementLines.length} selected
+                  </StatusChip>
+                  <span className="font-semibold">{fmt(matchedTotal)}</span>
+                </span>
+              )}
+            </div>
+            <StatementLinePicker
+              bankAccountId={form.bank_account_id || undefined}
+              selected={statementLines}
+              onToggle={toggleLine}
+              onClear={() => setStatementLines([])}
+              query={statementQuery}
+              onQueryChange={setStatementQuery}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label>Phone Number</Label>
+            <Input value={form.phone_number} onChange={e => setForm(prev => ({ ...prev, phone_number: e.target.value }))} />
           </div>
 
         </div>
@@ -815,7 +850,11 @@ export function QuickPaymentDialog({ open, onOpenChange, target }: QuickPaymentD
           <Button variant="outline" onClick={() => closeDialog(false)} disabled={saving}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving} className="gap-2">
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            {saving ? 'Saving…' : 'Save Payment'}
+            {saving
+              ? 'Saving…'
+              : statementLines.length
+                ? `Match ${statementLines.length} credit${statementLines.length === 1 ? '' : 's'} · ${fmt(matchedTotal)}`
+                : 'Save Payment'}
           </Button>
         </DialogFooter>
       </DialogContent>
