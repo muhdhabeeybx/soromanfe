@@ -26,7 +26,7 @@ import { ConfirmDialog } from '#/components/ConfirmDialog'
 import { MICRO, PANEL, PANEL_RAIL, PANEL_FOOTER } from '#/lib/panel'
 import { cn, getErrorMessage } from '#/lib/utils'
 import { usePfiList, useDeletePfi, type PfiWithFinancials } from '#/lib/hooks/usePfis'
-import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate-dialog'
+import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate'
 import { useRoles } from '#/lib/hooks/useRoles'
 import {
   naira, litres, qty, unitNames, moneyTone, profitTint, SurplusDeficit, SellThroughBar,
@@ -153,8 +153,8 @@ function PFIDashboard() {
   const [type, setType] = useState('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'serial', dir: 'desc' })
   const [detailId, setDetailId] = useState<number | null>(null)
-  const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
   const [starting, setStarting] = useState<PfiWithFinancials | null>(null)
+  const [closing, setClosing] = useState<PfiWithFinancials | null>(null)
   /** The batch a delete has been asked for, awaiting confirmation. */
   const [deleting, setDeleting] = useState<PfiWithFinancials | null>(null)
   const deletePfi = useDeletePfi()
@@ -829,7 +829,12 @@ function PFIDashboard() {
                     </Button>
                     {/* A batch waiting to trade offers the one move that
                         matters. Closing is hidden while it is not started —
-                        there is nothing to close out yet. */}
+                        there is nothing to close out yet.
+
+                        It opens the batch rather than asking you to sign off
+                        on it from a card: releasing a cargo to trade cannot be
+                        taken back, and the details are what that decision
+                        should be taken on — so the dialog carries them. */}
                     {notStarted && (
                       <Button
                         variant="outline" size="sm"
@@ -873,7 +878,7 @@ function PFIDashboard() {
                       the mutation and the dialog below all stay in place so
                       they cannot rot while it is off.
                     */}
-                    {canDelete && (
+                    {/* {canDelete && (
                       <Button
                         variant="outline" size="sm"
                         className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -882,7 +887,7 @@ function PFIDashboard() {
                         <Trash2 data-icon="inline-start" />
                         Delete
                       </Button>
-                    )}
+                    )} */}
                   </div>
                 </div>
               )
@@ -890,6 +895,13 @@ function PFIDashboard() {
           </div>
         </div>
       )}
+
+      <PfiActivateDialog
+        pfi={starting as any}
+        open={starting != null}
+        onOpenChange={(o: boolean) => !o && setStarting(null)}
+        onActivated={() => setStarting(null)}
+      />
 
       <PfiDetailDialog
         pfiId={detailId}
@@ -903,21 +915,7 @@ function PFIDashboard() {
         onOpenChange={(o) => !o && setClosing(null)}
       />
 
-      {/*
-        Starting a batch IS the review.
 
-        This was a plain confirm — starting recorded no figures, it only
-        asserted the cargo was sellable. That is exactly the moment the bank
-        account and the officers have to exist, so the dialog asks for them
-        rather than there being a panel to fill in first and a button to press
-        afterwards. One act, one place.
-      */}
-      <PfiActivateDialog
-        pfi={starting as any}
-        open={starting != null}
-        onOpenChange={(o) => !o && setStarting(null)}
-        onActivated={() => setStarting(null)}
-      />
 
       {/* Deleting a batch outright.
           What goes and what survives is spelled out, because the two are not

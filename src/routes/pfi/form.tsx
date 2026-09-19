@@ -76,12 +76,26 @@ type FormState = typeof EMPTY_FORM
 type StringKeys = { [K in keyof FormState]: FormState[K] extends string ? K : never }[keyof FormState]
 
 const OFFICER_FIELDS: Array<{ label: string; key: StringKeys }> = [
-  { label: 'Audit Officer', key: 'auditOfficerId' },
-  { label: 'Product Officer', key: 'productOfficerId' },
+  { label: 'Finance / Audit Officer', key: 'auditOfficerId' },
+  { label: 'Sales Manager', key: 'salesManagerId' },
+  { label: 'Product Manager', key: 'productOfficerId' },
+  { label: 'Commission Officer', key: 'commissionOfficerId' },
   { label: 'IT Compliance Officer', key: 'itComplianceOfficerId' },
   { label: 'Security Exit Officer', key: 'securityExitOfficerId' },
-  { label: 'Commission Officer', key: 'commissionOfficerId' },
-  { label: 'Sales Manager', key: 'salesManagerId' },
+]
+
+/**
+ * The two officers named when the batch is raised, not when it is released.
+ *
+ * IT compliance and security exit are gate roles — they belong to moving the
+ * product, not to signing off the money — so whoever raises the cargo already
+ * knows them and there is nothing for the review to decide. The four the
+ * review does decide (finance/audit, sales manager, product manager,
+ * commission) are assigned in PfiActivatePanel.
+ */
+const RAISE_OFFICERS: Array<{ label: string; key: StringKeys }> = [
+  { label: 'IT Compliance Officer', key: 'itComplianceOfficerId' },
+  { label: 'Security Exit Officer', key: 'securityExitOfficerId' },
 ]
 
 /**
@@ -416,8 +430,10 @@ function PFIForm() {
   /** The picked product's unit, so no label ever says "Litres" over a tonnage. */
   const unit = useMemo(() => unitNames(form.productUnit), [form.productUnit])
 
-  /** Six selects that all read "Unassigned" hide how many are actually set. */
-  const assignedOfficers = OFFICER_FIELDS.filter(({ key }) => !!form[key]).length
+  /** Raising asks for the two gate roles; an edit can change all six. */
+  const visibleOfficers = isEdit ? OFFICER_FIELDS : RAISE_OFFICERS
+  /** Selects that all read "Unassigned" hide how many are actually set. */
+  const assignedOfficers = visibleOfficers.filter(({ key }) => !!form[key]).length
 
   // The live preview: appears as soon as either figure is entered, because
   // that's the earliest point a surplus/deficit or a cargo value means
@@ -537,14 +553,15 @@ function PFIForm() {
               surveyorName: form.surveyorName || null,
               surveyorPhone: form.surveyorPhone || null,
             }),
-        // Only on an edit. Raising a batch does not name its officers — the
-        // review does, and that is also what grants them sight of it.
+        // The gate roles are named when the batch is raised; the four the
+        // review decides are sent only on an edit, because on a create they
+        // are not asked for and sending empties would look like a decision.
+        itComplianceOfficerId: form.itComplianceOfficerId || null,
+        securityExitOfficerId: form.securityExitOfficerId || null,
         ...(isEdit
           ? {
               auditOfficerId: form.auditOfficerId || null,
               productOfficerId: form.productOfficerId || null,
-              itComplianceOfficerId: form.itComplianceOfficerId || null,
-              securityExitOfficerId: form.securityExitOfficerId || null,
               commissionOfficerId: form.commissionOfficerId || null,
               salesManagerId: form.salesManagerId || null,
             }
@@ -1230,19 +1247,21 @@ function PFIForm() {
               On an EDIT they stay: an active batch's officers can change, and
               the person doing that has already been through the review.
             */}
-            {isEdit && (
             <Section
               step={4}
-              icon={<Users />} title="Officers"
-              description="Assign staff for each role."
+              icon={<Users />}
+              title={isEdit ? 'Officers' : 'Gate officers'}
+              description={isEdit
+                ? 'Assign staff for each role.'
+                : 'Who clears this cargo through compliance and the exit gate. The finance, sales, product and commission officers are assigned when the batch is reviewed.'}
               aside={
                 <span className={cn(MICRO, 'hidden shrink-0 font-semibold text-muted-foreground sm:block')}>
-                  {assignedOfficers}/{OFFICER_FIELDS.length} assigned
+                  {assignedOfficers}/{visibleOfficers.length} assigned
                 </span>
               }
             >
-              <div className="grid grid-cols-2 gap-4">
-                {OFFICER_FIELDS.map(({ label, key }) => (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {visibleOfficers.map(({ label, key }) => (
                   <Field key={key} label={label}>
                     <NativeSelect value={form[key]} onChange={(e) => set(key, e.target.value)}>
                       <option value="">Unassigned</option>
@@ -1254,7 +1273,6 @@ function PFIForm() {
                 ))}
               </div>
             </Section>
-            )}
 
             {/* A gantry batch never touches a vessel, so there is nothing here
                 to leave blank. */}

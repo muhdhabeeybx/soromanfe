@@ -19,7 +19,7 @@ import { routeGuard } from '#/lib/route-guard'
 import { PhoneLink } from '#/components/ContactLink'
 import { cn } from '#/lib/utils'
 import { pfiStatusLabel } from '#/routes/pfi/-pfi-utils'
-import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate-dialog'
+import { PfiActivateDialog } from '#/routes/pfi/-pfi-activate'
 
 export const Route = createFileRoute('/pfi/details')({
   beforeLoad: () => routeGuard('/pfi'),
@@ -213,8 +213,6 @@ function PFIDetails() {
       description="Monitor PFI transaction logs, weight & volume metrics, assigned officers, and closure state"
     />
         <div className="flex items-center gap-2">
-          {/* The one move a batch waiting to trade offers — the same dialog
-              the register uses, so the two cannot ask for different things. */}
           {pfi.status === 'not_started' && (
             <Button
               variant="outline"
@@ -656,6 +654,8 @@ function PFIDetails() {
           )}
         </div>
       </div>
+      {/* The same dialog the register opens, so the two cannot end up
+          asking for different things. */}
       <PfiActivateDialog
         pfi={pfi as any}
         open={activating}
