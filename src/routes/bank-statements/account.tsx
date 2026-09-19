@@ -3,7 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { format } from 'date-fns'
 import {
   ArrowLeft, Upload, Settings2, Download, Search, Loader2, AlertCircle,
-  CheckCircle2, CalendarDays, Layers, Wallet,
+  CheckCircle2, Layers, Wallet,
 } from 'lucide-react'
 
 import { PageHeader } from '#/components/PageHeader'
@@ -472,71 +472,10 @@ function PaymentsTable({
 
   for (const l of lines) {
     const day = String(l.txn_date).slice(0, 10)
-    if (day !== lastDay) {
-      lastDay = day
-      const totals = dayTotals.get(day)
-      rows.push(
-        <TableRow key={`band-${day}`} className="bg-muted/60 hover:bg-muted/60">
-          <TableCell colSpan={10} className="py-2.5">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className="flex items-center gap-2 text-sm font-semibold">
-                <CalendarDays className="size-4 text-muted-foreground" />
-                {formatPlainDay(day)}
-              </span>
-              {totals && (
-                <>
-                  {/*
-                    Labelled "day total" on purpose. The band always describes
-                    the WHOLE day, while the rows under it are whatever the
-                    filters left — with a status filter on, an unlabelled
-                    figure here would read as a contradiction of the rows
-                    beneath it rather than as a different fact.
-                  */}
-                  <span className="text-sm text-muted-foreground">Day total</span>
-                  <span className="text-sm font-semibold tabular-nums">
-                    {formatCurrency(Number(totals.total_amount))}
-                  </span>
-                  <span className="text-sm text-muted-foreground">
-                    {totals.line_count} payment{totals.line_count === 1 ? '' : 's'}
-                    {/*
-                      How many files this day arrived in. It is what makes a
-                      day look wrong when it is not — a day re-uploaded four
-                      times still holds each credit once, and saying so
-                      pre-empts the question.
-                    */}
-                    {totals.upload_count > 1 && ` from ${totals.upload_count} uploads`}
-                  </span>
-                  {totals.matched_count > 0 && (
-                    <StatusChip tone="accent" fill="solid">
-                      {totals.matched_count} matched
-                    </StatusChip>
-                  )}
-                  {totals.unmatched_count > 0 && (
-                    <StatusChip tone="warning" fill="solid">
-                      {totals.unmatched_count} unmatched
-                    </StatusChip>
-                  )}
-                </>
-              )}
-              {/*
-                Beside the day, not pushed to the far end of it. The table is
-                1680px wide and scrolls, so an ml-auto button sits at the right
-                edge of a row whose left edge is what somebody is reading —
-                scrolled apart, the button looked like it belonged to nothing.
-              */}
-              <Button
-                variant="outline" size="sm"
-                disabled={downloading}
-                onClick={() => onDownloadDay(day)}
-              >
-                <Download data-icon="inline-start" />
-                Download this day
-              </Button>
-            </div>
-          </TableCell>
-        </TableRow>,
-      )
-    }
+    // The first row of each day is the one that carries the day's total.
+    const opensDay = day !== lastDay
+    lastDay = day
+    const totals = opensDay ? dayTotals.get(day) : undefined
 
     const matched = l.status === 'MATCHED'
     // Matched, but the order it named is gone — a real state (an order can be
@@ -545,12 +484,61 @@ function PaymentsTable({
     const orphaned = matched && l.order_id == null
 
     rows.push(
-      <TableRow key={l.id} className={cn(!matched && 'bg-warning/5')}>
-        <TableCell className="align-top whitespace-nowrap">{formatPlainDay(l.txn_date)}</TableCell>
-        <TableCell className="align-top text-right text-base font-semibold whitespace-nowrap tabular-nums">
+      /*
+        The stripe is the scannable part. A chip has to be read; a 4px edge
+        down the left of every row is read without being looked at, which is
+        what somebody running an eye down two hundred payments for the ones
+        nothing has claimed actually needs.
+      */
+      <TableRow
+        key={l.id}
+        className={cn(
+          'border-l-4',
+          matched ? 'border-l-accent' : 'border-l-warning bg-warning/5',
+          // Losing the banner lost the day boundary with it. A heavier rule
+          // above the day's first row puts it back without adding a second
+          // kind of row to the table.
+          opensDay && 'border-t-2 border-t-foreground/25',
+        )}
+      >
+        {/*
+          The day's total sits under the date on the day's first row, rather
+          than on a banner above it. A banner spanning eleven columns is a
+          second kind of row the eye has to classify before it can read
+          anything; under the date it is just the date, qualified.
+        */}
+        <TableCell className={cn('whitespace-normal', totals && 'align-top')}>
+          <span className="block whitespace-nowrap">{formatPlainDay(l.txn_date)}</span>
+          {totals && (
+            <span className="mt-1 block">
+              <span className="block font-semibold tabular-nums">
+                {formatCurrency(Number(totals.total_amount))}
+              </span>
+              <span className="block text-muted-foreground">
+                {totals.line_count} payment{totals.line_count === 1 ? '' : 's'} this day
+                {totals.upload_count > 1 && ` · ${totals.upload_count} uploads`}
+              </span>
+              <button
+                type="button"
+                disabled={downloading}
+                onClick={() => onDownloadDay(day)}
+                className="mt-1 inline-flex items-center gap-1 underline underline-offset-2 hover:text-accent disabled:opacity-50"
+              >
+                <Download className="size-3.5" />
+                Download this day
+              </button>
+            </span>
+          )}
+        </TableCell>
+        <TableCell className="text-right text-base font-semibold whitespace-nowrap tabular-nums">
           ₦{Number(l.amount).toLocaleString()}
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
+          {matched
+            ? <StatusChip tone="accent" fill="solid">Matched</StatusChip>
+            : <StatusChip tone="warning" fill="solid">Unmatched</StatusChip>}
+        </TableCell>
+        <TableCell className="whitespace-normal">
           <span className="block break-words">{l.depositor || '—'}</span>
           {l.narration && l.narration !== l.depositor && (
             <span className="mt-1 block break-words text-muted-foreground">
@@ -558,10 +546,10 @@ function PaymentsTable({
             </span>
           )}
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           <span className="block font-mono break-all">{l.bank_ref || '—'}</span>
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           {l.order_reference && l.order_id != null ? (
             /*
               The order reference is the end of the money's journey, so it goes
@@ -577,24 +565,30 @@ function PaymentsTable({
               {l.order_reference}
             </Link>
           ) : orphaned ? (
-            <StatusChip tone="warning" fill="solid">Order deleted</StatusChip>
+            /*
+              Matched, but the order it named has since been deleted. That is
+              its own finding, not a second way of saying unmatched — the line
+              still holds its deposit — so it survives the Status column
+              taking over everything else this cell used to say.
+            */
+            <StatusChip tone="destructive" fill="solid">Order deleted</StatusChip>
           ) : (
-            <StatusChip tone="warning" fill="solid">Unmatched</StatusChip>
+            <span className="text-muted-foreground">—</span>
           )}
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           <span className="block break-words">{l.matched_by_name || '—'}</span>
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           {l.matched_at ? format(new Date(l.matched_at), 'd MMM yyyy, HH:mm') : '—'}
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           <span className="block break-words">{l.uploaded_by_name || '—'}</span>
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           {l.uploaded_at ? format(new Date(l.uploaded_at), 'd MMM yyyy, HH:mm') : '—'}
         </TableCell>
-        <TableCell className="align-top whitespace-normal">
+        <TableCell className="whitespace-normal">
           <span className="block break-all text-muted-foreground">
             {l.filename || '—'}
           </span>
@@ -625,11 +619,12 @@ function PaymentsTable({
     scroller here — a second one only produced a scrollbar that moved nothing.
   */
   return (
-    <Table className="min-w-[1768px] table-fixed">
+    <Table className="min-w-[1952px] table-fixed">
       <TableHeader>
         <TableRow>
-          <TableHead className="w-[7rem]">Date</TableHead>
+          <TableHead className="w-[12rem]">Date</TableHead>
           <TableHead className="w-[9.5rem] text-right">Amount</TableHead>
+          <TableHead className="w-[6.5rem]">Status</TableHead>
           <TableHead className="w-[20rem]">Depositor</TableHead>
           <TableHead className="w-[12rem]">Bank reference</TableHead>
           <TableHead className="w-[8rem]">Order</TableHead>
